@@ -4,6 +4,10 @@ Experimental Rust Brew core for linking two or more MidnightBlue Basestation or 
 
 Reference spec from https://wiki.tetrapack.online/tetra/specifications/brew/
 
+Related Projects
+Tetra BTS - https://github.com/Aitorrio/bost-flowstation
+Tetra Dispatch - https://github.com/ysamouhos/tetra-dispatch
+
 - **What's new:** see [CHANGELOG.md](CHANGELOG.md)
 - **Configuration and feature docs:** see the [wiki](https://github.com/ysamouhos/brew-server/wiki)
 
