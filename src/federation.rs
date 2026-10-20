@@ -147,6 +147,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> PeerIo for T {}
 /// given (`peer.tls`).
 async fn dial(peer: &FederationPeerConfig, tls: Option<&TlsConnector>) -> anyhow::Result<Box<dyn PeerIo>> {
     let tcp = TcpStream::connect(&peer.remote_host).await?;
+    // Same reason as the Brew listener (`server::nodelay_listener`): a peer
+    // link carries every call's 60ms voice frames, and Nagle + delayed ACKs
+    // would hold them back and send them bunched.
+    tcp.set_nodelay(true)?;
     match tls {
         None => Ok(Box::new(tcp)),
         Some(c) => {
