@@ -2,6 +2,17 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.17.0 adds:
+
+- **Dead Basestation and Terminal connections are dropped.** Only federation
+  peer links used to be pinged and timed out, so a Basestation or Terminal
+  whose socket died without a close (NAT or proxy expiry, power loss) stayed
+  on the Live Connections page for days with no registrations. Every
+  connection is now pinged and closed after `keepalive_timeout_seconds` of
+  silence (`[federation]` keepalive settings, default 15 s / 45 s; interval 0
+  turns it off for all links). Clients must answer WebSocket pings, which
+  standard stacks do automatically.
+
 Version 1.16.2 adds:
 
 - **Example configs in `sample/`.** The example `brew-server.toml` moved to
