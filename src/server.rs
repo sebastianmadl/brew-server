@@ -391,16 +391,12 @@ async fn client_session(state: Arc<AppState>, socket: WebSocket, mode: ClientMod
     info!(%id, console, mode=mode.as_str(), version=version.as_u8(), version_announced=seed_version.is_some(), %remote_addr, username=username.as_deref().unwrap_or(""),
         loop_safe_neighbour=fed_neighbour.map(fedroute::format_server_id).unwrap_or_default(), "Basestation connected");
 
-    // A federation link is pinged and closed once silent (see
-    // `federation::Keepalive`), the same as the links we dial out. Basestations
-    // and Terminals are left alone: real Basestations run their own heartbeat
-    // and reconnect, and a Terminal may be a phone app whose socket the OS
-    // suspends in the background.
-    let keepalive = if mode == ClientMode::Peer {
-        crate::federation::Keepalive::from_config(&state.config.federation)
-    } else {
-        None
-    };
+    // Every link is pinged and closed once silent (see `federation::Keepalive`).
+    // Without this a Basestation or Terminal whose peer vanished without a FIN
+    // (NAT/proxy expiry, power loss) stays "connected" until TCP gives up, an
+    // idle socket sends nothing, so it lingers for days on the dashboard.
+    // Standard WebSocket stacks answer pings on their own.
+    let keepalive = crate::federation::Keepalive::from_config(&state.config.federation);
     let mut ping = keepalive.map(crate::federation::Keepalive::ping_timer);
     let writer = tokio::spawn(async move {
         loop {
@@ -420,7 +416,7 @@ async fn client_session(state: Arc<AppState>, socket: WebSocket, mode: ClientMod
         let item = match crate::federation::next_frame(&mut ws_rx, keepalive).await {
             Ok(Some(item)) => item,
             Ok(None) => break,
-            Err(_) => { warn!(%id, %remote_addr, "peer link silent past keepalive timeout; closing"); break; }
+            Err(_) => { warn!(%id, %remote_addr, "link silent past keepalive timeout; closing"); break; }
         };
         match item {
             Ok(Message::Binary(data)) => router::handle_packet(state.clone(), id, data.to_vec()).await,
