@@ -44,16 +44,40 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         })?;
         let listen = state.service_bind(state.config.listen);
         info!(%listen, websocket_path=%base, auth=state.config.auth.enabled, tls=true, "Brew server listening (TLS)");
-        axum_server::bind_rustls(listen, rustls_config)
+        // TCP_NODELAY: see `nodelay_listener` below; axum-server's default
+        // acceptor leaves Nagle on.
+        let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(rustls_config)
+            .acceptor(axum_server::accept::NoDelayAcceptor::new());
+        axum_server::bind(listen)
+            .acceptor(acceptor)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         let listen = state.service_bind(state.config.listen);
-        let listener = tokio::net::TcpListener::bind(listen).await?;
+        let listener = nodelay_listener(tokio::net::TcpListener::bind(listen).await?);
         info!(%listen, websocket_path=%base, auth=state.config.auth.enabled, tls=false, "Brew server listening");
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     }
     Ok(())
+}
+
+/// Wraps the Brew listener so every accepted connection gets `TCP_NODELAY`.
+///
+/// Voice is a small (~56 byte) WebSocket message every 60ms per call. With
+/// Nagle on, a frame written while the previous one is still unacknowledged
+/// is held back until that ACK arrives -- and a Basestation that only
+/// receives during a call sends nothing to piggyback ACKs on, so they are
+/// delayed (Linux: >= 40ms). Once RTT + delayed ACK exceeds the 60ms frame
+/// interval, frames leave late and bunched, which the Basestation's TDMA
+/// downlink hears as choppy/garbled audio. axum 0.8 does not set it itself.
+fn nodelay_listener(listener: tokio::net::TcpListener) -> axum::serve::TapIo<tokio::net::TcpListener, fn(&mut tokio::net::TcpStream)> {
+    use axum::serve::ListenerExt;
+    fn set_nodelay(tcp: &mut tokio::net::TcpStream) {
+        if let Err(e) = tcp.set_nodelay(true) {
+            warn!(error = %e, "failed to set TCP_NODELAY on Brew connection");
+        }
+    }
+    listener.tap_io(set_nodelay as fn(&mut tokio::net::TcpStream))
 }
 
 fn normalized_path(path: &str) -> String {
