@@ -762,9 +762,13 @@ pub async fn run(state: Arc<AppState>) -> Result<()> {
 
     loop {
         let mut reason = String::new();
+        // Only the ticker (or a state change) sends; answering every received
+        // heartbeat would make the two nodes ping-pong at line rate.
+        let mut from_peer = false;
         tokio::select! {
             _ = ticker.tick() => {}
             r = sock.recv_from(&mut buf) => {
+                from_peer = true;
                 match r {
                     Ok((n, from)) if from.ip() == cfg.peer_ip => {
                         match decode(&key, &buf[..n]) {
@@ -898,7 +902,10 @@ pub async fn run(state: Arc<AppState>) -> Result<()> {
                 && last_peer.as_ref().is_some_and(|lp| lp.hb.config_hash != config_hash))
                 .then(|| state.ha.config_sections.clone()),
         };
-        if let Err(e) = sock.send_to(&encode(&key, &hb), peer_addr).await {
+        if from_peer && before == after {
+            // Nothing new to tell the peer; wait for the next tick.
+            seq -= 1;
+        } else if let Err(e) = sock.send_to(&encode(&key, &hb), peer_addr).await {
             // Expected while the peer host is down (ICMP unreachable).
             tracing::debug!(error = %e, "HA heartbeat send failed");
         }
