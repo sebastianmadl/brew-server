@@ -295,7 +295,7 @@ static TELEMETRY_SDS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::ne
 static REGISTRATIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| log_page(
     "Mobile Station Registrations", "/api/registrations",
     "d",
-    "`<tr><td>${dt(x.at_ms)}</td><td>${esc(x.bts)}</td><td>${x.issi}</td><td>${x.kind==='register'?'<span class=\"badge badge-reg-in\">Registered</span>':x.kind==='deregister'?'<span class=\"badge badge-reg-out\">Deregistered</span>':'<span class=\"badge badge-reg-timeout\">Timed out</span>'}</td></tr>`",
+    "`<tr><td>${dt(x.at_ms)}</td><td>${esc(x.bts)}</td><td>${x.issi}</td><td>${x.kind==='register'?'<span class=\"badge badge-reg-in\">Registered</span>':x.kind==='deregister'?'<span class=\"badge badge-reg-out\">Deregistered</span>':x.kind==='roamed'?'<span class=\"badge badge-reg-out\">Deregistered</span> <span class=muted>(roamed to other BS'+(x.roamed_to?' '+esc(x.roamed_to):'')+')</span>':'<span class=\"badge badge-reg-timeout\">Timed out</span>'}</td></tr>`",
     &["Time", "BTS", "ISSI", "Event"], 15, "No registration events yet",
 ));
 

@@ -244,9 +244,13 @@ pub struct TelemetryCall {
 pub struct RegLogEntry {
     pub at_ms: u64,
     pub issi: u32,
-    /// "register", "deregister", or "timeout" (a silent drop after the
-    /// subscriber stopped renewing its registration).
+    /// "register", "deregister", "timeout" (a silent drop after the
+    /// subscriber stopped renewing its registration) or "roamed" (it
+    /// registered on another Basestation, see `[roaming]`).
     pub kind: &'static str,
+    /// For "roamed": the Basestation the subscriber moved to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roamed_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -532,7 +536,11 @@ impl TelemetryBts {
     /// Appends a registration lifecycle event to the rolling log (newest
     /// first, capped at 50 like `recent_sds`).
     fn push_reg(&mut self, issi: u32, kind: &'static str) {
-        self.recent_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind });
+        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None });
+    }
+
+    fn push_reg_entry(&mut self, entry: RegLogEntry) {
+        self.recent_regs.push_front(entry);
         while self.recent_regs.len() > 50 {
             self.recent_regs.pop_back();
         }
@@ -543,6 +551,10 @@ impl TelemetryBts {
 #[derive(Default)]
 pub struct TelemetryState {
     pub stations: HashMap<String, TelemetryBts>,
+    /// Basestation each ISSI most recently registered on (telemetry
+    /// `MsRegistration`), used by `[roaming]` to skip a kick when the radio
+    /// has already come back to the old Basestation.
+    pub last_registration: HashMap<u32, String>,
     /// Positions decoded from the Brew SDS channel (LIP binary or text), keyed by
     /// subscriber ISSI. This is the primary source when Basestation cannot be
     /// modified: the raw SDS (incl. LIP payloads) is relayed over the Brew
@@ -685,7 +697,7 @@ impl TelemetryState {
     /// registration log as Basestation telemetry registrations. `kind` is
     /// "register" or "deregister".
     pub fn record_brew_registration(&mut self, issi: u32, kind: &'static str) {
-        self.recent_brew_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind });
+        self.recent_brew_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None });
         while self.recent_brew_regs.len() > 50 {
             self.recent_brew_regs.pop_back();
         }
@@ -696,6 +708,22 @@ impl TelemetryState {
     /// protocol channel (see `brew_ms_rssi`'s doc comment).
     pub fn record_brew_rssi(&mut self, issi: u32, rssi_dbfs: f32) {
         self.brew_ms_rssi.insert(issi, rssi_dbfs);
+    }
+
+    /// `issi` just registered on `new_bts`: drops it from every other
+    /// Basestation that still lists it, logs it there as "roamed", and returns
+    /// those stations' ids so the caller can kick it on them.
+    pub fn take_roamed(&mut self, issi: u32, new_bts: &str) -> Vec<String> {
+        let mut old = Vec::new();
+        for (id, bts) in self.stations.iter_mut() {
+            if id == new_bts || !bts.registrations.remove(&issi) { continue; }
+            bts.ms_cell.remove(&issi);
+            bts.sync_registrations();
+            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()) });
+            old.push(id.clone());
+        }
+        old.sort_unstable();
+        old
     }
 
     /// Flat, newest-first list of registration lifecycle events across every
@@ -817,6 +845,8 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
     let mut advertise: Option<(String, f64, f64)> = None;
     // Set when an emergency alarm just came up for an ISSI.
     let mut alarm_raised: Option<u32> = None;
+    // Set when an MS just registered here (for `[roaming]`).
+    let mut registered: Option<u32> = None;
     match event {
         TelemetryEvent::SiteLocation { name, lat, lon } => {
             if crate::fedroute::valid_position(lat, lon) {
@@ -834,10 +864,17 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
         TelemetryEvent::MsRegistration { issi } => {
             bts.registrations.insert(issi); bts.sync_registrations();
             bts.push_reg(issi, "register");
+            registered = Some(issi);
         }
         TelemetryEvent::MsDeregistration { issi } => {
-            bts.registrations.remove(&issi); bts.sync_registrations();
-            bts.push_reg(issi, "deregister");
+            let was_registered = bts.registrations.remove(&issi);
+            bts.sync_registrations();
+            // Already logged as "roamed" when it moved away and got kicked
+            // here (`[roaming]`): the Basestation confirming that is not a
+            // second deregistration.
+            if was_registered || !state.config.roaming.kick_old_issi {
+                bts.push_reg(issi, "deregister");
+            }
         }
         TelemetryEvent::MsCell { issi, cell } => {
             if bts.registrations.contains(&issi) {
@@ -914,7 +951,40 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
             .filter(|p| p.at_ms == entry.at_ms)
             .map(|p| (p.issi, p.lat, p.lon, p.at_ms));
     }
+    // `[roaming] kick_old_issi`: the radio left whatever other Basestation
+    // still lists it (radios never deregister from the cell they leave).
+    if let Some(issi) = registered {
+        t.last_registration.insert(issi, id.to_string());
+    }
+    let roamed: Vec<(u32, String)> = match registered {
+        Some(issi) if state.config.roaming.kick_old_issi => {
+            t.take_roamed(issi, id).into_iter().map(|old| (issi, old)).collect()
+        }
+        _ => Vec::new(),
+    };
     drop(t);
+    for (issi, old) in roamed {
+        info!(issi, from = %old, to = %id, "subscriber roamed to other BS, kicking old registration");
+        let state = state.clone();
+        tokio::spawn(async move {
+            let delay = state.config.roaming.kick_delay_ms;
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+            // Roamed back in the meantime: the old Basestation now holds the
+            // radio's current registration, which must not be kicked.
+            if state.telemetry.read().await.last_registration.get(&issi).is_some_and(|bts| *bts == old) {
+                info!(issi, bts = %old, "roaming: radio came back to the old BS, kick skipped");
+                return;
+            }
+            match crate::control::send_command(&state, &old, crate::control::ControlCommand::KickMs { issi }).await {
+                Ok(Some(crate::control::ControlResponse::KickMsResponse { success: false, .. })) =>
+                    warn!(issi, bts = %old, "roaming: old Basestation refused the kick"),
+                Ok(_) => {}
+                Err(e) => warn!(issi, bts = %old, error = ?e, "roaming: could not kick old registration"),
+            }
+        });
+    }
     if let Some(issi) = alarm_raised {
         // A call this ISSI already has running becomes an emergency call too.
         crate::router::emergency_raised(state, issi).await;
@@ -1305,5 +1375,259 @@ mod version_tests {
         ).unwrap();
         let TelemetryEvent::CellRf { cell: 1, event: CellRfEvent::SdrHealth(h) } = ev else { panic!("wrong event") };
         assert_eq!(h.temperature_c, Some(41.0));
+    }
+}
+
+#[cfg(test)]
+mod roaming_tests {
+    use super::*;
+
+    fn with_station(t: &mut TelemetryState, id: &str, issis: &[u32]) {
+        let mut bts = TelemetryBts::new(id.to_string(), None);
+        for &i in issis { bts.registrations.insert(i); }
+        bts.sync_registrations();
+        t.stations.insert(id.to_string(), bts);
+    }
+
+    #[test]
+    fn take_roamed_drops_issi_from_other_stations_only() {
+        let mut t = TelemetryState::default();
+        with_station(&mut t, "1000001", &[2320972]);
+        with_station(&mut t, "1000002", &[2320972, 2320001]);
+        with_station(&mut t, "1000003", &[2320001]);
+        let old = t.take_roamed(2320972, "1000001");
+        assert_eq!(old, vec!["1000002".to_string()]);
+        assert_eq!(t.stations["1000001"].registrations_list, vec![2320972], "new station keeps it");
+        assert_eq!(t.stations["1000002"].registrations_list, vec![2320001], "other ISSIs untouched");
+        let e = &t.stations["1000002"].recent_regs_out[0];
+        assert_eq!((e.issi, e.kind, e.roamed_to.as_deref()), (2320972, "roamed", Some("1000001")));
+        assert!(t.stations["1000003"].recent_regs_out.is_empty());
+    }
+
+    #[test]
+    fn take_roamed_without_other_holder_is_noop() {
+        let mut t = TelemetryState::default();
+        with_station(&mut t, "1000001", &[7]);
+        assert!(t.take_roamed(7, "1000001").is_empty());
+        assert!(t.stations["1000001"].recent_regs_out.is_empty());
+    }
+
+    #[test]
+    fn roamed_entry_serializes_target_and_plain_entries_do_not() {
+        let roamed = RegLogEntry { at_ms: 1, issi: 7, kind: "roamed", roamed_to: Some("1000001".into()) };
+        assert!(serde_json::to_string(&roamed).unwrap().contains("\"roamed_to\":\"1000001\""));
+        let plain = RegLogEntry { at_ms: 1, issi: 7, kind: "register", roamed_to: None };
+        assert!(!serde_json::to_string(&plain).unwrap().contains("roamed_to"));
+    }
+}
+
+/// Load simulation for `[roaming] kick_old_issi`: 10 Basestations, 50 radios
+/// roaming between them. Each fake Basestation answers a `KickMs` like
+/// FlowStation does (KickMsResponse + an MsDeregistration on its telemetry).
+/// Run with `cargo test roaming_sim -- --nocapture` for the numbers.
+#[cfg(test)]
+mod roaming_sim_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    const STATIONS: usize = 10;
+    const RADIOS: usize = 50;
+    const ISSI_BASE: u32 = 2_320_000;
+    /// Scaled-down `kick_delay_ms` so the simulation stays fast.
+    const SIM_KICK_DELAY_MS: u64 = 20;
+
+    fn ev(kind: &str, issi: u32) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({ kind: { "issi": issi } })).unwrap()
+    }
+
+    fn bts_id(i: usize) -> String { format!("10000{:02}", i + 1) }
+
+    /// Small deterministic PRNG so every run sees the same roaming pattern.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((self.0 >> 33) as usize) % n
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct Report {
+        moves: usize,
+        kicks: usize,
+        /// Kicks that did not go to the station the radio left (`None`: not checked).
+        wrong_kicks: Option<usize>,
+        /// Registrations listed beyond one per radio (stale entries).
+        stale: usize,
+        /// Radios not listed on the Basestation they are actually on.
+        misplaced: usize,
+        /// Visible "roamed" log rows (each station keeps its last 50 rows).
+        roamed_log_entries: usize,
+        duplicate_deregister_entries: usize,
+    }
+
+    struct Sim {
+        state: Arc<AppState>,
+        kicks: Arc<Mutex<Vec<(String, u32)>>>,
+        done: Arc<AtomicUsize>,
+        loc: Vec<usize>,
+    }
+
+    impl Sim {
+        async fn new(kick_old_issi: bool) -> Self {
+            let mut config = crate::config::Config::default();
+            config.storage.enabled = false;
+            config.roaming.kick_old_issi = kick_old_issi;
+            config.roaming.kick_delay_ms = SIM_KICK_DELAY_MS;
+            let (state, _rx) = AppState::new(config, std::path::PathBuf::from("test.toml"));
+            let state = Arc::new(state);
+            let kicks = Arc::new(Mutex::new(Vec::new()));
+            let done = Arc::new(AtomicUsize::new(0));
+            for i in 0..STATIONS {
+                let id = bts_id(i);
+                state.telemetry.write().await.stations.insert(id.clone(), TelemetryBts::new(id.clone(), None));
+                let mut rx = crate::control::attach_test_session(&state, &id).await;
+                let (state, kicks, done) = (state.clone(), kicks.clone(), done.clone());
+                tokio::spawn(async move {
+                    while let Some(frame) = rx.recv().await {
+                        let v: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+                        let issi = v["KickMs"]["issi"].as_u64().expect("only KickMs expected") as u32;
+                        kicks.lock().unwrap().push((id.clone(), issi));
+                        let resp = serde_json::to_vec(&crate::control::ControlResponse::KickMsResponse { issi, success: true }).unwrap();
+                        crate::control::deliver_test_response(&state, &id, &resp).await;
+                        handle_event(&state, &id, &ev("MsDeregistration", issi)).await;
+                        done.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+            Self { state, kicks, done, loc: vec![usize::MAX; RADIOS] }
+        }
+
+        /// Radio `r` registers on station `s`. With `settle`, waits until every
+        /// kick this caused has been answered (cells far apart in time).
+        async fn register(&mut self, r: usize, s: usize, settle: bool) {
+            let before = self.kicks.lock().unwrap().len();
+            let holders = {
+                let t = self.state.telemetry.read().await;
+                t.stations.iter().filter(|(id, b)| **id != bts_id(s) && b.registrations.contains(&(ISSI_BASE + r as u32))).count()
+            };
+            handle_event(&self.state, &bts_id(s), &ev("MsRegistration", ISSI_BASE + r as u32)).await;
+            self.loc[r] = s;
+            if settle && self.state.config.roaming.kick_old_issi {
+                self.wait_done(before + holders).await;
+            }
+        }
+
+        async fn wait_done(&self, n: usize) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while self.done.load(Ordering::SeqCst) < n {
+                assert!(std::time::Instant::now() < deadline, "kicks not answered in time");
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+
+        /// Waits until the kick count stops changing and every kick is answered.
+        async fn quiesce(&self) {
+            loop {
+                let k = self.kicks.lock().unwrap().len();
+                self.wait_done(k).await;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                if self.kicks.lock().unwrap().len() == k { break; }
+            }
+        }
+
+        async fn report(&self, moves: usize, expected_kicks: Option<&[(String, u32)]>) -> Report {
+            let t = self.state.telemetry.read().await;
+            let kicks = self.kicks.lock().unwrap().clone();
+            let wrong_kicks = expected_kicks.map(|want| {
+                let (mut want, mut got) = (want.to_vec(), kicks.clone());
+                want.sort(); got.sort();
+                got.iter().filter(|k| !want.contains(k)).count() + want.iter().filter(|k| !got.contains(k)).count()
+            });
+            let listed: usize = t.stations.values().map(|b| b.registrations.len()).sum();
+            let misplaced = (0..RADIOS).filter(|&r| !t.stations[&bts_id(self.loc[r])].registrations.contains(&(ISSI_BASE + r as u32))).count();
+            let entries: Vec<&RegLogEntry> = t.stations.values().flat_map(|b| b.recent_regs.iter()).collect();
+            Report {
+                moves,
+                kicks: kicks.len(),
+                wrong_kicks,
+                stale: listed.saturating_sub(RADIOS - misplaced),
+                misplaced,
+                roamed_log_entries: entries.iter().filter(|e| e.kind == "roamed").count(),
+                duplicate_deregister_entries: entries.iter().filter(|e| e.kind == "deregister").count(),
+            }
+        }
+    }
+
+    /// Normal roaming: radios move one at a time, each kick is answered
+    /// before the next move (realistic: re-registering takes seconds, the
+    /// kick milliseconds).
+    async fn run_settled(kick: bool, moves: usize) -> Report {
+        let mut sim = Sim::new(kick).await;
+        let mut rng = Lcg(0x5EB_A571A);
+        for r in 0..RADIOS { sim.register(r, rng.next(STATIONS), true).await; }
+        let mut expected = Vec::new();
+        for _ in 0..moves {
+            let r = rng.next(RADIOS);
+            let mut s = rng.next(STATIONS);
+            if s == sim.loc[r] { s = (s + 1) % STATIONS; }
+            expected.push((bts_id(sim.loc[r]), ISSI_BASE + r as u32));
+            sim.register(r, s, true).await;
+        }
+        sim.quiesce().await;
+        sim.report(moves, Some(if kick { &expected[..] } else { &[] })).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_10_stations_50_radios_with_kick() {
+        let rep = run_settled(true, 1000).await;
+        println!("kick_old_issi=1, settled: {rep:?}");
+        assert_eq!(rep.kicks, 1000, "one kick per move");
+        assert_eq!(rep.wrong_kicks, Some(0), "every kick went to the station the radio left");
+        assert_eq!(rep.stale, 0, "no radio listed twice");
+        assert_eq!(rep.misplaced, 0, "every radio listed where it is");
+        assert_eq!(rep.duplicate_deregister_entries, 0, "kick confirmations not logged twice");
+        assert!(rep.roamed_log_entries > 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_10_stations_50_radios_without_kick() {
+        let rep = run_settled(false, 1000).await;
+        println!("kick_old_issi=0, settled: {rep:?}");
+        assert_eq!(rep.kicks, 0, "switch off: nothing is kicked");
+        assert_eq!(rep.roamed_log_entries, 0);
+        assert!(rep.stale > 0, "without the kick old registrations pile up (old behaviour)");
+    }
+
+    /// Worst case: ping-pong (A -> B -> A back to back) fired without any
+    /// pause, faster than `kick_delay_ms`. The kick to A must be skipped
+    /// (the radio is back there), the kick to B must still happen.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_burst_and_ping_pong() {
+        let mut sim = Sim::new(true).await;
+        let mut rng = Lcg(0xB0B);
+        for r in 0..RADIOS { sim.register(r, rng.next(STATIONS), true).await; }
+        let mut moves = 0;
+        // 10 rounds; in each round every radio ping-pongs once, all 50 back
+        // to back, then the network gets time to settle before the next round.
+        for _ in 0..10 {
+            for r in 0..RADIOS {
+                let a = sim.loc[r];
+                let b = (a + 1 + rng.next(STATIONS - 1)) % STATIONS;
+                sim.register(r, b, false).await;
+                sim.register(r, a, false).await;
+                moves += 2;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(3 * SIM_KICK_DELAY_MS)).await;
+            sim.quiesce().await;
+        }
+        sim.quiesce().await;
+        let rep = sim.report(moves, None).await;
+        println!("kick_old_issi=1, burst + ping-pong: {rep:?}");
+        assert_eq!(rep.misplaced, 0, "no radio kicked off the cell it is on");
+        assert_eq!(rep.stale, 0, "no radio listed twice");
+        assert_eq!(rep.duplicate_deregister_entries, 0);
+        assert_eq!(rep.kicks, moves / 2, "only the B side of each ping-pong is kicked");
     }
 }
