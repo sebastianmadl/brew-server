@@ -235,6 +235,23 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
     }
 }
 
+/// Test hook: registers a control session for `id` without a WebSocket and
+/// returns the frames the server sends to it.
+#[cfg(test)]
+pub(crate) async fn attach_test_session(state: &Arc<AppState>, id: &str) -> mpsc::UnboundedReceiver<Vec<u8>> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    state.control.write().await.sessions.insert(id.to_string(), ControlSession {
+        tx, pending_handle: HashMap::new(), pending_kick: HashMap::new(), pending_ambience: HashMap::new(),
+    });
+    rx
+}
+
+/// Test hook: feeds a response frame as if the Basestation `id` had sent it.
+#[cfg(test)]
+pub(crate) async fn deliver_test_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
+    handle_response(state, id, data).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

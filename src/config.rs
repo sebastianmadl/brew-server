@@ -49,6 +49,45 @@ pub struct Config {
     /// Active/standby pair: two brew-servers on one LAN sharing a virtual IP.
     /// See `ha`.
     pub ha: HaConfig,
+    /// Behaviour when a subscriber moves between Basestations. See `RoamingConfig`.
+    pub roaming: RoamingConfig,
+}
+
+/// `[roaming]`: what happens when a mobile station registers on one
+/// Basestation while another one still holds it. A radio does not deregister
+/// from the cell it leaves, so without this the old Basestation keeps listing
+/// the ISSI as registered until its own timeout (if any).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoamingConfig {
+    /// When set (`1`/`true`), a registration reported over telemetry by one
+    /// Basestation makes the server kick the same ISSI (control channel
+    /// `KickMs`) on every other Basestation that still lists it. The old
+    /// entry is logged as deregistered "(roamed to other BS)". `0`/`false`
+    /// (default) leaves the old registration alone.
+    #[serde(deserialize_with = "bool_or_int")]
+    pub kick_old_issi: bool,
+    /// Hold-off before the kick is sent. If the radio registers back on the
+    /// old Basestation within this time (ping-pong at a cell border), the
+    /// kick is skipped, so it can never hit the radio's fresh registration.
+    pub kick_delay_ms: u64,
+}
+
+impl Default for RoamingConfig {
+    fn default() -> Self { Self { kick_old_issi: false, kick_delay_ms: 2000 } }
+}
+
+/// Accepts `true`/`false` as well as `1`/`0` for a boolean switch.
+fn bool_or_int<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrInt { Bool(bool), Int(i64) }
+    match BoolOrInt::deserialize(d)? {
+        BoolOrInt::Bool(b) => Ok(b),
+        BoolOrInt::Int(0) => Ok(false),
+        BoolOrInt::Int(1) => Ok(true),
+        BoolOrInt::Int(n) => Err(serde::de::Error::custom(format!("expected 0 or 1, got {n}"))),
+    }
 }
 
 /// Active/standby high availability. Two nodes exchange signed UDP
@@ -742,6 +781,7 @@ impl Default for Config {
             bts_locations: HashMap::new(),
             blacklist: BlacklistConfig::default(),
             ha: HaConfig::default(),
+            roaming: RoamingConfig::default(),
         }
     }
 }
@@ -950,5 +990,26 @@ mod tests {
             edit(&mut c);
             assert!(c.validate().is_err(), "{what} should be rejected");
         }
+    }
+}
+
+#[cfg(test)]
+mod roaming_config_tests {
+    use super::*;
+
+    fn parse(toml_src: &str) -> std::result::Result<Config, toml::de::Error> { toml::from_str(toml_src) }
+
+    #[test]
+    fn kick_old_issi_defaults_off() {
+        assert!(!parse("").unwrap().roaming.kick_old_issi);
+        assert!(!parse("[roaming]\n").unwrap().roaming.kick_old_issi);
+    }
+
+    #[test]
+    fn kick_old_issi_accepts_int_and_bool() {
+        assert!(parse("[roaming]\nkick_old_issi = 1\n").unwrap().roaming.kick_old_issi);
+        assert!(!parse("[roaming]\nkick_old_issi = 0\n").unwrap().roaming.kick_old_issi);
+        assert!(parse("[roaming]\nkick_old_issi = true\n").unwrap().roaming.kick_old_issi);
+        assert!(parse("[roaming]\nkick_old_issi = 2\n").is_err());
     }
 }

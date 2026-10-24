@@ -280,6 +280,18 @@ object_name_prefix = "MS"
 min_report_interval_seconds = 60
 reconnect_interval_seconds = 15
 
+# Roaming between Basestations. A radio does not deregister from the cell it
+# leaves, so the old Basestation keeps listing it until its own timeout.
+# kick_old_issi = 1: when a Basestation reports a registration, kick that ISSI
+# (control channel) on every other Basestation still holding it, and log it there
+# as deregistered "(roamed to other BS)". Needs [telemetry] and [control].
+# kick_old_issi = 0 (default): leave the old registration alone.
+# kick_delay_ms: hold-off before kicking; if the radio comes back to the old
+# Basestation within this time (ping-pong at a cell border) the kick is skipped.
+[roaming]
+kick_old_issi = 0
+kick_delay_ms = 2000
+
 # ISSIs barred from communicating through this server. A listed ISSI still registers
 # (so dispatch can reach it) but cannot transmit to groups, make or receive private
 # calls, or send or receive SDS. Dispatch ambience listening (SS-AL) to it and LIP
