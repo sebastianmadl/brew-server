@@ -51,3 +51,8 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 
 Two brew-servers can run as an active/standby pair sharing a virtual IP on
 one LAN. See [docs/High-Availability.md](docs/High-Availability.md).
+
+## Credits
+
+- Joaquin EA5GVK
+- Sebastian OE14SXM
