@@ -45,7 +45,14 @@ With `kick_old_issi = 0` the behaviour is exactly as before.
 
 ## Announced handover
 
-A radio that changes cells by announced handover (U-PREPARE relayed between
+TETRA has no network-controlled handover: the radio changes cells by cell
+reselection (TS 100 392-2 clause 18.3.4). In announced reselection it tells
+its serving cell first (U-PREPARE, answered with D-NEW-CELL or
+D-PREPARE-FAIL); in unannounced reselection it does not, but restores its
+call on the new cell (U-RESTORE). "Handover" here only names the relay that
+prepares an announced reselection between two Basestations.
+
+A radio that changes cells by announced reselection (U-PREPARE relayed between
 two Basestations that both speak `handover-v1`, see `src/handover.rs`) is not
 kicked: its registration on the new Basestation came with the handover, and
 the old Basestation lets it go by itself. The kick is skipped while the
@@ -63,6 +70,13 @@ that Basestation keeps its stale entry until its own timeout.
 [handover]
 timeout_ms = 2000      # how long the target Basestation has to answer
 ```
+
+The serving Basestation may name the target's location area
+(`target_location_area`, from its neighbour entry). Carriers are reused
+across a network, so the server then only picks a Basestation whose cell on
+that carrier is in that location area. A "no target" answer carries a
+`reason`: `gone` (the target Basestation went away), `unknown`, `own_cell`,
+`not_capable` or `no_network`.
 
 ## Known limit
 

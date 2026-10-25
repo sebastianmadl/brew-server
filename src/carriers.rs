@@ -36,7 +36,7 @@ const MAX_CAPABILITIES: usize = 16;
 const MAX_CAPABILITY_LEN: usize = 32;
 
 /// Identifies a cell network wide: network code plus main carrier number and
-/// its band plan (the absolute "main carrier number extension" of EN 300 392-2:
+/// its band plan (the absolute "main carrier number extension" of TS 100 392-2:
 /// frequency band, offset, duplex spacing, reverse operation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct CarrierKey {
@@ -47,7 +47,7 @@ pub struct CarrierKey {
 }
 
 impl CarrierKey {
-    /// Downlink frequency in Hz (EN 300 392-2 clause 21.4.4.1): band (bits 9-6 of
+    /// Downlink frequency in Hz (TS 100 392-2 clause 21.4.4.1): band (bits 9-6 of
     /// the extension) x 100 MHz + carrier x 25 kHz + offset (bits 5-4: 0, +6.25,
     /// -6.25, +12.5 kHz). The uplink also needs the duplex spacing table, which a
     /// Basestation may override, so it is not derived here.
@@ -173,6 +173,16 @@ impl CarrierRegistry {
     /// The connection serving `key`, if any.
     pub fn owner(&self, key: &CarrierKey) -> Option<ClientId> {
         self.table.get(key).copied()
+    }
+
+    /// The connection serving `key` in location area `la`: the newest
+    /// claimant whose cell on `key` is in `la`. Carriers are reused across a
+    /// network, so the same key may name cells in different LAs.
+    pub fn owner_in_location_area(&self, key: &CarrierKey, la: u16) -> Option<ClientId> {
+        self.by_client.iter()
+            .filter(|(_, (_, info))| info.cells.iter().any(|c| c.key == *key && c.location_area == la))
+            .max_by_key(|(_, (seq, _))| *seq)
+            .map(|(id, _)| *id)
     }
 
     /// What `client` announced last.

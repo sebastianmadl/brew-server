@@ -4,9 +4,13 @@
 //! serving cell (A), optionally with a registration (MM SDU) for the target.
 //! When that neighbour is served by another Basestation (B), A asks the
 //! server with `SERVICE_HO_PREPARE` / `SERVICE_HO_FORWARD_REG`; the server
-//! finds B by the target carrier (`carriers`), forwards the request and relays
+//! finds B by the target carrier (`carriers`, narrowed by the target's
+//! location area when A names it), forwards the request and relays
 //! B's `SERVICE_HO_RESULT` back to A. A then answers the radio (D-NEW-CELL or
-//! D-PREPARE-FAIL). The radio-side state machines stay in the Basestations:
+//! D-PREPARE-FAIL). On the air interface this is announced cell reselection
+//! (TS 100 392-2 clause 18.3.4.7); TETRA has no network-controlled handover,
+//! "handover" here only names the relay. The radio-side state machines stay
+//! in the Basestations:
 //! the server only finds the target, keeps the transaction and its timeout.
 //!
 //! Both sides must have announced the `handover-v1` capability in
@@ -21,6 +25,9 @@
 //! "no target" when the carrier is unknown, served by A itself, or served by
 //! a Basestation without the capability, and with "timeout" when B does not
 //! answer within `[handover] timeout_ms` (or goes away first: "no target").
+//! A "no target" carries a `reason` (`NoTargetReason`), so A can tell a target
+//! that went away (the radio should not be sent there: D-PREPARE-FAIL) from a
+//! neighbour this server does not prepare (D-NEW-CELL without preparation).
 
 use crate::{carriers::CarrierKey, protocol, state::{AppState, ClientId, ClientMode, Inner}};
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
@@ -71,6 +78,33 @@ impl Status {
     }
 }
 
+/// Why the server answered "no target" itself (`reason` in the result).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoTargetReason {
+    /// No Basestation announced the target cell.
+    Unknown,
+    /// The target is a cell of the serving Basestation itself.
+    OwnCell,
+    /// The Basestation serving the target does not speak `handover-v1`.
+    NotCapable,
+    /// The target Basestation went away while the request waited for it.
+    Gone,
+    /// The serving Basestation announced no cells, so its network is unknown.
+    NoNetwork,
+}
+
+impl NoTargetReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoTargetReason::Unknown => "unknown",
+            NoTargetReason::OwnCell => "own_cell",
+            NoTargetReason::NotCapable => "not_capable",
+            NoTargetReason::Gone => "gone",
+            NoTargetReason::NoNetwork => "no_network",
+        }
+    }
+}
+
 /// An MM PDU as carried inside the JSON: `sdu` (hex) plus `sdu_len_bits`, as
 /// the PDU need not end on a byte boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -109,6 +143,10 @@ pub struct Request {
     /// Network of the target cell; the serving cell's own when left out.
     pub target_mcc: Option<u16>,
     pub target_mnc: Option<u16>,
+    /// Location area of the target cell, from the serving cell's neighbour
+    /// entry (TS 100 392-2 clause 18.5.17). Carriers are reused across a
+    /// network, so when given only a cell in this LA is the target.
+    pub target_location_area: Option<u16>,
     /// The registration for the target cell (`SERVICE_HO_FORWARD_REG` only).
     pub sdu: Option<Sdu>,
 }
@@ -124,6 +162,8 @@ struct RequestMessage {
     #[serde(default)]
     target_mnc: Option<u16>,
     #[serde(default)]
+    target_location_area: Option<u16>,
+    #[serde(default)]
     sdu: Option<String>,
     #[serde(default)]
     sdu_len_bits: Option<u16>,
@@ -134,7 +174,8 @@ fn check_issi(issi: u32) -> Result<(), String> {
 }
 
 /// Parses a request: `{"transaction_id":N,"issi":N,"target_carrier":N,
-/// "target_carrier_ext":N,"target_mcc":N,"target_mnc":N,"sdu":"hex","sdu_len_bits":N}`.
+/// "target_carrier_ext":N,"target_mcc":N,"target_mnc":N,"target_location_area":N,
+/// "sdu":"hex","sdu_len_bits":N}`.
 /// `with_sdu`: a `SERVICE_HO_FORWARD_REG`, which must carry the registration.
 pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
     let msg: RequestMessage = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -143,6 +184,7 @@ pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
     if msg.target_carrier_ext > 0x3ff { return Err(format!("target_carrier_ext {} out of range (0-1023)", msg.target_carrier_ext)); }
     if msg.target_mcc.is_some_and(|m| m > 0x3ff) { return Err("target_mcc out of range (0-1023)".into()); }
     if msg.target_mnc.is_some_and(|m| m > 0x3fff) { return Err("target_mnc out of range (0-16383)".into()); }
+    if msg.target_location_area.is_some_and(|la| la > 0x3fff) { return Err("target_location_area out of range (0-16383)".into()); }
     let sdu = match (with_sdu, msg.sdu, msg.sdu_len_bits) {
         (false, _, _) => None,
         (true, Some(hex), Some(bits)) => Some(Sdu::parse(&hex, bits)?),
@@ -155,6 +197,7 @@ pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
         target_carrier_ext: msg.target_carrier_ext,
         target_mcc: msg.target_mcc,
         target_mnc: msg.target_mnc,
+        target_location_area: msg.target_location_area,
         sdu,
     })
 }
@@ -194,7 +237,7 @@ pub fn parse_result(json: &str) -> Result<HoResult, String> {
     Ok(HoResult { transaction_id: msg.transaction_id, issi: msg.issi, status, sdu })
 }
 
-fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey) -> String {
+fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey, location_area: Option<u16>) -> String {
     let mut v = serde_json::json!({
         "transaction_id": transaction_id,
         "issi": req.issi,
@@ -203,6 +246,9 @@ fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey) -> String 
         "target_mcc": key.mcc,
         "target_mnc": key.mnc,
     });
+    if let Some(la) = location_area {
+        v["target_location_area"] = la.into();
+    }
     if let Some(sdu) = &req.sdu {
         v["sdu"] = sdu.hex().into();
         v["sdu_len_bits"] = sdu.len_bits.into();
@@ -212,7 +258,17 @@ fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey) -> String 
 
 /// A `SERVICE_HO_RESULT` packet.
 pub fn build_result(transaction_id: u32, issi: u32, status: Status, sdu: Option<&Sdu>) -> Vec<u8> {
-    let mut v = serde_json::json!({ "transaction_id": transaction_id, "issi": issi, "status": status as u8 });
+    let v = serde_json::json!({ "transaction_id": transaction_id, "issi": issi, "status": status as u8 });
+    result_packet(v, sdu)
+}
+
+/// A "no target" `SERVICE_HO_RESULT` the server sends itself, with its reason.
+pub fn build_no_target(transaction_id: u32, issi: u32, reason: NoTargetReason) -> Vec<u8> {
+    let v = serde_json::json!({ "transaction_id": transaction_id, "issi": issi, "status": Status::NoTarget as u8, "reason": reason.as_str() });
+    result_packet(v, None)
+}
+
+fn result_packet(mut v: serde_json::Value, sdu: Option<&Sdu>) -> Vec<u8> {
     if let Some(sdu) = sdu {
         v["sdu"] = sdu.hex().into();
         v["sdu_len_bits"] = sdu.len_bits.into();
@@ -350,30 +406,39 @@ pub async fn handle_request(state: &Arc<AppState>, source: ClientId, service_typ
     let own = inner.carriers.info(source).and_then(|info| info.cells.first()).map(|c| (c.key.mcc, c.key.mnc));
     let (Some(mcc), Some(mnc)) = (req.target_mcc.or(own.map(|o| o.0)), req.target_mnc.or(own.map(|o| o.1))) else {
         warn!(%source, issi = req.issi, "handover request without a network code from a Basestation that announced no cells");
-        send(&inner, source, build_result(req.transaction_id, req.issi, Status::NoTarget, None));
+        send(&inner, source, build_no_target(req.transaction_id, req.issi, NoTargetReason::NoNetwork));
         return;
     };
     let key = CarrierKey { mcc, mnc, carrier: req.target_carrier, carrier_ext: req.target_carrier_ext };
-    let target = match inner.carriers.owner(&key) {
-        None => Err("no Basestation serves the target carrier"),
-        Some(t) if t == source => Err("the target carrier is the serving Basestation's own"),
-        Some(t) if !has_capability(&inner, t) => Err("the target Basestation does not speak handover-v1"),
+    let owner = match req.target_location_area {
+        Some(la) => inner.carriers.owner_in_location_area(&key, la),
+        None => inner.carriers.owner(&key),
+    };
+    let target = match owner {
+        None => Err(NoTargetReason::Unknown),
+        Some(t) if t == source => Err(NoTargetReason::OwnCell),
+        Some(t) if !has_capability(&inner, t) => Err(NoTargetReason::NotCapable),
         Some(t) => Ok(t),
     };
     let target = match target {
         Ok(t) => t,
         Err(why) => {
-            info!(%source, issi = req.issi, carrier = key.carrier, carrier_ext = key.carrier_ext, reason = why, "handover: no target");
-            send(&inner, source, build_result(req.transaction_id, req.issi, Status::NoTarget, None));
+            info!(%source, issi = req.issi, carrier = key.carrier, carrier_ext = key.carrier_ext,
+                location_area = ?req.target_location_area, reason = why.as_str(), "handover: no target");
+            send(&inner, source, build_no_target(req.transaction_id, req.issi, why));
             return;
         }
     };
+    // B learns which of its cells is meant, also when A left the LA out.
+    let location_area = req.target_location_area.or_else(|| {
+        inner.carriers.info(target).and_then(|info| info.cells.iter().find(|c| c.key == key)).map(|c| c.location_area)
+    });
     let pending = Pending { source, source_transaction: req.transaction_id, issi: req.issi, target, key, started: Instant::now() };
     let Some(id) = inner.handovers.begin(pending) else {
         warn!(%source, issi = req.issi, transaction_id = req.transaction_id, "handover request repeated or too many open; dropped");
         return;
     };
-    send(&inner, target, protocol::build_service(service_type, &request_json(&req, id, &key)));
+    send(&inner, target, protocol::build_service(service_type, &request_json(&req, id, &key, location_area)));
     info!(%source, %target, issi = req.issi, carrier = key.carrier, transaction_id = req.transaction_id, forwarded_as = id,
         registration = with_sdu, "handover: request forwarded to the target Basestation");
     drop(inner);
@@ -421,7 +486,7 @@ pub async fn handle_result(state: &Arc<AppState>, source: ClientId, json: &str) 
 pub fn client_gone(inner: &mut Inner, id: ClientId) {
     for p in inner.handovers.client_gone(id) {
         info!(source = %p.source, target = %id, issi = p.issi, "handover: target Basestation went away");
-        send(inner, p.source, build_result(p.source_transaction, p.issi, Status::NoTarget, None));
+        send(inner, p.source, build_no_target(p.source_transaction, p.issi, NoTargetReason::Gone));
     }
 }
 
@@ -664,6 +729,8 @@ mod tests {
         let got = services(&mut a_rx);
         let answers: Vec<_> = got.iter().map(|(k, v)| (*k, v["transaction_id"].as_u64().unwrap(), v["status"].as_u64().unwrap())).collect();
         assert_eq!(answers, (1..=5).map(|t| (protocol::SERVICE_HO_RESULT, t, 2)).collect::<Vec<_>>());
+        let reasons: Vec<_> = got.iter().map(|(_, v)| v["reason"].as_str().unwrap().to_string()).collect();
+        assert_eq!(reasons, ["unknown", "own_cell", "not_capable", "unknown", "unknown"]);
         assert!(services(&mut old_rx).is_empty(), "a Basestation without handover-v1 never sees a handover message");
         assert!(services(&mut other_rx).is_empty());
         assert_eq!(state.inner.read().await.handovers.pending_count(), 0);
@@ -709,9 +776,11 @@ mod tests {
         state.cleanup_client(b).await;
         let got = services(&mut a_rx);
         assert_eq!((got[0].1["transaction_id"].as_u64(), got[0].1["status"].as_u64()), (Some(7), Some(2)));
+        assert_eq!(got[0].1["reason"], "gone", "A must not send the radio to a target that went away");
         // And the target is gone from the registry: the next request is answered at once.
         packet(&state, a, forward_reg(8, 2320001, 1530)).await;
-        assert_eq!(services(&mut a_rx)[0].1["status"].as_u64(), Some(2));
+        let got = services(&mut a_rx);
+        assert_eq!((got[0].1["status"].as_u64(), got[0].1["reason"].as_str()), (Some(2), Some("unknown")));
     }
 
     #[tokio::test]
@@ -781,6 +850,53 @@ mod tests {
         packet(&state, a, protocol::build_service(protocol::SERVICE_HO_FORWARD_REG, r#"{"transaction_id":1}"#)).await;
         packet(&state, b, protocol::build_service(protocol::SERVICE_HO_RESULT, "{")).await;
         assert!(services(&mut a_rx).is_empty() && services(&mut b_rx).is_empty());
+    }
+
+    /// A Basestation with one cell on `carrier` in location area `la`.
+    async fn bts_in_la(state: &Arc<AppState>, carrier: u16, la: u16) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (id, rx) = connect(state, ClientMode::Basestation).await;
+        let json = format!(r#"{{"mcc":232,"mnc":5,"cells":[{{"carrier":{carrier},"carrier_ext":{EXT},"location_area":{la}}}],"capabilities":["handover-v1"]}}"#);
+        crate::router::handle_packet(state.clone(), id, protocol::build_service(protocol::SERVICE_BTS_INFO, &json)).await;
+        (id, rx)
+    }
+
+    fn prepare_in_la(tid: u32, carrier: u16, la: u16) -> Vec<u8> {
+        protocol::build_service(protocol::SERVICE_HO_PREPARE, &format!(
+            r#"{{"transaction_id":{tid},"issi":2320001,"target_carrier":{carrier},"target_carrier_ext":{EXT},"target_location_area":{la}}}"#))
+    }
+
+    #[test]
+    fn parses_the_target_location_area() {
+        let req = parse_request(r#"{"transaction_id":7,"issi":1,"target_carrier":1530,"target_carrier_ext":268,"target_location_area":16383}"#, false).unwrap();
+        assert_eq!(req.target_location_area, Some(16383));
+        assert_eq!(parse_request(r#"{"transaction_id":7,"issi":1,"target_carrier":1530,"target_carrier_ext":268}"#, false).unwrap().target_location_area, None);
+        assert!(parse_request(r#"{"transaction_id":7,"issi":1,"target_carrier":1530,"target_carrier_ext":268,"target_location_area":16384}"#, false).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_reused_carrier_is_told_apart_by_the_location_area() {
+        let state = test_state(2000);
+        let (a, mut a_rx) = bts_in_la(&state, 1528, 2).await;
+        // Two Basestations reuse carrier 1530 in different location areas;
+        // the one in LA 7 announced last.
+        let (near, mut near_rx) = bts_in_la(&state, 1530, 1).await;
+        let (far, mut far_rx) = bts_in_la(&state, 1530, 7).await;
+        assert_eq!(state.inner.read().await.carriers.owner(&CarrierKey { mcc: 232, mnc: 5, carrier: 1530, carrier_ext: EXT }), Some(far));
+        packet(&state, a, prepare_in_la(1, 1530, 1)).await;
+        assert!(services(&mut far_rx).is_empty(), "the newest claimant is not the neighbour in LA 1");
+        let got = services(&mut near_rx);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1["target_location_area"].as_u64(), Some(1));
+        // No cell on the carrier in that LA: no target, nobody else is asked.
+        packet(&state, a, prepare_in_la(2, 1530, 3)).await;
+        let got = services(&mut a_rx);
+        assert_eq!((got[0].1["transaction_id"].as_u64(), got[0].1["status"].as_u64(), got[0].1["reason"].as_str()), (Some(2), Some(2), Some("unknown")));
+        assert!(services(&mut near_rx).is_empty() && services(&mut far_rx).is_empty());
+        // Without a location area the newest claimant serves, as before, and
+        // is told which of its cells is meant.
+        packet(&state, a, prepare(3, 2320001, 1530)).await;
+        assert_eq!(services(&mut far_rx)[0].1["target_location_area"].as_u64(), Some(7));
+        let _ = near;
     }
 
     #[test]

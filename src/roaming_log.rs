@@ -1,7 +1,9 @@
-//! Roaming log: the last cell changes of the radios, for the dashboard.
+//! Cell change log ("Cell Change Log" on the dashboard): the last cell
+//! changes of the radios. Not "roaming" in the ETSI sense (a change of
+//! location area, TS 100 392-2), although the module keeps its name.
 //!
 //! A change is logged when an ISSI registers on another Basestation than the
-//! one holding it (announced handover or unannounced reselection), and when a
+//! one holding it (announced reselection prepared here, or any other), and when a
 //! station reports the radio on another of its own cells (`SERVICE_MS_CELL`,
 //! multi-cell stations). The target cell of a move between stations is only
 //! known once the new station reports it, so the entry is completed by that
@@ -20,9 +22,13 @@ const CELL_REPORT_MS: u64 = 10_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// Announced cell change relayed by this server (`handover`).
+    /// Announced cell reselection (TS 100 392-2 clause 18.3.4.7) prepared
+    /// through this server's handover relay. Shown as "announced"; the wire
+    /// value stays `handover` for API compatibility.
     Handover,
-    /// The radio registered on another Basestation on its own.
+    /// The radio registered on another Basestation without a preparation
+    /// here: unannounced or undeclared reselection, or announced to a cell
+    /// this server did not prepare. Shown as "not announced".
     Reselection,
     /// Another cell of the same station (multi-cell FlowStation).
     WithinStation,
