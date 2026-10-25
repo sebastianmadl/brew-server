@@ -44,11 +44,48 @@ pub struct CarrierKey {
     pub carrier_ext: u16,
 }
 
+impl CarrierKey {
+    /// Downlink frequency in Hz (EN 300 392-2 clause 21.4.4.1): band (bits 9-6 of
+    /// the extension) x 100 MHz + carrier x 25 kHz + offset (bits 5-4: 0, +6.25,
+    /// -6.25, +12.5 kHz). The uplink also needs the duplex spacing table, which a
+    /// Basestation may override, so it is not derived here.
+    pub fn downlink_hz(&self) -> u64 {
+        let band = u64::from((self.carrier_ext >> 6) & 0xf);
+        let offset: i64 = match (self.carrier_ext >> 4) & 0x3 {
+            1 => 6_250,
+            2 => -6_250,
+            3 => 12_500,
+            _ => 0,
+        };
+        (band * 100_000_000 + u64::from(self.carrier) * 25_000).saturating_add_signed(offset)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Cell {
     #[serde(flatten)]
     pub key: CarrierKey,
     pub location_area: u16,
+    /// The cell's number within its station (FlowStation: 0 = primary, then the
+    /// `[[cells]]` ids). Only a label, see `cell_name`.
+    pub cell: u8,
+}
+
+/// Name of a cell for the dashboard and the logs: the station (its Brew login,
+/// see `station_name`) and the cell's number within it, e.g. `2320997/3`. Not
+/// a radio-side identity: on the air interface a cell is only its network
+/// code, carrier and band plan (`CarrierKey`).
+pub fn cell_name(station: &str, cell: u8) -> String {
+    format!("{station}/{cell}")
+}
+
+/// A station's name: the Brew login it authenticated with, or without `[auth]`
+/// the first 8 hex digits of its connection id.
+pub fn station_name(id: ClientId, username: Option<&str>) -> String {
+    match username {
+        Some(user) if !user.is_empty() => user.to_string(),
+        _ => id.simple().to_string()[..8].to_string(),
+    }
 }
 
 /// What one connection announced last.
@@ -114,6 +151,11 @@ impl CarrierRegistry {
         self.by_client.get(&client).map(|(_, info)| info)
     }
 
+    /// Every connection's last announcement.
+    pub fn announcements(&self) -> impl Iterator<Item = (ClientId, &BtsInfo)> + '_ {
+        self.by_client.iter().map(|(id, (_, info))| (*id, info))
+    }
+
     /// Whether more than one connection claims `key`.
     pub fn is_duplicate(&self, key: &CarrierKey) -> bool {
         self.claimants(*key).nth(1).is_some()
@@ -155,23 +197,29 @@ struct CellMessage {
     carrier: u16,
     carrier_ext: u16,
     location_area: u16,
+    /// Optional; defaults to the cell's position in the list.
+    #[serde(default)]
+    cell: Option<u8>,
 }
 
 /// Parses and checks a `SERVICE_BTS_INFO` payload:
-/// `{"mcc":N,"mnc":N,"cells":[{"carrier":N,"carrier_ext":N,"location_area":N}],"capabilities":["..."]}`.
+/// `{"mcc":N,"mnc":N,"cells":[{"carrier":N,"carrier_ext":N,"location_area":N,"cell":N}],"capabilities":["..."]}`.
 pub fn parse_bts_info(json: &str) -> Result<BtsInfo, String> {
     let msg: BtsInfoMessage = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if msg.mcc > 0x3ff { return Err(format!("mcc {} out of range (0-1023)", msg.mcc)); }
     if msg.mnc > 0x3fff { return Err(format!("mnc {} out of range (0-16383)", msg.mnc)); }
     if msg.cells.len() > MAX_CELLS { return Err(format!("{} cells, at most {MAX_CELLS}", msg.cells.len())); }
     let mut cells: Vec<Cell> = Vec::with_capacity(msg.cells.len());
-    for c in msg.cells {
+    for (index, c) in msg.cells.into_iter().enumerate() {
         if c.carrier > 0xfff { return Err(format!("carrier {} out of range (0-4095)", c.carrier)); }
         if c.carrier_ext > 0x3ff { return Err(format!("carrier_ext {} out of range (0-1023)", c.carrier_ext)); }
         if c.location_area > 0x3fff { return Err(format!("location_area {} out of range (0-16383)", c.location_area)); }
         let key = CarrierKey { mcc: msg.mcc, mnc: msg.mnc, carrier: c.carrier, carrier_ext: c.carrier_ext };
         if cells.iter().any(|known| known.key == key) { return Err(format!("carrier {} listed twice", c.carrier)); }
-        cells.push(Cell { key, location_area: c.location_area });
+        // At most MAX_CELLS entries, so the position always fits.
+        let cell = c.cell.unwrap_or(index as u8);
+        if cells.iter().any(|known| known.cell == cell) { return Err(format!("cell number {cell} listed twice")); }
+        cells.push(Cell { key, location_area: c.location_area, cell });
     }
     if msg.capabilities.len() > MAX_CAPABILITIES { return Err(format!("{} capabilities, at most {MAX_CAPABILITIES}", msg.capabilities.len())); }
     if let Some(bad) = msg.capabilities.iter().find(|c| c.is_empty() || c.len() > MAX_CAPABILITY_LEN) {
@@ -197,10 +245,11 @@ pub async fn handle_bts_info(state: &Arc<AppState>, source: ClientId, json: &str
         return;
     }
     let addr = client.remote_addr;
-    let carriers: Vec<u16> = info.cells.iter().map(|c| c.key.carrier).collect();
+    let station = station_name(source, client.username.as_deref());
+    let cells: Vec<String> = info.cells.iter().map(|c| format!("{} carrier {} LA {}", cell_name(&station, c.cell), c.key.carrier, c.location_area)).collect();
     let capabilities = info.capabilities.join(",");
     let clashes = inner.carriers.announce(source, info);
-    info!(%source, remote_addr = ?addr, ?carriers, capabilities, "Basestation announced its cells");
+    info!(%source, remote_addr = ?addr, ?cells, capabilities, "Basestation announced its cells");
     for (key, other) in clashes {
         let other_addr = inner.clients.get(&other).and_then(|c| c.remote_addr);
         warn!(%source, remote_addr = ?addr, other = %other, other_addr = ?other_addr, mcc = key.mcc, mnc = key.mnc,
@@ -220,7 +269,7 @@ mod tests {
     }
 
     fn info(carriers: &[u16]) -> BtsInfo {
-        BtsInfo { cells: carriers.iter().map(|c| Cell { key: key(*c), location_area: 1 }).collect(), capabilities: Vec::new() }
+        BtsInfo { cells: carriers.iter().enumerate().map(|(i, c)| Cell { key: key(*c), location_area: 1, cell: i as u8 }).collect(), capabilities: Vec::new() }
     }
 
     #[test]
@@ -322,16 +371,30 @@ mod tests {
 
     #[test]
     fn parses_a_full_announcement() {
-        let json = r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1528,"carrier_ext":268,"location_area":10},{"carrier":1530,"carrier_ext":268,"location_area":11}],"capabilities":["handover-v1"]}"#;
+        let json = r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1528,"carrier_ext":268,"location_area":10},{"carrier":1530,"carrier_ext":268,"location_area":11,"cell":3}],"capabilities":["handover-v1"]}"#;
         let info = parse_bts_info(json).unwrap();
         assert_eq!(info.cells, vec![
-            Cell { key: key(1528), location_area: 10 },
-            Cell { key: key(1530), location_area: 11 },
+            Cell { key: key(1528), location_area: 10, cell: 0 },
+            Cell { key: key(1530), location_area: 11, cell: 3 },
         ]);
         assert_eq!(info.capabilities, vec!["handover-v1".to_string()]);
         // Capabilities may be left out; unknown fields are ignored.
         let info = parse_bts_info(r#"{"mcc":1,"mnc":2,"cells":[],"future":true}"#).unwrap();
         assert!(info.cells.is_empty() && info.capabilities.is_empty());
+    }
+
+    #[test]
+    fn names_and_frequencies() {
+        assert_eq!(cell_name("2320997", 3), "2320997/3");
+        let id = Uuid::parse_str("f2a462e4-0000-0000-0000-000000000000").unwrap();
+        assert_eq!(station_name(id, Some("1000001")), "1000001");
+        assert_eq!(station_name(id, None), "f2a462e4", "without [auth] the connection id stands in");
+        // Band 4, offset 0, duplex 4: 400 MHz + 1528 x 25 kHz.
+        assert_eq!(CarrierKey { mcc: 232, mnc: 5, carrier: 1528, carrier_ext: 264 }.downlink_hz(), 438_200_000);
+        // Offsets: +6.25, -6.25, +12.5 kHz.
+        assert_eq!(CarrierKey { mcc: 0, mnc: 0, carrier: 0, carrier_ext: (4 << 6) | (1 << 4) }.downlink_hz(), 400_006_250);
+        assert_eq!(CarrierKey { mcc: 0, mnc: 0, carrier: 0, carrier_ext: (4 << 6) | (2 << 4) }.downlink_hz(), 399_993_750);
+        assert_eq!(CarrierKey { mcc: 0, mnc: 0, carrier: 0, carrier_ext: (4 << 6) | (3 << 4) }.downlink_hz(), 400_012_500);
     }
 
     #[test]
@@ -348,6 +411,8 @@ mod tests {
             cell(r#"{"carrier":1528,"location_area":1}"#),
             cell(r#"{"carrier":1528,"carrier_ext":0,"location_area":1},{"carrier":1528,"carrier_ext":0,"location_area":2}"#),
             cell(&vec![r#"{"carrier":1,"carrier_ext":0,"location_area":1}"#; MAX_CELLS + 1].join(",")),
+            cell(r#"{"carrier":1528,"carrier_ext":0,"location_area":1,"cell":1},{"carrier":1530,"carrier_ext":0,"location_area":1}"#),
+            cell(r#"{"carrier":1528,"carrier_ext":0,"location_area":1,"cell":256}"#),
             r#"{"mcc":232,"mnc":5,"cells":[],"capabilities":[""]}"#.to_string(),
             format!(r#"{{"mcc":232,"mnc":5,"cells":[],"capabilities":["{}"]}}"#, "x".repeat(MAX_CAPABILITY_LEN + 1)),
         ] {

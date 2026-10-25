@@ -477,7 +477,9 @@ static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/registrations">Registration event log &rarr;</a></p>
 <p class=map-note style="color:#8fa2b8;font-size:12px">Who is connected and registered right now, not a history of events. Refreshes every 5s.</p>
 
-<section class=panel><h2>Brew Connections<span class=backlink id=bc-count></span></h2><table><thead><tr><th>ID</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Registered ISSIs</th><th>Cells</th></tr></thead><tbody id=brew-clients></tbody></table></section>
+<section class=panel><h2>Cells<span class=backlink id=cell-count></span></h2><table><thead><tr><th>Cell</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Capabilities</th><th>Basestation address</th><th>Connected</th><th>Registered ISSIs</th></tr></thead><tbody id=cells></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">Cells the Basestations announce (FlowStation with the <code>bts-info</code> extension). Named <i>login/cell</i>: the Brew login of the Basestation and the cell's number within it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan; the name is only a label here. Registered ISSIs are counted per Basestation.</p></section>
+
+<section class=panel><h2>Brew Connections<span class=backlink id=bc-count></span></h2><table><thead><tr><th>ID</th><th>Station</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Registered ISSIs</th><th>Cells</th></tr></thead><tbody id=brew-clients></tbody></table></section>
 
 <section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
 
@@ -492,7 +494,9 @@ const dt=x=>x?new Date(x).toLocaleString():'-';
 const ago=x=>{{if(!x)return '-';const s=Math.max(0,Math.floor((Date.now()-x)/1000));if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m ago';}};
 // Cells a Basestation announced (SERVICE_BTS_INFO): main carrier and location area; a carrier
 // another connection announces too is flagged, and marked standby where the other one serves it.
-const cellsCell=c=>(c.cells||[]).map(x=>`${{x.carrier}} <span class=muted>LA ${{x.location_area}}</span>`+(x.duplicate?` <span style="color:#e55" title="announced by more than one Basestation">duplicate${{x.serving?'':', standby'}}</span>`:'')).join('<br>')||'<span class=muted>-</span>';
+const dupTag=x=>x.duplicate?` <span style="color:#e55" title="carrier announced by more than one Basestation">duplicate${{x.serving?'':', standby'}}</span>`:'';
+const cellsCell=c=>(c.cells||[]).map(x=>`${{esc(x.name)}} <span class=muted>${{x.carrier}} · LA ${{x.location_area}}</span>`+dupTag(x)).join('<br>')||'<span class=muted>-</span>';
+const mhz=hz=>hz?(hz/1e6).toFixed(5).replace(/0+$/,'').replace(/\.$/,'')+' MHz':'-';
 async function load(){{
   try{{
     const d=await(await fetch('/api/connections')).json();
@@ -500,8 +504,10 @@ async function load(){{
     const dups=(d.duplicate_carriers||[]).length;
     $('bc-count').textContent=' ('+d.brew_clients.length+')'+(dups?' · '+dups+' duplicate carrier'+(dups>1?'s':''):'');
     $('ms-count').textContent=' ('+d.mobile_stations.length+')';
-    $('brew-clients').innerHTML=d.brew_clients.map(c=>`<tr><td class=muted>${{esc(c.id).slice(0,8)}}</td><td>${{esc(c.mode)}}</td><td>${{c.version}}</td><td>${{esc(c.remote_addr||'-')}}</td><td>${{ago(c.connected_at_ms)}}</td><td>${{c.registered_issis}}</td><td>${{cellsCell(c)}}</td></tr>`).join('')||'<tr><td colspan=7 class=muted>No Brew connections</td></tr>';
-    $('mobile-stations').innerHTML=d.mobile_stations.map(m=>`<tr><td>${{m.issi}}</td><td>${{esc(m.mode)}}</td><td class=muted>${{esc(m.basestation_id).slice(0,8)}}</td><td>${{esc(m.basestation_addr||'-')}}</td><td>${{(m.groups||[]).join(', ')||'-'}}</td></tr>`).join('')||'<tr><td colspan=5 class=muted>No registered subscribers</td></tr>';
+    $('brew-clients').innerHTML=d.brew_clients.map(c=>`<tr><td class=muted>${{esc(c.id).slice(0,8)}}</td><td>${{esc(c.station)}}</td><td>${{esc(c.mode)}}</td><td>${{c.version}}</td><td>${{esc(c.remote_addr||'-')}}</td><td>${{ago(c.connected_at_ms)}}</td><td>${{c.registered_issis}}</td><td>${{cellsCell(c)}}</td></tr>`).join('')||'<tr><td colspan=8 class=muted>No Brew connections</td></tr>';
+    $('cell-count').textContent=' ('+(d.cells||[]).length+')';
+    $('cells').innerHTML=(d.cells||[]).map(x=>`<tr><td><b>${{esc(x.name)}}</b>${{dupTag(x)}}</td><td>${{x.carrier}}</td><td>${{mhz(x.downlink_hz)}}</td><td>${{x.location_area}}</td><td>${{x.mcc}} / ${{x.mnc}}</td><td>${{(x.capabilities||[]).map(esc).join(', ')||'<span class=muted>-</span>'}}</td><td>${{esc(x.remote_addr||'-')}}</td><td>${{ago(x.connected_at_ms)}}</td><td>${{x.registered_issis}}</td></tr>`).join('')||'<tr><td colspan=9 class=muted>No cells announced</td></tr>';
+    $('mobile-stations').innerHTML=d.mobile_stations.map(m=>`<tr><td>${{m.issi}}</td><td>${{esc(m.mode)}}</td><td>${{esc(m.basestation_name||String(m.basestation_id).slice(0,8))}}</td><td>${{esc(m.basestation_addr||'-')}}</td><td>${{(m.groups||[]).join(', ')||'-'}}</td></tr>`).join('')||'<tr><td colspan=5 class=muted>No registered subscribers</td></tr>';
     $('sip-disabled-banner').style.display=d.sip.enabled?'none':'block';
     $('sip-count').textContent=' ('+d.sip.registrations.length+')';
     $('sip-regs').innerHTML=d.sip.registrations.map(r=>`<tr><td>${{esc(r.aor)}}</td><td class=muted>${{esc(r.contact)}}</td><td>${{esc(r.source)}}</td><td class=muted>${{esc(r.user_agent||'-')}}</td><td>${{dt(r.registered_at_ms)}}</td><td>${{dt(r.expires_at_ms)}}</td><td>${{yn(r.authenticated)}}</td></tr>`).join('')||'<tr><td colspan=7 class=muted>No SIP registrations</td></tr>';
@@ -786,12 +792,17 @@ pub async fn bts_locations_snapshot(
 /// registrations/trunks. Unlike `/api/registrations` (a historical event
 /// log), this reflects only what is connected/registered at this instant.
 pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let (brew_clients, mobile_stations, duplicate_carriers) = {
+    let (brew_clients, mobile_stations, cells, duplicate_carriers) = {
         let inner = state.inner.read().await;
+        let station = |id: crate::state::ClientId| {
+            crate::carriers::station_name(id, inner.clients.get(&id).and_then(|c| c.username.as_deref()))
+        };
+        let issi_count = |id: crate::state::ClientId| inner.subscribers.values().filter(|s| s.client_id == id).count();
         let brew_clients: Vec<_> = inner.clients.iter().map(|(id, c)| {
-            let issi_count = inner.subscribers.values().filter(|s| s.client_id == *id).count();
+            let issi_count = issi_count(*id);
             let info = inner.carriers.info(*id);
             let cells: Vec<_> = info.map(|i| i.cells.iter().map(|cell| serde_json::json!({
+                "name": crate::carriers::cell_name(&station(*id), cell.cell),
                 "mcc": cell.key.mcc,
                 "mnc": cell.key.mnc,
                 "carrier": cell.key.carrier,
@@ -802,6 +813,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
             })).collect()).unwrap_or_default();
             serde_json::json!({
                 "id": id.to_string(),
+                "station": station(*id),
                 "mode": c.mode.as_str(),
                 "version": c.version.as_u8(),
                 "remote_addr": c.remote_addr.map(|a| a.to_string()),
@@ -818,11 +830,37 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                     "issi": issi,
                     "mode": s.mode.as_str(),
                     "basestation_id": s.client_id.to_string(),
+                    "basestation_name": station(s.client_id),
                     "basestation_addr": basestation.and_then(|c| c.remote_addr).map(|a| a.to_string()),
                     "groups": s.groups.iter().copied().collect::<Vec<_>>(),
                 })
             }).collect();
-        (brew_clients, mobile_stations, inner.carriers.duplicates())
+        // Every announced cell, one row each: the overview of the radio network.
+        let mut cells: Vec<_> = inner.carriers.announcements().flat_map(|(id, info)| {
+            let client = inner.clients.get(&id);
+            let station = station(id);
+            let issis = issi_count(id);
+            info.cells.iter().map(move |cell| (station.clone(), cell, id, client, issis, &info.capabilities))
+        }).map(|(station, cell, id, client, issis, capabilities)| serde_json::json!({
+            "name": crate::carriers::cell_name(&station, cell.cell),
+            "station": station,
+            "cell": cell.cell,
+            "mcc": cell.key.mcc,
+            "mnc": cell.key.mnc,
+            "carrier": cell.key.carrier,
+            "carrier_ext": cell.key.carrier_ext,
+            "downlink_hz": cell.key.downlink_hz(),
+            "location_area": cell.location_area,
+            "capabilities": capabilities,
+            "basestation_id": id.to_string(),
+            "remote_addr": client.and_then(|c| c.remote_addr).map(|a| a.to_string()),
+            "connected_at_ms": client.map(|c| c.connected_at_ms),
+            "registered_issis": issis,
+            "duplicate": inner.carriers.is_duplicate(&cell.key),
+            "serving": inner.carriers.owner(&cell.key) == Some(id),
+        })).collect();
+        cells.sort_by(|a, b| (a["station"].as_str(), a["cell"].as_u64()).cmp(&(b["station"].as_str(), b["cell"].as_u64())));
+        (brew_clients, mobile_stations, cells, inner.carriers.duplicates())
     };
 
     let sip = match state.sip_snapshot().await {
@@ -837,6 +875,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
     Json(serde_json::json!({
         "brew_clients": brew_clients,
         "mobile_stations": mobile_stations,
+        "cells": cells,
         "duplicate_carriers": duplicate_carriers,
         "sip": sip,
     }))
@@ -1649,15 +1688,16 @@ mod tests {
         use crate::carriers::{BtsInfo, CarrierKey, Cell};
         use crate::state::{Client, ClientMode};
         let state = crate::state::AppState::for_test();
-        let cell = |carrier| Cell { key: CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 268 }, location_area: 7 };
+        let cell = |carrier| Cell { key: CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 268 }, location_area: 7, cell: 0 };
         let (bs1, bs2, bs3) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         {
             let mut inner = state.inner.write().await;
             for id in [bs1, bs2, bs3] {
                 let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-                inner.clients.insert(id, Client { tx, mode: ClientMode::Basestation, version: crate::protocol::ConnVersion::V0, version_announced: false, remote_addr: None, connected_at_ms: 0, username: None });
+                let username = (id == bs1).then(|| "2320997".to_string());
+                inner.clients.insert(id, Client { tx, mode: ClientMode::Basestation, version: crate::protocol::ConnVersion::V0, version_announced: false, remote_addr: None, connected_at_ms: 0, username });
             }
-            inner.carriers.announce(bs1, BtsInfo { cells: vec![cell(1528)], capabilities: vec![] });
+            inner.carriers.announce(bs1, BtsInfo { cells: vec![cell(1528), Cell { cell: 3, ..cell(1532) }], capabilities: vec![] });
             inner.carriers.announce(bs2, BtsInfo { cells: vec![cell(1530)], capabilities: vec!["handover-v1".into()] });
             inner.carriers.announce(bs3, BtsInfo { cells: vec![cell(1530)], capabilities: vec![] });
         }
@@ -1670,6 +1710,20 @@ mod tests {
         assert_eq!(client(bs2)["capabilities"][0], "handover-v1");
         assert_eq!((client(bs2)["cells"][0]["duplicate"].clone(), client(bs2)["cells"][0]["serving"].clone()), (true.into(), false.into()));
         assert_eq!((client(bs3)["cells"][0]["duplicate"].clone(), client(bs3)["cells"][0]["serving"].clone()), (true.into(), true.into()));
+        assert_eq!(one["station"], "2320997");
+        assert_eq!(one["cells"][1]["name"], "2320997/3");
+        // The overview: one row per cell, sorted by station and cell number.
+        let rows = out["cells"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        let mine: Vec<_> = rows.iter().filter(|r| r["station"] == "2320997").collect();
+        assert_eq!((mine[0]["name"].as_str(), mine[1]["name"].as_str()), (Some("2320997/0"), Some("2320997/3")));
+        assert_eq!(mine[1]["carrier"], 1532);
+        // carrier_ext 268: band 4, no offset (duplex spacing 6).
+        assert_eq!(mine[0]["downlink_hz"], 438_200_000u64);
+        assert_eq!(mine[0]["location_area"], 7);
+        let unnamed = crate::carriers::station_name(bs2, None);
+        assert!(rows.iter().any(|r| r["name"] == format!("{unnamed}/0") && r["capabilities"][0] == "handover-v1"),
+            "without a login the station is named after its connection");
         assert_eq!(out["duplicate_carriers"].as_array().unwrap().len(), 1);
         assert_eq!(out["duplicate_carriers"][0]["carrier"], 1530);
     }
