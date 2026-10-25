@@ -188,6 +188,9 @@ pub struct Inner {
     /// Which Basestation serves which cell, from `SERVICE_BTS_INFO` (see
     /// `carriers`).
     pub carriers: crate::carriers::CarrierRegistry,
+    /// Handovers between Basestations waiting for the target's answer (see
+    /// `handover`).
+    pub handovers: crate::handover::Handovers,
 }
 
 impl Inner {
@@ -519,6 +522,7 @@ impl AppState {
         for (key, next) in inner.carriers.remove(id) {
             tracing::info!(gone = %id, serving = %next, carrier = key.carrier, carrier_ext = key.carrier_ext, "carrier handed back to the other Basestation announcing it");
         }
+        crate::handover::client_gone(&mut inner, id);
 
         // Registrations: every ISSI routed over this connection, and for a
         // loop-safe link every one it offered, gets a new effective route --

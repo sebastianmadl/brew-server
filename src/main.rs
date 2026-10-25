@@ -8,6 +8,7 @@ mod emergency;
 mod federation;
 mod fedroute;
 mod fsnet;
+mod handover;
 mod ha;
 mod ha_repl;
 mod monitor;

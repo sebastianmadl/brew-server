@@ -51,6 +51,8 @@ pub struct Config {
     pub ha: HaConfig,
     /// Behaviour when a subscriber moves between Basestations. See `RoamingConfig`.
     pub roaming: RoamingConfig,
+    /// Announced cell changes between Basestations. See `HandoverConfig`.
+    pub handover: HandoverConfig,
 }
 
 /// `[roaming]`: what happens when a mobile station registers on one
@@ -75,6 +77,22 @@ pub struct RoamingConfig {
 
 impl Default for RoamingConfig {
     fn default() -> Self { Self { kick_old_issi: false, kick_delay_ms: 2000 } }
+}
+
+/// `[handover]`: relaying an announced cell change (U-PREPARE) from the
+/// serving Basestation to the target one (see `handover`). Only Basestations
+/// that announced the `handover-v1` capability take part.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HandoverConfig {
+    /// How long the target Basestation has to answer before the serving one
+    /// is told "timeout". Must stay below FlowStation's own 3 s fallback for
+    /// D-NEW-CELL, so the serving cell hears the answer before giving up.
+    pub timeout_ms: u64,
+}
+
+impl Default for HandoverConfig {
+    fn default() -> Self { Self { timeout_ms: 2000 } }
 }
 
 /// Accepts `true`/`false` as well as `1`/`0` for a boolean switch.
@@ -782,6 +800,7 @@ impl Default for Config {
             blacklist: BlacklistConfig::default(),
             ha: HaConfig::default(),
             roaming: RoamingConfig::default(),
+            handover: HandoverConfig::default(),
         }
     }
 }
@@ -1011,5 +1030,11 @@ mod roaming_config_tests {
         assert!(!parse("[roaming]\nkick_old_issi = 0\n").unwrap().roaming.kick_old_issi);
         assert!(parse("[roaming]\nkick_old_issi = true\n").unwrap().roaming.kick_old_issi);
         assert!(parse("[roaming]\nkick_old_issi = 2\n").is_err());
+    }
+
+    #[test]
+    fn handover_timeout_defaults_below_the_basestation_fallback() {
+        assert_eq!(parse("").unwrap().handover.timeout_ms, 2000);
+        assert_eq!(parse("[handover]\ntimeout_ms = 1500\n").unwrap().handover.timeout_ms, 1500);
     }
 }

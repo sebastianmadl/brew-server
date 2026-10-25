@@ -179,6 +179,17 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_BTS_INFO => {
             crate::carriers::handle_bts_info(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc)
+            if svc.service_type == protocol::SERVICE_HO_PREPARE || svc.service_type == protocol::SERVICE_HO_FORWARD_REG =>
+        {
+            crate::handover::handle_request(&state, source, svc.service_type, &svc.json_data).await;
+        }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_HO_RESULT => {
+            crate::handover::handle_result(&state, source, &svc.json_data).await;
+        }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_CELL => {
+            crate::carriers::handle_ms_cell(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) => {
             debug!(%source, service_type = svc.service_type, json = %svc.json_data, "service message ignored");
         }

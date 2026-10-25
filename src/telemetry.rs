@@ -971,6 +971,15 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
             if delay > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
+            // Handed over (announced cell change, see `handover`): the new
+            // registration came with the handover, and the old Basestation
+            // lets the radio go by itself. A kick could only hit it there if
+            // the handover fails and the radio stays.
+            let guard = crate::handover::kick_guard(&state.config);
+            if state.inner.read().await.handovers.recently_handed_over(issi, std::time::Instant::now(), guard) {
+                info!(issi, bts = %old, "roaming: radio was handed over, kick skipped");
+                return;
+            }
             // Roamed back in the meantime: the old Basestation now holds the
             // radio's current registration, which must not be kicked.
             if state.telemetry.read().await.last_registration.get(&issi).is_some_and(|bts| *bts == old) {
@@ -1472,14 +1481,27 @@ mod roaming_sim_tests {
         kicks: Arc<Mutex<Vec<(String, u32)>>>,
         done: Arc<AtomicUsize>,
         loc: Vec<usize>,
+        /// Each station's Brew connection (announcing `handover-v1` and
+        /// carrier `SIM_CARRIER_BASE + i`), for the handover cases.
+        brew: Vec<(crate::state::ClientId, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>)>,
     }
+
+    const SIM_CARRIER_BASE: u16 = 1500;
+    /// Scaled-down `[handover] timeout_ms`.
+    const SIM_HO_TIMEOUT_MS: u64 = 200;
 
     impl Sim {
         async fn new(kick_old_issi: bool) -> Self {
+            Self::with_config(kick_old_issi, |_| {}).await
+        }
+
+        async fn with_config(kick_old_issi: bool, tweak: impl FnOnce(&mut crate::config::Config)) -> Self {
             let mut config = crate::config::Config::default();
             config.storage.enabled = false;
             config.roaming.kick_old_issi = kick_old_issi;
             config.roaming.kick_delay_ms = SIM_KICK_DELAY_MS;
+            config.handover.timeout_ms = SIM_HO_TIMEOUT_MS;
+            tweak(&mut config);
             let (state, _rx) = AppState::new(config, std::path::PathBuf::from("test.toml"));
             let state = Arc::new(state);
             let kicks = Arc::new(Mutex::new(Vec::new()));
@@ -1501,7 +1523,67 @@ mod roaming_sim_tests {
                     }
                 });
             }
-            Self { state, kicks, done, loc: vec![usize::MAX; RADIOS] }
+            let mut brew = Vec::new();
+            for i in 0..STATIONS {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                let id = uuid::Uuid::new_v4();
+                state.inner.write().await.clients.insert(id, crate::state::Client {
+                    tx, mode: crate::state::ClientMode::Basestation, version: crate::protocol::ConnVersion::V0,
+                    version_announced: false, remote_addr: None, connected_at_ms: 0, username: Some(bts_id(i)),
+                });
+                let info = format!(r#"{{"mcc":232,"mnc":5,"cells":[{{"carrier":{},"carrier_ext":268,"location_area":{}}}],"capabilities":["handover-v1"]}}"#,
+                    SIM_CARRIER_BASE + i as u16, i + 1);
+                crate::router::handle_packet(state.clone(), id, crate::protocol::build_service(crate::protocol::SERVICE_BTS_INFO, &info)).await;
+                brew.push((id, rx));
+            }
+            Self { state, kicks, done, loc: vec![usize::MAX; RADIOS], brew }
+        }
+
+        /// The handover messages station `s` got over Brew, as (type, JSON).
+        fn brew_services(&mut self, s: usize) -> Vec<(u8, serde_json::Value)> {
+            std::iter::from_fn(|| self.brew[s].1.try_recv().ok())
+                .filter_map(|p| match crate::protocol::parse_with_version(&p, crate::protocol::ConnVersion::V0) {
+                    Ok((crate::protocol::BrewMessage::Service(m), _)) => Some((m.service_type, serde_json::from_str(&m.json_data).unwrap())),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Radio `r` asks its station to hand it over to station `s` (or to a
+        /// carrier nobody serves, with `s == None`). Returns the id the
+        /// target got it under, and the result the serving station got
+        /// straight away (no target).
+        async fn request_handover(&mut self, r: usize, s: Option<usize>) -> (Option<u32>, Option<u64>) {
+            let from = self.loc[r];
+            let carrier = s.map_or(SIM_CARRIER_BASE + 100, |s| SIM_CARRIER_BASE + s as u16);
+            let req = crate::protocol::build_service(crate::protocol::SERVICE_HO_FORWARD_REG, &format!(
+                r#"{{"transaction_id":{r},"issi":{},"target_carrier":{carrier},"target_carrier_ext":268,"sdu":"00","sdu_len_bits":8}}"#, ISSI_BASE + r as u32));
+            crate::router::handle_packet(self.state.clone(), self.brew[from].0, req).await;
+            let forwarded = s.and_then(|s| self.brew_services(s).into_iter()
+                .find(|(t, v)| *t == crate::protocol::SERVICE_HO_FORWARD_REG && v["issi"].as_u64() == Some(u64::from(ISSI_BASE + r as u32))))
+                .map(|(_, v)| v["transaction_id"].as_u64().unwrap() as u32);
+            let answered = self.brew_services(from).into_iter().find(|(t, _)| *t == crate::protocol::SERVICE_HO_RESULT).map(|(_, v)| v["status"].as_u64().unwrap());
+            (forwarded, answered)
+        }
+
+        /// Station `s` answers handover `tid` of radio `r` with `status`.
+        async fn answer_handover(&mut self, s: usize, r: usize, tid: u32, status: u8) -> Option<u64> {
+            let res = crate::protocol::build_service(crate::protocol::SERVICE_HO_RESULT, &format!(
+                r#"{{"transaction_id":{tid},"issi":{},"status":{status}}}"#, ISSI_BASE + r as u32));
+            crate::router::handle_packet(self.state.clone(), self.brew[s].0, res).await;
+            let from = self.loc[r];
+            self.brew_services(from).into_iter().find(|(t, _)| *t == crate::protocol::SERVICE_HO_RESULT).map(|(_, v)| v["status"].as_u64().unwrap())
+        }
+
+        /// A successful handover of radio `r` to station `s`: the target
+        /// registers it (and reports that over telemetry) before it answers.
+        async fn hand_over(&mut self, r: usize, s: usize) {
+            let (tid, answered) = self.request_handover(r, Some(s)).await;
+            assert_eq!(answered, None, "forwarded, not answered by the server");
+            let tid = tid.expect("target got the request");
+            handle_event(&self.state, &bts_id(s), &ev("MsRegistration", ISSI_BASE + r as u32)).await;
+            assert_eq!(self.answer_handover(s, r, tid, 0).await, Some(0), "serving station got the result");
+            self.loc[r] = s;
         }
 
         /// Radio `r` registers on station `s`. With `settle`, waits until every
@@ -1629,5 +1711,100 @@ mod roaming_sim_tests {
         assert_eq!(rep.stale, 0, "no radio listed twice");
         assert_eq!(rep.duplicate_deregister_entries, 0);
         assert_eq!(rep.kicks, moves / 2, "only the B side of each ping-pong is kicked");
+    }
+
+    fn other_station(rng: &mut Lcg, at: usize) -> usize {
+        (at + 1 + rng.next(STATIONS - 1)) % STATIONS
+    }
+
+    /// Mixed traffic: in each round every radio moves once, every other one
+    /// by handover. A handed-over radio is never kicked (its old station
+    /// lets it go itself); every unannounced move still kicks the old one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_handovers_are_not_kicked() {
+        let mut sim = Sim::new(true).await;
+        let mut rng = Lcg(0x4A_0D0);
+        for r in 0..RADIOS { sim.register(r, rng.next(STATIONS), true).await; }
+        let mut expected = Vec::new();
+        let (mut handovers, mut moves) = (0, 0);
+        for round in 0..4 {
+            for r in 0..RADIOS {
+                let to = other_station(&mut rng, sim.loc[r]);
+                if (r + round) % 2 == 0 {
+                    sim.hand_over(r, to).await;
+                    handovers += 1;
+                } else {
+                    expected.push((bts_id(sim.loc[r]), ISSI_BASE + r as u32));
+                    sim.register(r, to, true).await;
+                }
+                moves += 1;
+            }
+            // Past the guard before a radio moves again.
+            tokio::time::sleep(std::time::Duration::from_millis(SIM_KICK_DELAY_MS + SIM_HO_TIMEOUT_MS + 50)).await;
+            sim.quiesce().await;
+        }
+        let rep = sim.report(moves, Some(&expected)).await;
+        println!("kick_old_issi=1, {handovers} handovers among {moves} moves: {rep:?}");
+        assert_eq!(rep.kicks, moves - handovers, "one kick per unannounced move, none per handover");
+        assert_eq!(rep.wrong_kicks, Some(0));
+        assert_eq!(rep.misplaced, 0);
+        assert_eq!(rep.stale, 0, "the old station's dashboard entry still goes");
+        assert_eq!(sim.state.inner.read().await.handovers.pending_count(), 0);
+    }
+
+    /// The target does not answer: the serving station hears "timeout",
+    /// the radio moves without preparation, and the old registration is
+    /// kicked as usual.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_handover_timeout_falls_back_to_the_kick() {
+        let mut sim = Sim::new(true).await;
+        sim.register(0, 0, true).await;
+        let (tid, answered) = sim.request_handover(0, Some(1)).await;
+        assert!(tid.is_some() && answered.is_none());
+        tokio::time::sleep(std::time::Duration::from_millis(SIM_HO_TIMEOUT_MS + 100)).await;
+        let got = sim.brew_services(0);
+        assert_eq!(got.iter().map(|(_, v)| v["status"].as_u64().unwrap()).collect::<Vec<_>>(), vec![3], "timeout");
+        sim.register(0, 1, true).await;
+        sim.quiesce().await;
+        assert_eq!(sim.kicks.lock().unwrap().clone(), vec![(bts_id(0), ISSI_BASE)]);
+    }
+
+    /// The target is offline (no station serves the carrier): "no target"
+    /// at once, and the unannounced move that follows kicks as usual.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_handover_target_offline() {
+        let mut sim = Sim::new(true).await;
+        sim.register(0, 0, true).await;
+        assert_eq!(sim.request_handover(0, None).await, (None, Some(2)));
+        // A station that went away: its carrier is gone with it.
+        let gone = sim.brew[2].0;
+        sim.state.cleanup_client(gone).await;
+        assert_eq!(sim.request_handover(0, Some(2)).await, (None, Some(2)));
+        sim.register(0, 1, true).await;
+        sim.quiesce().await;
+        assert_eq!(sim.kicks.lock().unwrap().clone(), vec![(bts_id(0), ISSI_BASE)]);
+        assert_eq!(sim.state.inner.read().await.handovers.pending_count(), 0);
+    }
+
+    /// Ping-pong at the cell border: handed over A -> B, then straight back
+    /// to A without preparation. The fresh registration on A is never
+    /// kicked, and the radio stays listed where it is.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn roaming_sim_handover_ping_pong() {
+        let mut sim = Sim::new(true).await;
+        for r in 0..RADIOS { sim.register(r, r % STATIONS, true).await; }
+        for r in 0..RADIOS {
+            let a = sim.loc[r];
+            sim.hand_over(r, (a + 1) % STATIONS).await;
+            sim.register(r, a, false).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(3 * SIM_KICK_DELAY_MS + SIM_HO_TIMEOUT_MS)).await;
+        sim.quiesce().await;
+        let rep = sim.report(2 * RADIOS, None).await;
+        println!("kick_old_issi=1, handover + ping-pong back: {rep:?}");
+        let kicked_home = sim.kicks.lock().unwrap().iter().filter(|(bts, issi)| *bts == bts_id(sim.loc[(*issi - ISSI_BASE) as usize])).count();
+        assert_eq!(kicked_home, 0, "no fresh registration kicked");
+        assert_eq!(rep.misplaced, 0);
+        assert_eq!(rep.stale, 0);
     }
 }

@@ -481,7 +481,7 @@ static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 
 <section class=panel><h2>Brew Connections<span class=backlink id=bc-count></span></h2><table><thead><tr><th>ID</th><th>Station</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Registered ISSIs</th><th>Cells</th></tr></thead><tbody id=brew-clients></tbody></table></section>
 
-<section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
+<section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Cell</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
 
 <section class=panel><h2>SIP Registrations<span class=backlink id=sip-count></span></h2><div class=banner id=sip-disabled-banner>SIP subsystem is disabled.</div><table><thead><tr><th>AOR</th><th>Contact</th><th>Source</th><th>User-Agent</th><th>Registered</th><th>Expires</th><th>Auth</th></tr></thead><tbody id=sip-regs></tbody></table></section>
 
@@ -507,7 +507,7 @@ async function load(){{
     $('brew-clients').innerHTML=d.brew_clients.map(c=>`<tr><td class=muted>${{esc(c.id).slice(0,8)}}</td><td>${{esc(c.station)}}</td><td>${{esc(c.mode)}}</td><td>${{c.version}}</td><td>${{esc(c.remote_addr||'-')}}</td><td>${{ago(c.connected_at_ms)}}</td><td>${{c.registered_issis}}</td><td>${{cellsCell(c)}}</td></tr>`).join('')||'<tr><td colspan=8 class=muted>No Brew connections</td></tr>';
     $('cell-count').textContent=' ('+(d.cells||[]).length+')';
     $('cells').innerHTML=(d.cells||[]).map(x=>`<tr><td><b>${{esc(x.name)}}</b>${{dupTag(x)}}</td><td>${{x.carrier}}</td><td>${{mhz(x.downlink_hz)}}</td><td>${{x.location_area}}</td><td>${{x.mcc}} / ${{x.mnc}}</td><td>${{(x.capabilities||[]).map(esc).join(', ')||'<span class=muted>-</span>'}}</td><td>${{esc(x.remote_addr||'-')}}</td><td>${{ago(x.connected_at_ms)}}</td><td>${{x.registered_issis}}</td></tr>`).join('')||'<tr><td colspan=9 class=muted>No cells announced</td></tr>';
-    $('mobile-stations').innerHTML=d.mobile_stations.map(m=>`<tr><td>${{m.issi}}</td><td>${{esc(m.mode)}}</td><td>${{esc(m.basestation_name||String(m.basestation_id).slice(0,8))}}</td><td>${{esc(m.basestation_addr||'-')}}</td><td>${{(m.groups||[]).join(', ')||'-'}}</td></tr>`).join('')||'<tr><td colspan=5 class=muted>No registered subscribers</td></tr>';
+    $('mobile-stations').innerHTML=d.mobile_stations.map(m=>`<tr><td>${{m.issi}}</td><td>${{esc(m.mode)}}</td><td>${{esc(m.basestation_name||String(m.basestation_id).slice(0,8))}}</td><td>${{m.cell?`${{esc(m.cell.name)}} <span class=muted>(${{m.cell.carrier}})</span>`:'<span class=muted>-</span>'}}</td><td>${{esc(m.basestation_addr||'-')}}</td><td>${{(m.groups||[]).join(', ')||'-'}}</td></tr>`).join('')||'<tr><td colspan=6 class=muted>No registered subscribers</td></tr>';
     $('sip-disabled-banner').style.display=d.sip.enabled?'none':'block';
     $('sip-count').textContent=' ('+d.sip.registrations.length+')';
     $('sip-regs').innerHTML=d.sip.registrations.map(r=>`<tr><td>${{esc(r.aor)}}</td><td class=muted>${{esc(r.contact)}}</td><td>${{esc(r.source)}}</td><td class=muted>${{esc(r.user_agent||'-')}}</td><td>${{dt(r.registered_at_ms)}}</td><td>${{dt(r.expires_at_ms)}}</td><td>${{yn(r.authenticated)}}</td></tr>`).join('')||'<tr><td colspan=7 class=muted>No SIP registrations</td></tr>';
@@ -792,7 +792,7 @@ pub async fn bts_locations_snapshot(
 /// registrations/trunks. Unlike `/api/registrations` (a historical event
 /// log), this reflects only what is connected/registered at this instant.
 pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let (brew_clients, mobile_stations, cells, duplicate_carriers) = {
+    let (brew_clients, mobile_stations, cells, duplicate_carriers, handovers_pending) = {
         let inner = state.inner.read().await;
         let station = |id: crate::state::ClientId| {
             crate::carriers::station_name(id, inner.clients.get(&id).and_then(|c| c.username.as_deref()))
@@ -832,6 +832,12 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                     "basestation_id": s.client_id.to_string(),
                     "basestation_name": station(s.client_id),
                     "basestation_addr": basestation.and_then(|c| c.remote_addr).map(|a| a.to_string()),
+                    // The cell the station reported the radio on (`SERVICE_MS_CELL`).
+                    "cell": inner.carriers.ms_cell(*issi, s.client_id).map(|c| serde_json::json!({
+                        "name": crate::carriers::cell_name(&station(s.client_id), c.cell),
+                        "cell": c.cell,
+                        "carrier": c.key.carrier,
+                    })),
                     "groups": s.groups.iter().copied().collect::<Vec<_>>(),
                 })
             }).collect();
@@ -860,7 +866,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
             "serving": inner.carriers.owner(&cell.key) == Some(id),
         })).collect();
         cells.sort_by(|a, b| (a["station"].as_str(), a["cell"].as_u64()).cmp(&(b["station"].as_str(), b["cell"].as_u64())));
-        (brew_clients, mobile_stations, cells, inner.carriers.duplicates())
+        (brew_clients, mobile_stations, cells, inner.carriers.duplicates(), inner.handovers.pending_count())
     };
 
     let sip = match state.sip_snapshot().await {
@@ -877,6 +883,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
         "mobile_stations": mobile_stations,
         "cells": cells,
         "duplicate_carriers": duplicate_carriers,
+        "handovers_pending": handovers_pending,
         "sip": sip,
     }))
 }

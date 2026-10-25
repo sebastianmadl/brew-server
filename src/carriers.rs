@@ -23,8 +23,10 @@ use tracing::{info, warn};
 /// server understands, comma separated.
 pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 
-/// What this server offers in `X_BREW_EXTENSIONS`.
-pub const EXTENSIONS: &str = "bts-info";
+/// What this server offers in `X_BREW_EXTENSIONS`: `bts-info`
+/// (`SERVICE_BTS_INFO`), `handover-v1` (the handover messages, see `handover`)
+/// and `ms-cell` (`SERVICE_MS_CELL`).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell";
 
 /// Most cells one `SERVICE_BTS_INFO` may announce (a FlowStation station runs
 /// at most a handful of SDRs on one Brew connection).
@@ -102,6 +104,9 @@ pub struct CarrierRegistry {
     /// The connection serving each carrier.
     table: HashMap<CarrierKey, ClientId>,
     seq: u64,
+    /// ISSI -> the connection and cell it last reported the radio on
+    /// (`SERVICE_MS_CELL`).
+    ms_cells: HashMap<u32, (ClientId, CarrierKey)>,
 }
 
 impl CarrierRegistry {
@@ -129,6 +134,7 @@ impl CarrierRegistry {
     /// Forgets a connection. Returns the carriers it served that another
     /// claimant serves now.
     pub fn remove(&mut self, client: ClientId) -> Vec<(CarrierKey, ClientId)> {
+        self.ms_cells.retain(|_, (id, _)| *id != client);
         let Some((_, info)) = self.by_client.remove(&client) else { return Vec::new() };
         let mut handed_over = Vec::new();
         for cell in &info.cells {
@@ -139,6 +145,24 @@ impl CarrierRegistry {
             }
         }
         handed_over
+    }
+
+    /// `client` reports `issi` on its cell `(carrier, carrier_ext)`. Returns
+    /// that cell, or `None` (nothing recorded) when `client` announced no
+    /// such cell.
+    pub fn set_ms_cell(&mut self, issi: u32, client: ClientId, carrier: u16, carrier_ext: u16) -> Option<Cell> {
+        let (_, info) = self.by_client.get(&client)?;
+        let cell = info.cells.iter().find(|c| c.key.carrier == carrier && c.key.carrier_ext == carrier_ext)?.clone();
+        self.ms_cells.insert(issi, (client, cell.key));
+        Some(cell)
+    }
+
+    /// The cell `client` last reported `issi` on, as long as it still
+    /// announces it. A report from another connection does not count: the
+    /// radio is wherever its registration is.
+    pub fn ms_cell(&self, issi: u32, client: ClientId) -> Option<&Cell> {
+        let (id, key) = self.ms_cells.get(&issi).filter(|(id, _)| *id == client)?;
+        self.info(*id)?.cells.iter().find(|c| c.key == *key)
     }
 
     /// The connection serving `key`, if any.
@@ -226,6 +250,32 @@ pub fn parse_bts_info(json: &str) -> Result<BtsInfo, String> {
         return Err(format!("capability {bad:?} must be 1-{MAX_CAPABILITY_LEN} characters"));
     }
     Ok(BtsInfo { cells, capabilities: msg.capabilities })
+}
+
+#[derive(serde::Deserialize)]
+struct MsCellMessage {
+    issi: u32,
+    carrier: u16,
+    carrier_ext: u16,
+}
+
+/// A `SERVICE_MS_CELL` from `source`: `{"issi":N,"carrier":N,"carrier_ext":N}`,
+/// the cell of the station the radio registered on. Only counts for a cell
+/// the connection announced; shown per subscriber on the dashboard.
+pub async fn handle_ms_cell(state: &Arc<AppState>, source: ClientId, json: &str) {
+    let msg: MsCellMessage = match serde_json::from_str(json) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(%source, error = %e, json, "malformed MS cell service message");
+            return;
+        }
+    };
+    let mut inner = state.inner.write().await;
+    if inner.clients.get(&source).is_none_or(|c| c.mode != ClientMode::Basestation) { return; }
+    match inner.carriers.set_ms_cell(msg.issi, source, msg.carrier, msg.carrier_ext) {
+        Some(cell) => tracing::debug!(%source, issi = msg.issi, cell = cell.cell, carrier = msg.carrier, "subscriber is on cell"),
+        None => warn!(%source, issi = msg.issi, carrier = msg.carrier, carrier_ext = msg.carrier_ext, "MS cell report for a cell the Basestation did not announce ignored"),
+    }
 }
 
 /// A `SERVICE_BTS_INFO` from `source`. Only Basestation connections serve
@@ -370,6 +420,28 @@ mod tests {
     }
 
     #[test]
+    fn radio_cell_follows_reports_and_announcements() {
+        let mut reg = CarrierRegistry::default();
+        let (site, other) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(site, info(&[1528, 1530]));
+        reg.announce(other, info(&[1532]));
+        assert_eq!(reg.set_ms_cell(7, site, 1530, 0x10c).map(|c| c.cell), Some(1));
+        assert_eq!(reg.ms_cell(7, site).map(|c| c.key.carrier), Some(1530));
+        assert!(reg.ms_cell(7, other).is_none(), "only the connection the radio is on counts");
+        assert!(reg.set_ms_cell(7, site, 1532, 0x10c).is_none(), "not a cell of this station");
+        assert!(reg.set_ms_cell(7, site, 1530, 0).is_none(), "another band plan");
+        assert_eq!(reg.ms_cell(7, site).map(|c| c.key.carrier), Some(1530), "a bad report keeps the last one");
+        reg.set_ms_cell(7, site, 1528, 0x10c);
+        assert_eq!(reg.ms_cell(7, site).map(|c| c.cell), Some(0), "moved within the station");
+        reg.announce(site, info(&[1530]));
+        assert!(reg.ms_cell(7, site).is_none(), "cell no longer announced");
+        reg.set_ms_cell(8, site, 1530, 0x10c);
+        reg.remove(site);
+        assert!(reg.ms_cell(8, site).is_none());
+        assert!(reg.ms_cells.is_empty(), "forgotten with the connection");
+    }
+
+    #[test]
     fn parses_a_full_announcement() {
         let json = r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1528,"carrier_ext":268,"location_area":10},{"carrier":1530,"carrier_ext":268,"location_area":11,"cell":3}],"capabilities":["handover-v1"]}"#;
         let info = parse_bts_info(json).unwrap();
@@ -451,6 +523,29 @@ mod tests {
             crate::router::handle_packet(state.clone(), id, bts_info_packet(1528)).await;
         }
         assert_eq!(state.inner.read().await.carriers.owner(&key(1528)), None);
+    }
+
+    #[tokio::test]
+    async fn ms_cell_report_reaches_the_registry() {
+        let state = AppState::for_test();
+        let bs = connect(&state, ClientMode::Basestation).await;
+        crate::router::handle_packet(state.clone(), bs, bts_info_packet(1528)).await;
+        let report = |carrier: u16| protocol::build_service(protocol::SERVICE_MS_CELL, &format!(r#"{{"issi":7,"carrier":{carrier},"carrier_ext":268}}"#));
+        crate::router::handle_packet(state.clone(), bs, report(1528)).await;
+        assert_eq!(state.inner.read().await.carriers.ms_cell(7, bs).map(|c| c.key.carrier), Some(1528));
+        // A Terminal cannot place radios, and garbage changes nothing.
+        let term = connect(&state, ClientMode::Terminal).await;
+        crate::router::handle_packet(state.clone(), term, report(1528)).await;
+        crate::router::handle_packet(state.clone(), bs, protocol::build_service(protocol::SERVICE_MS_CELL, r#"{"issi":7}"#)).await;
+        let inner = state.inner.read().await;
+        assert!(inner.carriers.ms_cell(7, term).is_none());
+        assert_eq!(inner.carriers.ms_cell(7, bs).map(|c| c.key.carrier), Some(1528));
+    }
+
+    #[test]
+    fn extensions_keep_bts_info_and_add_the_new_ones() {
+        let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell"]);
     }
 
     #[tokio::test]

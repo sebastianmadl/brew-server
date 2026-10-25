@@ -43,6 +43,27 @@ is not connected on the control channel.
 
 With `kick_old_issi = 0` the behaviour is exactly as before.
 
+## Announced handover
+
+A radio that changes cells by announced handover (U-PREPARE relayed between
+two Basestations that both speak `handover-v1`, see `src/handover.rs`) is not
+kicked: its registration on the new Basestation came with the handover, and
+the old Basestation lets it go by itself. The kick is skipped while the
+handover is in flight and for `kick_delay_ms + [handover] timeout_ms` after it
+succeeded (log line `roaming: radio was handed over, kick skipped`). A
+handover that fails, times out or finds no target does not count, so the
+unannounced move that follows is kicked as usual.
+
+The guard is per ISSI, not per Basestation: if the radio moves on again
+without preparation within that window (ping-pong back to the old cell right
+after the handover), the kick of the cell it just left is skipped too, and
+that Basestation keeps its stale entry until its own timeout.
+
+```toml
+[handover]
+timeout_ms = 2000      # how long the target Basestation has to answer
+```
+
 ## Known limit
 
 The roam-back check runs just before the kick is sent. If a radio returns to
@@ -68,3 +89,10 @@ radios. Each fake Basestation answers a kick the way FlowStation does
 - *Misplaced radios*: radios missing from the Basestation they are on.
 - In the ping-pong run, exactly the kicks for B are sent (the radio is back on
   A, so the kick for A is skipped).
+
+The same simulation covers handovers (`roaming_sim_handover*`): mixed rounds
+where every other move is a handover (one kick per unannounced move, none per
+handover), a target that does not answer (timeout, then the usual kick), a
+target that is offline (no target at once, then the usual kick), and a
+handover followed straight by an unannounced move back (the fresh
+registration is never kicked).

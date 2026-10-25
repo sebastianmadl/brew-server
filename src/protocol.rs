@@ -95,6 +95,26 @@ pub const SERVICE_BLACKLIST: u8 = 0x13;
 /// extension on the WebSocket upgrade.
 pub const SERVICE_BTS_INFO: u8 = 0x14;
 
+/// `CLASS_SERVICE` type a serving Basestation sends when a radio announced a
+/// cell change (U-PREPARE) without a registration: the server relays it to
+/// the Basestation serving the target carrier (see `handover`).
+pub const SERVICE_HO_PREPARE: u8 = 0x15;
+
+/// As `SERVICE_HO_PREPARE`, but the U-PREPARE carried a registration (MM
+/// SDU) for the target cell, which the target Basestation processes.
+pub const SERVICE_HO_FORWARD_REG: u8 = 0x16;
+
+/// `CLASS_SERVICE` type answering `SERVICE_HO_PREPARE` / `SERVICE_HO_FORWARD_REG`:
+/// from the target Basestation via the server to the serving one, or from the
+/// server itself when there is no target or it did not answer in time.
+pub const SERVICE_HO_RESULT: u8 = 0x17;
+
+/// `CLASS_SERVICE` type a Basestation sends after registering an ISSI: the
+/// cell (carrier) the radio is on, for stations that serve several cells on
+/// one connection (see `carriers`). Only sent to a server that offered the
+/// `ms-cell` extension.
+pub const SERVICE_MS_CELL: u8 = 0x18;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());
