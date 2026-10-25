@@ -14,6 +14,7 @@ mod ha_repl;
 mod monitor;
 mod position;
 mod protocol;
+mod roaming_log;
 mod router;
 mod server;
 mod sip;

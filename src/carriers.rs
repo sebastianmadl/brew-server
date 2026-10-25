@@ -272,8 +272,14 @@ pub async fn handle_ms_cell(state: &Arc<AppState>, source: ClientId, json: &str)
     };
     let mut inner = state.inner.write().await;
     if inner.clients.get(&source).is_none_or(|c| c.mode != ClientMode::Basestation) { return; }
+    let station = station_name(source, inner.clients.get(&source).and_then(|c| c.username.as_deref()));
+    let previous = inner.carriers.ms_cell(msg.issi, source).map(|c| crate::roaming_log::Place::cell(station.clone(), c.cell, c.key.carrier));
     match inner.carriers.set_ms_cell(msg.issi, source, msg.carrier, msg.carrier_ext) {
-        Some(cell) => tracing::debug!(%source, issi = msg.issi, cell = cell.cell, carrier = msg.carrier, "subscriber is on cell"),
+        Some(cell) => {
+            tracing::debug!(%source, issi = msg.issi, cell = cell.cell, carrier = msg.carrier, "subscriber is on cell");
+            let to = crate::roaming_log::Place::cell(station, cell.cell, cell.key.carrier);
+            inner.roaming_log.cell_reported(crate::telemetry::now_ms(), msg.issi, to, previous);
+        }
         None => warn!(%source, issi = msg.issi, carrier = msg.carrier, carrier_ext = msg.carrier_ext, "MS cell report for a cell the Basestation did not announce ignored"),
     }
 }

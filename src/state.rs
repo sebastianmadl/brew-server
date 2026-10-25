@@ -191,6 +191,8 @@ pub struct Inner {
     /// Handovers between Basestations waiting for the target's answer (see
     /// `handover`).
     pub handovers: crate::handover::Handovers,
+    /// The last cell changes of the radios (see `roaming_log`).
+    pub roaming_log: crate::roaming_log::RoamingLog,
 }
 
 impl Inner {

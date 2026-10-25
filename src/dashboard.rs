@@ -73,6 +73,7 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/api/telemetry", get(telemetry_snapshot))
         .route("/api/emergencies", get(emergencies_snapshot))
         .route("/api/rssi", get(brew_rssi_snapshot))
+        .route("/api/ms-cells", get(ms_cells_snapshot))
         .route("/api/registrations", get(registration_log))
         .route("/api/connections", get(connections_snapshot))
         .route("/api/positions", get(positions_snapshot))
@@ -483,6 +484,8 @@ static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 
 <section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Cell</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
 
+<section class=panel><h2>Roaming Log<span class=backlink id=roam-count></span></h2><table><thead><tr><th>Time</th><th>ISSI</th><th>From</th><th>To</th><th>How</th></tr></thead><tbody id=roaming-log></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">The last cell changes of the radios: <i>handover</i> = announced and prepared through this server, <i>reselection</i> = the radio registered on another Basestation on its own, <i>within station</i> = another cell of a multi-cell station. Cells show once the Basestation reports them (FlowStation with the <code>ms-cell</code> extension); otherwise only the station. Kept in memory, newest first.</p></section>
+
 <section class=panel><h2>SIP Registrations<span class=backlink id=sip-count></span></h2><div class=banner id=sip-disabled-banner>SIP subsystem is disabled.</div><table><thead><tr><th>AOR</th><th>Contact</th><th>Source</th><th>User-Agent</th><th>Registered</th><th>Expires</th><th>Auth</th></tr></thead><tbody id=sip-regs></tbody></table></section>
 
 <section class=panel><h2>SIP Trunks</h2><table><thead><tr><th>Name</th><th>Direction</th><th>Status</th><th>Remote host</th><th>Active calls</th></tr></thead><tbody id=sip-trunks></tbody></table></section>
@@ -507,6 +510,10 @@ async function load(){{
     $('brew-clients').innerHTML=d.brew_clients.map(c=>`<tr><td class=muted>${{esc(c.id).slice(0,8)}}</td><td>${{esc(c.station)}}</td><td>${{esc(c.mode)}}</td><td>${{c.version}}</td><td>${{esc(c.remote_addr||'-')}}</td><td>${{ago(c.connected_at_ms)}}</td><td>${{c.registered_issis}}</td><td>${{cellsCell(c)}}</td></tr>`).join('')||'<tr><td colspan=8 class=muted>No Brew connections</td></tr>';
     $('cell-count').textContent=' ('+(d.cells||[]).length+')';
     $('cells').innerHTML=(d.cells||[]).map(x=>`<tr><td><b>${{esc(x.name)}}</b>${{dupTag(x)}}</td><td>${{x.carrier}}</td><td>${{mhz(x.downlink_hz)}}</td><td>${{x.location_area}}</td><td>${{x.mcc}} / ${{x.mnc}}</td><td>${{(x.capabilities||[]).map(esc).join(', ')||'<span class=muted>-</span>'}}</td><td>${{esc(x.remote_addr||'-')}}</td><td>${{ago(x.connected_at_ms)}}</td><td>${{x.registered_issis}}</td></tr>`).join('')||'<tr><td colspan=9 class=muted>No cells announced</td></tr>';
+    const place=p=>p.cell?`${{esc(p.cell)}} <span class=muted>(${{p.carrier}})</span>`:esc(p.station);
+    const how={{handover:'<span class="badge badge-reg-in">handover</span>',reselection:'<span class="badge badge-reg-out">reselection</span>',within_station:'<span class=badge>within station</span>'}};
+    $('roam-count').textContent=' ('+(d.roaming_log||[]).length+')';
+    $('roaming-log').innerHTML=(d.roaming_log||[]).map(r=>`<tr><td>${{new Date(r.at_ms).toLocaleTimeString()}}</td><td>${{r.issi}}</td><td>${{place(r.from)}}</td><td>${{place(r.to)}}</td><td>${{how[r.kind]||esc(r.kind)}}</td></tr>`).join('')||'<tr><td colspan=5 class=muted>No cell changes yet</td></tr>';
     $('mobile-stations').innerHTML=d.mobile_stations.map(m=>`<tr><td>${{m.issi}}</td><td>${{esc(m.mode)}}</td><td>${{esc(m.basestation_name||String(m.basestation_id).slice(0,8))}}</td><td>${{m.cell?`${{esc(m.cell.name)}} <span class=muted>(${{m.cell.carrier}})</span>`:'<span class=muted>-</span>'}}</td><td>${{esc(m.basestation_addr||'-')}}</td><td>${{(m.groups||[]).join(', ')||'-'}}</td></tr>`).join('')||'<tr><td colspan=6 class=muted>No registered subscribers</td></tr>';
     $('sip-disabled-banner').style.display=d.sip.enabled?'none':'block';
     $('sip-count').textContent=' ('+d.sip.registrations.length+')';
@@ -676,6 +683,30 @@ pub async fn brew_rssi_snapshot(State(state): State<Arc<AppState>>) -> Json<Vec<
     Json(t.brew_ms_rssi.iter().map(|(issi, dbfs)| (*issi, *dbfs)).collect())
 }
 
+/// The cell a registered subscriber is on, as its station reported it
+/// (`SERVICE_MS_CELL`): `{"name":"<login>/<cell>","cell":N,"carrier":N}`.
+fn ms_cell_json(inner: &crate::state::Inner, issi: u32, client: crate::state::ClientId) -> Option<serde_json::Value> {
+    let cell = inner.carriers.ms_cell(issi, client)?;
+    let station = crate::carriers::station_name(client, inner.clients.get(&client).and_then(|c| c.username.as_deref()));
+    Some(serde_json::json!({
+        "name": crate::carriers::cell_name(&station, cell.cell),
+        "cell": cell.cell,
+        "carrier": cell.key.carrier,
+    }))
+}
+
+/// `/api/ms-cells`: every registered subscriber whose cell is known, as
+/// `[issi, cell]` pairs (see `ms_cell_json`), for the main dashboard's
+/// subscriber list.
+pub async fn ms_cells_snapshot(State(state): State<Arc<AppState>>) -> Json<Vec<(u32, serde_json::Value)>> {
+    let inner = state.inner.read().await;
+    let mut cells: Vec<_> = inner.subscribers.iter()
+        .filter_map(|(issi, s)| ms_cell_json(&inner, *issi, s.client_id).map(|c| (*issi, c)))
+        .collect();
+    cells.sort_unstable_by_key(|(issi, _)| *issi);
+    Json(cells)
+}
+
 pub async fn registration_log(State(state): State<Arc<AppState>>) -> Json<Vec<crate::telemetry::RegLogRow>> {
     Json(state.telemetry.read().await.registration_log())
 }
@@ -792,7 +823,7 @@ pub async fn bts_locations_snapshot(
 /// registrations/trunks. Unlike `/api/registrations` (a historical event
 /// log), this reflects only what is connected/registered at this instant.
 pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let (brew_clients, mobile_stations, cells, duplicate_carriers, handovers_pending) = {
+    let (brew_clients, mobile_stations, cells, duplicate_carriers, handovers_pending, roaming_log) = {
         let inner = state.inner.read().await;
         let station = |id: crate::state::ClientId| {
             crate::carriers::station_name(id, inner.clients.get(&id).and_then(|c| c.username.as_deref()))
@@ -833,11 +864,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                     "basestation_name": station(s.client_id),
                     "basestation_addr": basestation.and_then(|c| c.remote_addr).map(|a| a.to_string()),
                     // The cell the station reported the radio on (`SERVICE_MS_CELL`).
-                    "cell": inner.carriers.ms_cell(*issi, s.client_id).map(|c| serde_json::json!({
-                        "name": crate::carriers::cell_name(&station(s.client_id), c.cell),
-                        "cell": c.cell,
-                        "carrier": c.key.carrier,
-                    })),
+                    "cell": ms_cell_json(&inner, *issi, s.client_id),
                     "groups": s.groups.iter().copied().collect::<Vec<_>>(),
                 })
             }).collect();
@@ -866,7 +893,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
             "serving": inner.carriers.owner(&cell.key) == Some(id),
         })).collect();
         cells.sort_by(|a, b| (a["station"].as_str(), a["cell"].as_u64()).cmp(&(b["station"].as_str(), b["cell"].as_u64())));
-        (brew_clients, mobile_stations, cells, inner.carriers.duplicates(), inner.handovers.pending_count())
+        (brew_clients, mobile_stations, cells, inner.carriers.duplicates(), inner.handovers.pending_count(), inner.roaming_log.newest_first())
     };
 
     let sip = match state.sip_snapshot().await {
@@ -884,6 +911,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
         "cells": cells,
         "duplicate_carriers": duplicate_carriers,
         "handovers_pending": handovers_pending,
+        "roaming_log": roaming_log,
         "sip": sip,
     }))
 }
@@ -1193,7 +1221,7 @@ const HTML: &str = r#"<!doctype html><html><head><meta charset=utf-8><meta name=
 <section class=panel><h2>Registered Subscribers <a class=backlink href="/registrations">(view registration log &rarr;)</a></h2><div class=bts-grid id=registrations></div></section>
 <section class="panel admin-only"><h2>Basestation Control</h2><div class=bts-grid id=control-stations></div></section>
 </main><script>
-let snap=null;let tsnap=null;let brssi={};const $=id=>document.getElementById(id);const dt=x=>new Date(x).toLocaleTimeString();const dur=(a,b)=>Math.max(0,Math.floor(((b||Date.now())-a)/1000))+'s';const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let snap=null;let tsnap=null;let brssi={};let bcell={};const $=id=>document.getElementById(id);const dt=x=>new Date(x).toLocaleTimeString();const dur=(a,b)=>Math.max(0,Math.floor(((b||Date.now())-a)/1000))+'s';const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function render(s){snap=s;$('bs').textContent=s.connected_basestations;$('subs').textContent=s.subscribers;$('groups').textContent=s.groups;$('active').textContent=s.active_calls.length;$('calls').textContent=s.total_calls;$('sds').textContent=s.total_sds;
 // Build an ISSI -> RSSI (dBFS) lookup from the latest telemetry snapshot so each
 // live call can show its mobile station's received signal strength. RSSI is not
@@ -1283,7 +1311,10 @@ function renderTelemetry(stations){
   $('registrations').innerHTML=stations.length?stations.map(s=>{
     const issis=s.registrations_list||[];
     const cellOf={};(s.ms_cell_out||[]).forEach(([i,c])=>{cellOf[i]=c;});
-    const chips=issis.length?`<div class=reg-list>${issis.map(i=>`<span class=reg-issi>${esc(String(i))}${cellOf[i]!=null?` <span class=muted>cell ${cellOf[i]}</span>`:''}</span>`).join('')}</div>`:'<div class="bts-meta muted" style="margin-top:8px">No subscribers registered</div>';
+    // The cell from the Brew connection (name and carrier) when the station
+    // reports it, else the cell number from telemetry (multi-cell stations).
+    const cellTag=i=>bcell[i]?` <span class=muted>${esc(bcell[i].name)} &middot; ${bcell[i].carrier}</span>`:cellOf[i]!=null?` <span class=muted>cell ${cellOf[i]}</span>`:'';
+    const chips=issis.length?`<div class=reg-list>${issis.map(i=>`<span class=reg-issi>${esc(String(i))}${cellTag(i)}</span>`).join('')}</div>`:'<div class="bts-meta muted" style="margin-top:8px">No subscribers registered</div>';
     return `<div class=bts-card><div style="display:flex;justify-content:space-between;align-items:center"><h3>${esc(s.id)}</h3><span class=reg-count>${issis.length} registered</span></div>${chips}</div>`;
   }).join(''):'<div class=muted>No Basestation telemetry connections</div>';
 }
@@ -1296,6 +1327,7 @@ async function refreshEmergencies(){
   }catch(e){}
 }
 async function refreshTelemetry(){try{renderTelemetry(await(await fetch('/api/telemetry')).json())}catch(e){}}
+async function refreshMsCells(){try{const pairs=await(await fetch('/api/ms-cells')).json();bcell={};pairs.forEach(([issi,c])=>{bcell[issi]=c;});if(tsnap)renderTelemetry(tsnap);}catch(e){}}
 async function refreshBrewRssi(){try{const pairs=await(await fetch('/api/rssi')).json();brssi={};pairs.forEach(([issi,dbfs])=>{brssi[issi]=dbfs;});if(snap)render(snap);}catch(e){}}
 function ctlSafeId(id){return 'ctl_'+id.replace(/[^a-zA-Z0-9_-]/g,'_');}
 function jsq(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
@@ -1354,7 +1386,7 @@ function ctlSendSds(id,s){const payload=hexToBytes($(s+'_raw_hex').value);ctlSen
 function ctlAmbience(id,s,enable){const issi=Number($(s+'_al_issi').value||0);if(!issi){$(s+'_result').textContent='Enter an ISSI';return;}ctlSend(id,{action:'AmbienceListen',issi,enable},s+'_result');}
 function ctlRestart(id){if(confirm('Restart Basestation service on '+id+'? This disconnects it.'))ctlSend(id,{action:'RestartService'},null);}
 function ctlShutdown(id){if(confirm('Shutdown Basestation service on '+id+'? This stops the BTS process.'))ctlSend(id,{action:'ShutdownService'},null);}
-refresh();refreshTelemetry();refreshEmergencies();refreshControl();refreshBrewRssi();setInterval(refreshEmergencies,2000);setInterval(refresh,2000);setInterval(refreshTelemetry,2000);setInterval(refreshControl,3000);setInterval(refreshBrewRssi,5000);
+refresh();refreshTelemetry();refreshEmergencies();refreshControl();refreshBrewRssi();refreshMsCells();setInterval(refreshEmergencies,2000);setInterval(refresh,2000);setInterval(refreshTelemetry,2000);setInterval(refreshControl,3000);setInterval(refreshBrewRssi,5000);setInterval(refreshMsCells,3000);
 // Keep a live WebSocket for push updates, but never reload the page on drop:
 // a reload would wipe anything the operator is typing in the control panel.
 // Instead we reconnect in the background and fall back to the polling above.
@@ -1604,6 +1636,41 @@ setInterval(load,2000);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ms_cells_lists_registered_subscribers_on_their_cell() {
+        use crate::protocol::{self, ConnVersion, SUB_REGISTER};
+        let state = AppState::for_test();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (bs, other) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        for (id, user) in [(bs, "2320997"), (other, "2320998")] {
+            state.inner.write().await.clients.insert(id, crate::state::Client {
+                tx: tx.clone(), mode: crate::state::ClientMode::Basestation, version: ConnVersion::V0,
+                version_announced: false, remote_addr: None, connected_at_ms: 0, username: Some(user.into()),
+            });
+        }
+        let packet = |p: Vec<u8>, from| crate::router::handle_packet(state.clone(), from, p);
+        packet(protocol::build_service(protocol::SERVICE_BTS_INFO,
+            r#"{"mcc":232,"mnc":5,"cells":[{"cell":0,"carrier":1528,"carrier_ext":268,"location_area":1},{"cell":3,"carrier":1530,"carrier_ext":268,"location_area":2}]}"#), bs).await;
+        for issi in [7, 8, 9] {
+            packet(protocol::build_subscriber_message(SUB_REGISTER, issi, &[]), bs).await;
+        }
+        packet(protocol::build_service(protocol::SERVICE_MS_CELL, r#"{"issi":7,"carrier":1530,"carrier_ext":268}"#), bs).await;
+        packet(protocol::build_service(protocol::SERVICE_MS_CELL, r#"{"issi":9,"carrier":1528,"carrier_ext":268}"#), bs).await;
+        // 9 moves to another station that reports no cell: its old cell no longer counts.
+        packet(protocol::build_subscriber_message(SUB_REGISTER, 9, &[]), other).await;
+        let Json(cells) = ms_cells_snapshot(State(state.clone())).await;
+        assert_eq!(cells, vec![(7, serde_json::json!({ "name": "2320997/3", "cell": 3, "carrier": 1530 }))]);
+        let h = INDEX_HTML.as_str();
+        assert!(h.contains("/api/ms-cells") && h.contains("bcell[i]"), "main page shows the cell per subscriber");
+        // 9's move is in the roaming log on the Connections page.
+        let Json(conn) = connections_snapshot(State(state.clone())).await;
+        assert_eq!(conn["roaming_log"][0]["issi"], 9);
+        assert_eq!(conn["roaming_log"][0]["kind"], "reselection");
+        assert_eq!(conn["roaming_log"][0]["from"]["cell"], "2320997/0");
+        assert_eq!(conn["roaming_log"][0]["to"]["station"], "2320998");
+        assert!(CONNECTIONS_HTML.contains("id=roaming-log"));
+    }
 
     #[test]
     fn index_has_style_and_navlinks_no_removed_tables() {

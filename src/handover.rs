@@ -238,8 +238,8 @@ pub struct Pending {
 pub struct Handovers {
     pending: HashMap<u32, Pending>,
     last_id: u32,
-    /// ISSI -> when its last handover succeeded.
-    completed: HashMap<u32, Instant>,
+    /// ISSI -> when its last handover succeeded, and to which Basestation.
+    completed: HashMap<u32, (Instant, ClientId)>,
 }
 
 impl Handovers {
@@ -283,10 +283,11 @@ impl Handovers {
         ids.into_iter().filter_map(|tid| self.pending.remove(&tid)).collect()
     }
 
-    /// Records a successful handover of `issi`, forgetting those older than `keep`.
-    pub fn note_completed(&mut self, issi: u32, now: Instant, keep: Duration) {
-        self.completed.retain(|_, at| now.duration_since(*at) < keep);
-        self.completed.insert(issi, now);
+    /// Records a successful handover of `issi` to `target`, forgetting those
+    /// older than `keep`.
+    pub fn note_completed(&mut self, issi: u32, target: ClientId, now: Instant, keep: Duration) {
+        self.completed.retain(|_, (at, _)| now.duration_since(*at) < keep);
+        self.completed.insert(issi, (now, target));
     }
 
     /// Whether `issi` is being handed over right now, or was handed over
@@ -294,7 +295,14 @@ impl Handovers {
     /// from the handover, and the old cell lets the radio go by itself.
     pub fn recently_handed_over(&self, issi: u32, now: Instant, window: Duration) -> bool {
         self.pending.values().any(|p| p.issi == issi)
-            || self.completed.get(&issi).is_some_and(|at| now.duration_since(*at) < window)
+            || self.completed.get(&issi).is_some_and(|(at, _)| now.duration_since(*at) < window)
+    }
+
+    /// As `recently_handed_over`, but only a handover to `target`: whether
+    /// `target` registering `issi` is that handover.
+    pub fn handed_over_to(&self, issi: u32, target: ClientId, now: Instant, window: Duration) -> bool {
+        self.pending.values().any(|p| p.issi == issi && p.target == target)
+            || self.completed.get(&issi).is_some_and(|(at, t)| *t == target && now.duration_since(*at) < window)
     }
 
     pub fn pending_count(&self) -> usize {
@@ -401,7 +409,7 @@ pub async fn handle_result(state: &Arc<AppState>, source: ClientId, json: &str) 
     }
     if result.status == Status::Ok {
         let keep = kick_guard(&state.config);
-        inner.handovers.note_completed(p.issi, Instant::now(), keep);
+        inner.handovers.note_completed(p.issi, source, Instant::now(), keep);
     }
     send(&inner, p.source, build_result(p.source_transaction, p.issi, result.status, result.sdu.as_ref()));
     info!(source = %p.source, target = %source, issi = p.issi, status = result.status.as_str(),
@@ -563,10 +571,14 @@ mod tests {
         let id = h.begin(Pending { source: Uuid::new_v4(), source_transaction: 1, issi: 42, target: Uuid::new_v4(), key, started: now }).unwrap();
         assert!(h.recently_handed_over(42, now, window));
         assert!(!h.recently_handed_over(43, now, window));
+        assert!(!h.handed_over_to(42, Uuid::new_v4(), now, window), "pending to another Basestation");
         h.expire(id);
         assert!(!h.recently_handed_over(42, now, window), "a failed handover does not count");
-        h.note_completed(42, now, window);
+        let b = Uuid::new_v4();
+        h.note_completed(42, b, now, window);
         assert!(h.recently_handed_over(42, now + Duration::from_secs(4), window));
+        assert!(h.handed_over_to(42, b, now + Duration::from_secs(4), window));
+        assert!(!h.handed_over_to(42, Uuid::new_v4(), now, window), "another Basestation");
         assert!(!h.recently_handed_over(42, now + Duration::from_secs(6), window));
     }
 

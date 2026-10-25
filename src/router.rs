@@ -943,6 +943,11 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
     let new = match msg.msg_type {
         SUB_REGISTER | SUB_REREGISTER => {
             info!(%source, issi=msg.issi, mode=source_mode.as_str(), "subscriber registered");
+            // Registered here (not learnt from a peer) on another Basestation: a cell change.
+            if let Some(o) = old.as_ref().filter(|o| o.client_id != source && o.route.path.is_empty()) {
+                let handed_over = inner.handovers.handed_over_to(msg.issi, source, Instant::now(), crate::handover::kick_guard(&state.config));
+                crate::roaming_log::registration_moved(&mut inner, msg.issi, o.client_id, source, handed_over);
+            }
             if source_mode == ClientMode::Terminal { ms_reg_event = Some("register"); }
             Some(local(&mut inner, old.as_ref().map(|o| o.groups.clone()).unwrap_or_default()))
         }
