@@ -176,6 +176,9 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_BLACKLIST_CMD => {
             crate::blacklist::handle_command(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_BTS_INFO => {
+            crate::carriers::handle_bts_info(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) => {
             debug!(%source, service_type = svc.service_type, json = %svc.json_data, "service message ignored");
         }

@@ -185,6 +185,9 @@ pub struct Inner {
     /// `User-Agent`): they are pushed every emergency group call, affiliated
     /// to its group or not (see `router::handle_group_tx`).
     pub consoles: HashSet<ClientId>,
+    /// Which Basestation serves which cell, from `SERVICE_BTS_INFO` (see
+    /// `carriers`).
+    pub carriers: crate::carriers::CarrierRegistry,
 }
 
 impl Inner {
@@ -513,6 +516,9 @@ impl AppState {
         inner.consoles.remove(&id);
         inner.fed.ms_links.remove(&id);
         inner.fed.em_links.remove(&id);
+        for (key, next) in inner.carriers.remove(id) {
+            tracing::info!(gone = %id, serving = %next, carrier = key.carrier, carrier_ext = key.carrier_ext, "carrier handed back to the other Basestation announcing it");
+        }
 
         // Registrations: every ISSI routed over this connection, and for a
         // loop-safe link every one it offered, gets a new effective route --

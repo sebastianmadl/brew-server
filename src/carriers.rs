@@ -1,0 +1,399 @@
+//! Carrier registry: which Basestation connection serves which TETRA cell.
+//!
+//! A Basestation announces its cells with `SERVICE_BTS_INFO` (see `protocol`)
+//! once it is connected, and again whenever its cell config changes. Each cell
+//! is keyed by `(mcc, mnc, carrier, carrier_ext)`: what a radio's serving cell
+//! knows about a neighbour, so a cell-to-cell handover can find the target
+//! Basestation by the carrier the radio names. A Basestation only sends the
+//! message to a server that offered the `bts-info` extension on the WebSocket
+//! upgrade (`X-Brew-Extensions`), so servers that do not know it (TetraPack,
+//! Brandmeister) never see it.
+//!
+//! A carrier should be served by one Basestation. When two connections claim
+//! the same key, the one that announced last serves it (a Basestation that
+//! reconnects before its old connection timed out must not be shadowed by that
+//! dead connection), the clash is logged and the dashboard flags it. When the
+//! serving connection goes away, the carrier falls back to the other claimant.
+
+use crate::state::{AppState, ClientId, ClientMode};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
+use tracing::{info, warn};
+
+/// Response header on the WebSocket upgrade listing the Brew extensions this
+/// server understands, comma separated.
+pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
+
+/// What this server offers in `X_BREW_EXTENSIONS`.
+pub const EXTENSIONS: &str = "bts-info";
+
+/// Most cells one `SERVICE_BTS_INFO` may announce (a FlowStation station runs
+/// at most a handful of SDRs on one Brew connection).
+pub const MAX_CELLS: usize = 16;
+
+const MAX_CAPABILITIES: usize = 16;
+const MAX_CAPABILITY_LEN: usize = 32;
+
+/// Identifies a cell network wide: network code plus main carrier number and
+/// its band plan (the absolute "main carrier number extension" of EN 300 392-2:
+/// frequency band, offset, duplex spacing, reverse operation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+pub struct CarrierKey {
+    pub mcc: u16,
+    pub mnc: u16,
+    pub carrier: u16,
+    pub carrier_ext: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Cell {
+    #[serde(flatten)]
+    pub key: CarrierKey,
+    pub location_area: u16,
+}
+
+/// What one connection announced last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BtsInfo {
+    pub cells: Vec<Cell>,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct CarrierRegistry {
+    /// Each connection's last announcement, with the order it was made in.
+    by_client: HashMap<ClientId, (u64, BtsInfo)>,
+    /// The connection serving each carrier.
+    table: HashMap<CarrierKey, ClientId>,
+    seq: u64,
+}
+
+impl CarrierRegistry {
+    /// Records `client`'s announcement, replacing its previous one. Returns
+    /// every other connection that also claims one of its carriers (`client`
+    /// serves those now).
+    pub fn announce(&mut self, client: ClientId, info: BtsInfo) -> Vec<(CarrierKey, ClientId)> {
+        self.seq += 1;
+        let mut touched: HashSet<CarrierKey> = info.cells.iter().map(|c| c.key).collect();
+        if let Some((_, old)) = self.by_client.insert(client, (self.seq, info)) {
+            touched.extend(old.cells.iter().map(|c| c.key));
+        }
+        let mut clashes = Vec::new();
+        let mut keys: Vec<_> = touched.into_iter().collect();
+        keys.sort_unstable();
+        for key in keys {
+            self.reassign(key);
+            if self.table.get(&key) == Some(&client) {
+                clashes.extend(self.claimants(key).filter(|(other, _)| *other != client).map(|(other, _)| (key, other)));
+            }
+        }
+        clashes
+    }
+
+    /// Forgets a connection. Returns the carriers it served that another
+    /// claimant serves now.
+    pub fn remove(&mut self, client: ClientId) -> Vec<(CarrierKey, ClientId)> {
+        let Some((_, info)) = self.by_client.remove(&client) else { return Vec::new() };
+        let mut handed_over = Vec::new();
+        for cell in &info.cells {
+            let served = self.table.get(&cell.key) == Some(&client);
+            self.reassign(cell.key);
+            if served {
+                if let Some(next) = self.table.get(&cell.key) { handed_over.push((cell.key, *next)); }
+            }
+        }
+        handed_over
+    }
+
+    /// The connection serving `key`, if any.
+    pub fn owner(&self, key: &CarrierKey) -> Option<ClientId> {
+        self.table.get(key).copied()
+    }
+
+    /// What `client` announced last.
+    pub fn info(&self, client: ClientId) -> Option<&BtsInfo> {
+        self.by_client.get(&client).map(|(_, info)| info)
+    }
+
+    /// Whether more than one connection claims `key`.
+    pub fn is_duplicate(&self, key: &CarrierKey) -> bool {
+        self.claimants(*key).nth(1).is_some()
+    }
+
+    /// Every carrier claimed by more than one connection, sorted.
+    pub fn duplicates(&self) -> Vec<CarrierKey> {
+        let mut keys: Vec<_> = self.table.keys().copied().filter(|k| self.is_duplicate(k)).collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    fn claimants(&self, key: CarrierKey) -> impl Iterator<Item = (ClientId, u64)> + '_ {
+        self.by_client.iter()
+            .filter(move |(_, (_, info))| info.cells.iter().any(|c| c.key == key))
+            .map(|(id, (seq, _))| (*id, *seq))
+    }
+
+    /// Hands `key` to its newest claimant, or drops it when nobody claims it.
+    fn reassign(&mut self, key: CarrierKey) {
+        match self.claimants(key).max_by_key(|(_, seq)| *seq).map(|(id, _)| id) {
+            Some(id) => { self.table.insert(key, id); }
+            None => { self.table.remove(&key); }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BtsInfoMessage {
+    mcc: u16,
+    mnc: u16,
+    cells: Vec<CellMessage>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CellMessage {
+    carrier: u16,
+    carrier_ext: u16,
+    location_area: u16,
+}
+
+/// Parses and checks a `SERVICE_BTS_INFO` payload:
+/// `{"mcc":N,"mnc":N,"cells":[{"carrier":N,"carrier_ext":N,"location_area":N}],"capabilities":["..."]}`.
+pub fn parse_bts_info(json: &str) -> Result<BtsInfo, String> {
+    let msg: BtsInfoMessage = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if msg.mcc > 0x3ff { return Err(format!("mcc {} out of range (0-1023)", msg.mcc)); }
+    if msg.mnc > 0x3fff { return Err(format!("mnc {} out of range (0-16383)", msg.mnc)); }
+    if msg.cells.len() > MAX_CELLS { return Err(format!("{} cells, at most {MAX_CELLS}", msg.cells.len())); }
+    let mut cells: Vec<Cell> = Vec::with_capacity(msg.cells.len());
+    for c in msg.cells {
+        if c.carrier > 0xfff { return Err(format!("carrier {} out of range (0-4095)", c.carrier)); }
+        if c.carrier_ext > 0x3ff { return Err(format!("carrier_ext {} out of range (0-1023)", c.carrier_ext)); }
+        if c.location_area > 0x3fff { return Err(format!("location_area {} out of range (0-16383)", c.location_area)); }
+        let key = CarrierKey { mcc: msg.mcc, mnc: msg.mnc, carrier: c.carrier, carrier_ext: c.carrier_ext };
+        if cells.iter().any(|known| known.key == key) { return Err(format!("carrier {} listed twice", c.carrier)); }
+        cells.push(Cell { key, location_area: c.location_area });
+    }
+    if msg.capabilities.len() > MAX_CAPABILITIES { return Err(format!("{} capabilities, at most {MAX_CAPABILITIES}", msg.capabilities.len())); }
+    if let Some(bad) = msg.capabilities.iter().find(|c| c.is_empty() || c.len() > MAX_CAPABILITY_LEN) {
+        return Err(format!("capability {bad:?} must be 1-{MAX_CAPABILITY_LEN} characters"));
+    }
+    Ok(BtsInfo { cells, capabilities: msg.capabilities })
+}
+
+/// A `SERVICE_BTS_INFO` from `source`. Only Basestation connections serve
+/// cells; anything else is ignored.
+pub async fn handle_bts_info(state: &Arc<AppState>, source: ClientId, json: &str) {
+    let info = match parse_bts_info(json) {
+        Ok(info) => info,
+        Err(e) => {
+            warn!(%source, error = %e, json, "malformed BTS info service message");
+            return;
+        }
+    };
+    let mut inner = state.inner.write().await;
+    let Some(client) = inner.clients.get(&source) else { return };
+    if client.mode != ClientMode::Basestation {
+        warn!(%source, mode = client.mode.as_str(), "BTS info from a connection that is not a Basestation ignored");
+        return;
+    }
+    let addr = client.remote_addr;
+    let carriers: Vec<u16> = info.cells.iter().map(|c| c.key.carrier).collect();
+    let capabilities = info.capabilities.join(",");
+    let clashes = inner.carriers.announce(source, info);
+    info!(%source, remote_addr = ?addr, ?carriers, capabilities, "Basestation announced its cells");
+    for (key, other) in clashes {
+        let other_addr = inner.clients.get(&other).and_then(|c| c.remote_addr);
+        warn!(%source, remote_addr = ?addr, other = %other, other_addr = ?other_addr, mcc = key.mcc, mnc = key.mnc,
+            carrier = key.carrier, carrier_ext = key.carrier_ext, "carrier announced by two Basestations; the newest one serves it");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{protocol::{self, ConnVersion}, state::Client};
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+
+    fn key(carrier: u16) -> CarrierKey {
+        CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 0x10c }
+    }
+
+    fn info(carriers: &[u16]) -> BtsInfo {
+        BtsInfo { cells: carriers.iter().map(|c| Cell { key: key(*c), location_area: 1 }).collect(), capabilities: Vec::new() }
+    }
+
+    #[test]
+    fn register_and_look_up() {
+        let mut reg = CarrierRegistry::default();
+        let (bs1, bs2) = (Uuid::new_v4(), Uuid::new_v4());
+        assert!(reg.announce(bs1, info(&[1528])).is_empty());
+        assert!(reg.announce(bs2, info(&[1530])).is_empty());
+        assert_eq!(reg.owner(&key(1528)), Some(bs1));
+        assert_eq!(reg.owner(&key(1530)), Some(bs2));
+        assert_eq!(reg.owner(&key(1532)), None);
+        assert_eq!(reg.owner(&CarrierKey { carrier_ext: 0, ..key(1528) }), None, "another band plan is another cell");
+        assert_eq!(reg.owner(&CarrierKey { mnc: 6, ..key(1528) }), None, "another network is another cell");
+        assert!(reg.duplicates().is_empty());
+    }
+
+    #[test]
+    fn one_connection_serves_several_cells() {
+        let mut reg = CarrierRegistry::default();
+        let site = Uuid::new_v4();
+        reg.announce(site, info(&[1528, 1530]));
+        assert_eq!(reg.owner(&key(1528)), Some(site));
+        assert_eq!(reg.owner(&key(1530)), Some(site));
+    }
+
+    #[test]
+    fn disconnect_removes_the_carriers() {
+        let mut reg = CarrierRegistry::default();
+        let (bs1, bs2) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(bs1, info(&[1528]));
+        reg.announce(bs2, info(&[1530]));
+        assert!(reg.remove(bs1).is_empty());
+        assert_eq!(reg.owner(&key(1528)), None);
+        assert_eq!(reg.owner(&key(1530)), Some(bs2));
+        assert!(reg.info(bs1).is_none());
+        assert!(reg.remove(bs1).is_empty(), "removing twice is harmless");
+    }
+
+    #[test]
+    fn new_announcement_replaces_the_old_one() {
+        let mut reg = CarrierRegistry::default();
+        let bs = Uuid::new_v4();
+        reg.announce(bs, info(&[1528]));
+        reg.announce(bs, info(&[1532]));
+        assert_eq!(reg.owner(&key(1528)), None, "the old carrier is released");
+        assert_eq!(reg.owner(&key(1532)), Some(bs));
+        assert!(reg.announce(bs, info(&[1532])).is_empty(), "announcing the same again is no clash with itself");
+    }
+
+    #[test]
+    fn duplicate_goes_to_the_newest_and_falls_back() {
+        let mut reg = CarrierRegistry::default();
+        let (bs1, bs2) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(bs1, info(&[1528]));
+        assert_eq!(reg.announce(bs2, info(&[1528])), vec![(key(1528), bs1)]);
+        assert_eq!(reg.owner(&key(1528)), Some(bs2));
+        assert!(reg.is_duplicate(&key(1528)));
+        assert_eq!(reg.duplicates(), vec![key(1528)]);
+        // The newer one goes away: the older claimant serves the carrier again.
+        assert_eq!(reg.remove(bs2), vec![(key(1528), bs1)]);
+        assert_eq!(reg.owner(&key(1528)), Some(bs1));
+        assert!(reg.duplicates().is_empty());
+    }
+
+    #[test]
+    fn duplicate_resolved_by_reannouncing_another_carrier() {
+        let mut reg = CarrierRegistry::default();
+        let (bs1, bs2) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(bs1, info(&[1528]));
+        reg.announce(bs2, info(&[1528]));
+        assert!(reg.announce(bs2, info(&[1530])).is_empty());
+        assert_eq!(reg.owner(&key(1528)), Some(bs1), "the carrier goes back to the remaining claimant");
+        assert_eq!(reg.owner(&key(1530)), Some(bs2));
+        assert!(reg.duplicates().is_empty());
+    }
+
+    #[test]
+    fn reconnect_before_the_old_connection_is_gone() {
+        let mut reg = CarrierRegistry::default();
+        let (old, new) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(old, info(&[1528]));
+        reg.announce(new, info(&[1528]));
+        assert_eq!(reg.owner(&key(1528)), Some(new));
+        // The dead connection times out later: it must not take the carrier along.
+        assert!(reg.remove(old).is_empty());
+        assert_eq!(reg.owner(&key(1528)), Some(new));
+        assert!(!reg.is_duplicate(&key(1528)));
+    }
+
+    #[test]
+    fn reconnect_after_the_old_connection_is_gone() {
+        let mut reg = CarrierRegistry::default();
+        let (old, new) = (Uuid::new_v4(), Uuid::new_v4());
+        reg.announce(old, info(&[1528]));
+        reg.remove(old);
+        assert!(reg.announce(new, info(&[1528])).is_empty());
+        assert_eq!(reg.owner(&key(1528)), Some(new));
+    }
+
+    #[test]
+    fn parses_a_full_announcement() {
+        let json = r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1528,"carrier_ext":268,"location_area":10},{"carrier":1530,"carrier_ext":268,"location_area":11}],"capabilities":["handover-v1"]}"#;
+        let info = parse_bts_info(json).unwrap();
+        assert_eq!(info.cells, vec![
+            Cell { key: key(1528), location_area: 10 },
+            Cell { key: key(1530), location_area: 11 },
+        ]);
+        assert_eq!(info.capabilities, vec!["handover-v1".to_string()]);
+        // Capabilities may be left out; unknown fields are ignored.
+        let info = parse_bts_info(r#"{"mcc":1,"mnc":2,"cells":[],"future":true}"#).unwrap();
+        assert!(info.cells.is_empty() && info.capabilities.is_empty());
+    }
+
+    #[test]
+    fn rejects_bad_announcements() {
+        let cell = |c: &str| format!(r#"{{"mcc":232,"mnc":5,"cells":[{c}]}}"#);
+        for bad in [
+            "not json".to_string(),
+            r#"{"mnc":5,"cells":[]}"#.to_string(),
+            r#"{"mcc":1024,"mnc":5,"cells":[]}"#.to_string(),
+            r#"{"mcc":232,"mnc":16384,"cells":[]}"#.to_string(),
+            cell(r#"{"carrier":4096,"carrier_ext":0,"location_area":1}"#),
+            cell(r#"{"carrier":1528,"carrier_ext":1024,"location_area":1}"#),
+            cell(r#"{"carrier":1528,"carrier_ext":0,"location_area":16384}"#),
+            cell(r#"{"carrier":1528,"location_area":1}"#),
+            cell(r#"{"carrier":1528,"carrier_ext":0,"location_area":1},{"carrier":1528,"carrier_ext":0,"location_area":2}"#),
+            cell(&vec![r#"{"carrier":1,"carrier_ext":0,"location_area":1}"#; MAX_CELLS + 1].join(",")),
+            r#"{"mcc":232,"mnc":5,"cells":[],"capabilities":[""]}"#.to_string(),
+            format!(r#"{{"mcc":232,"mnc":5,"cells":[],"capabilities":["{}"]}}"#, "x".repeat(MAX_CAPABILITY_LEN + 1)),
+        ] {
+            assert!(parse_bts_info(&bad).is_err(), "accepted {bad}");
+        }
+    }
+
+    async fn connect(state: &AppState, mode: ClientMode) -> ClientId {
+        let (tx, rx) = mpsc::unbounded_channel();
+        std::mem::forget(rx);
+        let id = Uuid::new_v4();
+        state.inner.write().await.clients.insert(id, Client { tx, mode, version: ConnVersion::V0, version_announced: false, remote_addr: None, connected_at_ms: 0, username: None });
+        id
+    }
+
+    fn bts_info_packet(carrier: u16) -> Vec<u8> {
+        protocol::build_service(protocol::SERVICE_BTS_INFO,
+            &format!(r#"{{"mcc":232,"mnc":5,"cells":[{{"carrier":{carrier},"carrier_ext":268,"location_area":1}}]}}"#))
+    }
+
+    #[tokio::test]
+    async fn basestation_announcement_reaches_the_registry_and_leaves_with_it() {
+        let state = AppState::for_test();
+        let bs = connect(&state, ClientMode::Basestation).await;
+        crate::router::handle_packet(state.clone(), bs, bts_info_packet(1528)).await;
+        assert_eq!(state.inner.read().await.carriers.owner(&key(1528)), Some(bs));
+        state.cleanup_client(bs).await;
+        assert_eq!(state.inner.read().await.carriers.owner(&key(1528)), None);
+    }
+
+    #[tokio::test]
+    async fn only_basestations_serve_carriers() {
+        let state = AppState::for_test();
+        for mode in [ClientMode::Terminal, ClientMode::Peer] {
+            let id = connect(&state, mode).await;
+            crate::router::handle_packet(state.clone(), id, bts_info_packet(1528)).await;
+        }
+        assert_eq!(state.inner.read().await.carriers.owner(&key(1528)), None);
+    }
+
+    #[tokio::test]
+    async fn malformed_announcement_keeps_the_previous_one() {
+        let state = AppState::for_test();
+        let bs = connect(&state, ClientMode::Basestation).await;
+        crate::router::handle_packet(state.clone(), bs, bts_info_packet(1528)).await;
+        crate::router::handle_packet(state.clone(), bs, protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":232}"#)).await;
+        assert_eq!(state.inner.read().await.carriers.owner(&key(1528)), Some(bs));
+    }
+}

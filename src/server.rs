@@ -308,6 +308,12 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
             let mut response = ws.protocols([protocol])
                 .on_upgrade(move |socket| client_session(state, socket, mode, seed_version, remote_addr, username, fed_neighbour, console))
                 .into_response();
+            if mode == ClientMode::Basestation {
+                // Tells a Basestation which Brew extensions it may use here;
+                // one that sees no such header (TetraPack, Brandmeister) sends
+                // none of them.
+                response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, HeaderValue::from_static(crate::carriers::EXTENSIONS));
+            }
             if fed_neighbour.is_some() {
                 // Accepting: the dialling side only switches to loop-safe mode
                 // when it sees these in the 101.
@@ -578,6 +584,33 @@ mod tests {
         let ours = crate::fedroute::format_server_id(own_id);
         let err = upgrade(&[("X-Brew-Federation", "1".into()), ("X-Brew-Server-Id", ours)]).await.unwrap_err();
         assert!(err.to_string().contains("409"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn basestation_upgrade_offers_the_brew_extensions() {
+        use super::{brew_discovery, get, AppState, SocketAddr};
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let state = AppState::for_test();
+        let app = axum::Router::new().route("/brew", get(brew_discovery)).with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await
+        });
+        let upgrade = |mode: Option<&'static str>| {
+            let mut request = format!("ws://{addr}/brew").into_client_request().unwrap();
+            if let Some(mode) = mode { request.headers_mut().insert("X-Brew-Mode", mode.parse().unwrap()); }
+            tokio_tungstenite::connect_async(request)
+        };
+
+        // FlowStation upgrades without any X-Brew header: a Basestation.
+        let (_bs, resp) = upgrade(None).await.unwrap();
+        assert_eq!(resp.headers()["X-Brew-Extensions"], "bts-info");
+        let (_peer, resp) = upgrade(Some("Peer")).await.unwrap();
+        assert!(!resp.headers().contains_key("X-Brew-Extensions"));
+        let (_terminal, resp) = upgrade(Some("Terminal")).await.unwrap();
+        assert!(!resp.headers().contains_key("X-Brew-Extensions"));
     }
 
     #[test]

@@ -89,6 +89,12 @@ pub const SERVICE_BLACKLIST_CMD: u8 = 0x12;
 /// `{"blacklist":[N,...],"can_edit":bool}`, or `{"error":"..."}` for a refused edit.
 pub const SERVICE_BLACKLIST: u8 = 0x13;
 
+/// `CLASS_SERVICE` type a Basestation sends after connecting, and again when
+/// its cell config changes: the cells it serves, for the carrier registry
+/// (see `carriers`). Only sent to a server that offered the `bts-info`
+/// extension on the WebSocket upgrade.
+pub const SERVICE_BTS_INFO: u8 = 0x14;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());
