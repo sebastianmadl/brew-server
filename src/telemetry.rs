@@ -251,6 +251,13 @@ pub struct RegLogEntry {
     /// For "roamed": the Basestation the subscriber moved to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roamed_to: Option<String>,
+    /// For "register": the cell the radio registered on (`<login>/<cell>`
+    /// and its carrier), when the Basestation reports it over Brew
+    /// (`SERVICE_MS_CELL`, see `TelemetryState::tag_cell`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -536,7 +543,7 @@ impl TelemetryBts {
     /// Appends a registration lifecycle event to the rolling log (newest
     /// first, capped at 50 like `recent_sds`).
     fn push_reg(&mut self, issi: u32, kind: &'static str) {
-        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None });
+        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell: None, carrier: None });
     }
 
     fn push_reg_entry(&mut self, entry: RegLogEntry) {
@@ -697,7 +704,7 @@ impl TelemetryState {
     /// registration log as Basestation telemetry registrations. `kind` is
     /// "register" or "deregister".
     pub fn record_brew_registration(&mut self, issi: u32, kind: &'static str) {
-        self.recent_brew_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None });
+        self.recent_brew_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell: None, carrier: None });
         while self.recent_brew_regs.len() > 50 {
             self.recent_brew_regs.pop_back();
         }
@@ -719,7 +726,7 @@ impl TelemetryState {
             if id == new_bts || !bts.registrations.remove(&issi) { continue; }
             bts.ms_cell.remove(&issi);
             bts.sync_registrations();
-            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()) });
+            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()), cell: None, carrier: None });
             old.push(id.clone());
         }
         old.sort_unstable();
@@ -730,6 +737,24 @@ impl TelemetryState {
     /// Basestation's telemetry channel *and* the Brew protocol channel
     /// directly (tagged with the synthetic station id "brew"), for the
     /// `/registrations` dashboard page. Capped to the most recent 100 entries.
+    /// A Basestation reported `issi` on cell `name` (`carrier`) over Brew at
+    /// `now_ms`: the radio's newest registration in the log, if it is that
+    /// recent and has no cell yet, gets it. Telemetry and Brew are separate
+    /// connections, so the report can come before or after the telemetry
+    /// registration; `MsRegistration` covers the other order with
+    /// `carriers::recent_cell`.
+    pub fn tag_cell(&mut self, issi: u32, name: &str, carrier: u16, now_ms: u64) {
+        let newest = self.stations.values_mut()
+            .filter_map(|b| b.recent_regs.iter().position(|e| e.issi == issi).map(|i| (b.recent_regs[i].at_ms, b, i)))
+            .max_by_key(|(at, _, _)| *at);
+        let Some((at, bts, i)) = newest else { return };
+        let entry = &mut bts.recent_regs[i];
+        if entry.kind != "register" || entry.cell.is_some() || now_ms.saturating_sub(at) > crate::carriers::CELL_MATCH_MS { return; }
+        entry.cell = Some(name.to_string());
+        entry.carrier = Some(carrier);
+        bts.recent_regs_out = bts.recent_regs.iter().cloned().collect();
+    }
+
     pub fn registration_log(&self) -> Vec<RegLogRow> {
         let mut out: Vec<RegLogRow> = self.stations.values()
             .flat_map(|s| s.recent_regs_out.iter().map(|e| RegLogRow { bts: s.id.clone(), entry: e.clone() }))
@@ -828,6 +853,13 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
     };
     debug!(bts = %id, ?event, "telemetry event");
 
+    // The cell the radio's station reported over Brew just now, for the
+    // registration log (read before the telemetry lock is taken).
+    let reported_cell = match event {
+        TelemetryEvent::MsRegistration { issi } => crate::carriers::recent_cell(&*state.inner.read().await, issi, now_ms()),
+        _ => None,
+    };
+
     let mut t = state.telemetry.write().await;
     let Some(bts) = t.stations.get_mut(id) else { return };
     bts.last_event_at_ms = now_ms();
@@ -863,7 +895,8 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
         TelemetryEvent::MsRegistration { issi } => {
             bts.registrations.insert(issi); bts.sync_registrations();
-            bts.push_reg(issi, "register");
+            let (cell, carrier) = reported_cell.map_or((None, None), |(name, carrier)| (Some(name), Some(carrier)));
+            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "register", roamed_to: None, cell, carrier });
             registered = Some(issi);
         }
         TelemetryEvent::MsDeregistration { issi } => {
@@ -1423,9 +1456,9 @@ mod roaming_tests {
 
     #[test]
     fn roamed_entry_serializes_target_and_plain_entries_do_not() {
-        let roamed = RegLogEntry { at_ms: 1, issi: 7, kind: "roamed", roamed_to: Some("1000001".into()) };
+        let roamed = RegLogEntry { at_ms: 1, issi: 7, kind: "roamed", roamed_to: Some("1000001".into()), cell: None, carrier: None };
         assert!(serde_json::to_string(&roamed).unwrap().contains("\"roamed_to\":\"1000001\""));
-        let plain = RegLogEntry { at_ms: 1, issi: 7, kind: "register", roamed_to: None };
+        let plain = RegLogEntry { at_ms: 1, issi: 7, kind: "register", roamed_to: None, cell: None, carrier: None };
         assert!(!serde_json::to_string(&plain).unwrap().contains("roamed_to"));
     }
 }
@@ -1806,5 +1839,80 @@ mod roaming_sim_tests {
         assert_eq!(kicked_home, 0, "no fresh registration kicked");
         assert_eq!(rep.misplaced, 0);
         assert_eq!(rep.stale, 0);
+    }
+}
+
+#[cfg(test)]
+mod registration_cell_tests {
+    use super::*;
+    use crate::protocol::{self, ConnVersion, SUB_REGISTER};
+
+    /// A Basestation with Brew login `1000002` serving carrier 1530, with its
+    /// telemetry station `bts-2`.
+    async fn station() -> (Arc<AppState>, crate::state::ClientId) {
+        let state = AppState::for_test();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        std::mem::forget(rx);
+        let id = uuid::Uuid::new_v4();
+        state.inner.write().await.clients.insert(id, crate::state::Client {
+            tx, mode: crate::state::ClientMode::Basestation, version: ConnVersion::V0,
+            version_announced: false, remote_addr: None, connected_at_ms: 0, username: Some("1000002".into()),
+        });
+        crate::router::handle_packet(state.clone(), id, protocol::build_service(protocol::SERVICE_BTS_INFO,
+            r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1530,"carrier_ext":268,"location_area":1}]}"#)).await;
+        state.telemetry.write().await.stations.insert("bts-2".into(), TelemetryBts::new("bts-2".into(), None));
+        (state, id)
+    }
+
+    async fn brew_register(state: &Arc<AppState>, id: crate::state::ClientId, issi: u32) {
+        crate::router::handle_packet(state.clone(), id, protocol::build_subscriber_message(SUB_REGISTER, issi, &[])).await;
+        crate::router::handle_packet(state.clone(), id, protocol::build_service(protocol::SERVICE_MS_CELL,
+            &format!(r#"{{"issi":{issi},"carrier":1530,"carrier_ext":268}}"#))).await;
+    }
+
+    async fn telemetry_register(state: &Arc<AppState>, issi: u32) {
+        let ev = serde_json::to_vec(&serde_json::json!({ "MsRegistration": { "issi": issi } })).unwrap();
+        handle_event(state, "bts-2", &ev).await;
+    }
+
+    async fn logged(state: &Arc<AppState>) -> Vec<(u32, &'static str, Option<String>, Option<u16>)> {
+        state.telemetry.read().await.registration_log().into_iter()
+            .map(|r| (r.entry.issi, r.entry.kind, r.entry.cell, r.entry.carrier)).collect()
+    }
+
+    #[tokio::test]
+    async fn cell_reported_after_the_telemetry_registration() {
+        let (state, id) = station().await;
+        telemetry_register(&state, 7).await;
+        assert_eq!(logged(&state).await, vec![(7, "register", None, None)]);
+        brew_register(&state, id, 7).await;
+        assert_eq!(logged(&state).await, vec![(7, "register", Some("1000002/0".into()), Some(1530))]);
+    }
+
+    #[tokio::test]
+    async fn cell_reported_before_the_telemetry_registration() {
+        let (state, id) = station().await;
+        brew_register(&state, id, 7).await;
+        telemetry_register(&state, 7).await;
+        assert_eq!(logged(&state).await, vec![(7, "register", Some("1000002/0".into()), Some(1530))]);
+    }
+
+    #[test]
+    fn only_a_recent_registration_without_a_cell_is_tagged() {
+        let mut t = TelemetryState::default();
+        t.stations.insert("bts-2".into(), TelemetryBts::new("bts-2".into(), None));
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.push_reg(7, "register");
+        bts.push_reg(8, "register");
+        bts.push_reg(8, "deregister");
+        let at = t.stations["bts-2"].recent_regs[0].at_ms;
+        t.tag_cell(7, "1000002/0", 1530, at + crate::carriers::CELL_MATCH_MS + 1);
+        t.tag_cell(8, "1000002/0", 1530, at);
+        assert!(t.registration_log().iter().all(|r| r.entry.cell.is_none()), "too late, or the newest entry is no registration");
+        t.tag_cell(7, "1000002/0", 1530, at);
+        t.tag_cell(7, "other/1", 1532, at);
+        let log = t.registration_log();
+        let seven: Vec<_> = log.iter().filter(|r| r.entry.issi == 7).collect();
+        assert_eq!(seven[0].entry.cell.as_deref(), Some("1000002/0"), "the first report wins");
     }
 }

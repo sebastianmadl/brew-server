@@ -105,8 +105,8 @@ pub struct CarrierRegistry {
     table: HashMap<CarrierKey, ClientId>,
     seq: u64,
     /// ISSI -> the connection and cell it last reported the radio on
-    /// (`SERVICE_MS_CELL`).
-    ms_cells: HashMap<u32, (ClientId, CarrierKey)>,
+    /// (`SERVICE_MS_CELL`), and when (ms).
+    ms_cells: HashMap<u32, (ClientId, CarrierKey, u64)>,
 }
 
 impl CarrierRegistry {
@@ -134,7 +134,7 @@ impl CarrierRegistry {
     /// Forgets a connection. Returns the carriers it served that another
     /// claimant serves now.
     pub fn remove(&mut self, client: ClientId) -> Vec<(CarrierKey, ClientId)> {
-        self.ms_cells.retain(|_, (id, _)| *id != client);
+        self.ms_cells.retain(|_, (id, _, _)| *id != client);
         let Some((_, info)) = self.by_client.remove(&client) else { return Vec::new() };
         let mut handed_over = Vec::new();
         for cell in &info.cells {
@@ -153,7 +153,7 @@ impl CarrierRegistry {
     pub fn set_ms_cell(&mut self, issi: u32, client: ClientId, carrier: u16, carrier_ext: u16) -> Option<Cell> {
         let (_, info) = self.by_client.get(&client)?;
         let cell = info.cells.iter().find(|c| c.key.carrier == carrier && c.key.carrier_ext == carrier_ext)?.clone();
-        self.ms_cells.insert(issi, (client, cell.key));
+        self.ms_cells.insert(issi, (client, cell.key, crate::telemetry::now_ms()));
         Some(cell)
     }
 
@@ -161,8 +161,13 @@ impl CarrierRegistry {
     /// announces it. A report from another connection does not count: the
     /// radio is wherever its registration is.
     pub fn ms_cell(&self, issi: u32, client: ClientId) -> Option<&Cell> {
-        let (id, key) = self.ms_cells.get(&issi).filter(|(id, _)| *id == client)?;
+        let (id, key, _) = self.ms_cells.get(&issi).filter(|(id, _, _)| *id == client)?;
         self.info(*id)?.cells.iter().find(|c| c.key == *key)
+    }
+
+    /// When `issi`'s cell was last reported, by whichever connection.
+    pub fn ms_cell_reported_at(&self, issi: u32) -> Option<(ClientId, u64)> {
+        self.ms_cells.get(&issi).map(|(id, _, at)| (*id, *at))
     }
 
     /// The connection serving `key`, if any.
@@ -259,6 +264,21 @@ struct MsCellMessage {
     carrier_ext: u16,
 }
 
+/// How close in time a cell report and a telemetry registration must be to
+/// belong together (registration log, see `TelemetryState::tag_cell`).
+pub const CELL_MATCH_MS: u64 = 10_000;
+
+/// The cell `issi` was reported on within `CELL_MATCH_MS` before `now_ms`,
+/// by the connection it is registered on: its name and carrier.
+pub fn recent_cell(inner: &crate::state::Inner, issi: u32, now_ms: u64) -> Option<(String, u16)> {
+    let (client, at) = inner.carriers.ms_cell_reported_at(issi)?;
+    if now_ms.saturating_sub(at) > CELL_MATCH_MS { return None; }
+    if inner.subscribers.get(&issi).is_none_or(|s| s.client_id != client) { return None; }
+    let cell = inner.carriers.ms_cell(issi, client)?;
+    let station = station_name(client, inner.clients.get(&client).and_then(|c| c.username.as_deref()));
+    Some((cell_name(&station, cell.cell), cell.key.carrier))
+}
+
 /// A `SERVICE_MS_CELL` from `source`: `{"issi":N,"carrier":N,"carrier_ext":N}`,
 /// the cell of the station the radio registered on. Only counts for a cell
 /// the connection announced; shown per subscriber on the dashboard.
@@ -277,8 +297,11 @@ pub async fn handle_ms_cell(state: &Arc<AppState>, source: ClientId, json: &str)
     match inner.carriers.set_ms_cell(msg.issi, source, msg.carrier, msg.carrier_ext) {
         Some(cell) => {
             tracing::debug!(%source, issi = msg.issi, cell = cell.cell, carrier = msg.carrier, "subscriber is on cell");
-            let to = crate::roaming_log::Place::cell(station, cell.cell, cell.key.carrier);
+            let to = crate::roaming_log::Place::cell(station.clone(), cell.cell, cell.key.carrier);
             inner.roaming_log.cell_reported(crate::telemetry::now_ms(), msg.issi, to, previous);
+            drop(inner);
+            // The registration log is kept with the telemetry.
+            state.telemetry.write().await.tag_cell(msg.issi, &cell_name(&station, cell.cell), cell.key.carrier, crate::telemetry::now_ms());
         }
         None => warn!(%source, issi = msg.issi, carrier = msg.carrier, carrier_ext = msg.carrier_ext, "MS cell report for a cell the Basestation did not announce ignored"),
     }
