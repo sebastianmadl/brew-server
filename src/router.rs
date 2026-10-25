@@ -293,6 +293,11 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         started_at: std::time::Instant::now(),
         last_activity_ms: ActiveCall::new_activity(),
     });
+    {
+        let Inner { calls, group_tx_raw, .. } = &mut *inner;
+        group_tx_raw.retain(|call_id, _| calls.contains_key(call_id));
+        group_tx_raw.insert(id, raw.clone());
+    }
     crate::fedroute::note_call(&mut inner, id, gt.source, source, now);
     // Each recipient gets the GROUP_TX in its own layout: a connection that
     // announced v0 is not handed the v1 talker-name tail (see
@@ -853,6 +858,50 @@ fn is_peer(inner: &Inner, client: ClientId) -> bool {
     inner.clients.get(&client).is_some_and(|c| c.mode == ClientMode::Peer)
 }
 
+/// Late entry: `client` has just joined `groups` (a registration that keeps
+/// its ISSI's groups, or an affiliation). Every group call to one of those
+/// groups that is running now and does not reach `client` yet takes it on as
+/// a participant, so its remaining voice frames and its end reach `client`
+/// too. Returns the GROUP_TX to send it per such call (the one that set the
+/// call up, in `client`'s layout; a call without one, such as a SIP-bridged
+/// one, gets a synthesized header). The caller sends them while it still
+/// holds the lock, so they go out ahead of any further frame of those calls.
+///
+/// Federation peer links are left out: they learn of calls by route and
+/// prune duplicates themselves.
+fn late_entry(inner: &mut Inner, client: ClientId, groups: &HashSet<u32>) -> Vec<(mpsc::UnboundedSender<Vec<u8>>, Vec<u8>)> {
+    if groups.is_empty() || is_peer(inner, client) {
+        return Vec::new();
+    }
+    let Some(c) = inner.clients.get(&client) else { return Vec::new() };
+    let (tx, version) = (c.tx.clone(), c.forward_version());
+    // A dispatch console is told an emergency call by its priority, as at call
+    // set-up (`handle_group_tx`) and when the alarm is raised mid-call.
+    let console = inner.consoles.contains(&client);
+    let Inner { calls, group_tx_raw, .. } = inner;
+    group_tx_raw.retain(|call_id, _| calls.contains_key(call_id));
+    let mut out = Vec::new();
+    for (id, call) in calls.iter_mut() {
+        if call.kind != CallKind::Group || !groups.contains(&call.destination) {
+            continue;
+        }
+        if call.owner == client || call.peers.contains(&client) {
+            continue;
+        }
+        call.peers.insert(client);
+        let mut header = group_tx_raw
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| protocol::build_group_tx(id, call.source_issi, call.destination, call.priority));
+        if console && call.priority >= EMERGENCY_PRIORITY {
+            header = with_emergency_priority(&header);
+        }
+        out.push((tx.clone(), protocol::adapt_to_version(&header, version).into_owned()));
+        info!(%client, uuid=%id, gssi=call.destination, src_issi=call.source_issi, "late entry: joined running group call");
+    }
+    out
+}
+
 async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: SubscriberMessage) {
     let mut inner = state.inner.write().await;
     if inner.fed.links.contains_key(&source) {
@@ -925,6 +974,29 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
         crate::fedroute::reroute(&mut inner, msg.issi);
     }
     let registered = crate::fedroute::publish(&inner, msg.issi, old.as_ref());
+    // Late entry: a registration (which keeps the ISSI's groups) or an
+    // affiliation can put this connection into a group that has a call
+    // running right now. It was not a target when that call was set up, so
+    // hand it the call's GROUP_TX and add it to the call: the rest of the
+    // over reaches it instead of only the next one. All of the ISSI's groups
+    // are checked: calls to groups it was already in reach this connection
+    // already, so only the new ones add anything. (The owner check is
+    // defensive: a non-owner's affiliation was turned away above.)
+    let joined: HashSet<u32> = match msg.msg_type {
+        SUB_REGISTER | SUB_REREGISTER | SUB_AFFILIATE => inner
+            .subscribers
+            .get(&msg.issi)
+            .filter(|s| s.client_id == source)
+            .map(|s| s.groups.clone())
+            .unwrap_or_default(),
+        _ => HashSet::new(),
+    };
+    // Sent before the lock is released: a voice frame of the call can only be
+    // routed to the new participant under the lock, so it cannot overtake
+    // the header (an unbounded send never blocks).
+    for (tx, packet) in late_entry(&mut inner, source, &joined) {
+        let _ = tx.send(packet);
+    }
     drop(inner);
     // Log Terminal-mode (actual MS) registration lifecycle events to the same
     // dashboard registration log Basestation telemetry registrations use, so
@@ -1738,5 +1810,425 @@ mod forwarding_tests {
         assert_eq!(drain(&mut dest_rx), vec![header, payload], "delivered once");
         let positions = state.telemetry.read().await.sds_positions.keys().copied().collect::<Vec<_>>();
         assert_eq!(positions, vec![5001]);
+    }
+}
+
+/// Late entry: a connection that joins a group while a call to it runs gets
+/// the call's GROUP_TX and the rest of its voice, not only the next over.
+#[cfg(test)]
+mod late_entry_tests {
+    use super::*;
+    use crate::protocol::{ConnVersion, CALL_GROUP_IDLE, SUB_AFFILIATE, SUB_DEAFFILIATE, SUB_REGISTER};
+    use crate::state::Client;
+
+    /// Strict affiliation routing: a GROUP_TX reaches only affiliated
+    /// connections, so a connection with no member is not in the call.
+    fn strict_state() -> Arc<AppState> {
+        let mut config = crate::config::Config::default();
+        config.storage.enabled = false;
+        config.sms_center.enabled = false;
+        config.fallback_broadcast_when_no_affiliations = false;
+        Arc::new(AppState::new(config, "test.toml".into()).0)
+    }
+
+    async fn connect(state: &AppState, mode: ClientMode, version: ConnVersion) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let id = uuid::Uuid::new_v4();
+        state.inner.write().await.clients.insert(id, Client { tx, mode, version, version_announced: true, remote_addr: None, connected_at_ms: 0, username: None });
+        (id, rx)
+    }
+
+    async fn bts(state: &AppState) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        connect(state, ClientMode::Basestation, ConnVersion::V0).await
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    fn voice(id: &uuid::Uuid) -> Vec<u8> {
+        protocol::build_traffic_frame(id, &[0x11; protocol::ACELP_CODED_FRAME_BYTES], &[0x22; protocol::ACELP_CODED_FRAME_BYTES])
+    }
+
+    fn idle(id: &uuid::Uuid) -> Vec<u8> {
+        protocol::build_call_cause(CALL_GROUP_IDLE, id, 0)
+    }
+
+    async fn sub(state: &Arc<AppState>, from: ClientId, msg_type: u8, issi: u32, groups: &[u32]) {
+        handle_packet(state.clone(), from, protocol::build_subscriber_message(msg_type, issi, groups)).await;
+    }
+
+    /// `talker` starts a group call 1001 → `gssi` and returns its uuid and GROUP_TX.
+    async fn start_call(state: &Arc<AppState>, talker: ClientId, gssi: u32, priority: u8) -> (uuid::Uuid, Vec<u8>) {
+        let id = uuid::Uuid::new_v4();
+        let gt = protocol::build_group_tx(&id, 1001, gssi, priority);
+        handle_packet(state.clone(), talker, gt.clone()).await;
+        (id, gt)
+    }
+
+    fn group_tx_count(packets: &[Vec<u8>]) -> usize {
+        packets.iter().filter(|p| p.len() > 1 && p[0] == protocol::CLASS_CALL_CONTROL && p[1] == CALL_GROUP_TX).count()
+    }
+
+    #[tokio::test]
+    async fn affiliating_mid_call_gets_the_header_then_voice_and_end() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        let (id, gt) = start_call(&state, a, 91, 0).await;
+        assert!(drain(&mut b_rx).is_empty(), "nobody on B listens to 91 at set-up");
+
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![gt], "late entry hands B the call's GROUP_TX");
+        assert!(state.inner.read().await.calls[&id].peers.contains(&b));
+
+        handle_packet(state.clone(), a, voice(&id)).await;
+        assert_eq!(drain(&mut b_rx), vec![voice(&id)], "the rest of the over reaches B");
+        handle_packet(state.clone(), a, idle(&id)).await;
+        assert_eq!(drain(&mut b_rx), vec![idle(&id)], "and so does its end");
+    }
+
+    #[tokio::test]
+    async fn without_late_entry_voice_would_not_reach_a_new_member() {
+        // The behaviour this change replaces, pinned from the other side: a
+        // member that was never added to the call does not get its voice.
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[92]).await;
+        handle_packet(state.clone(), a, voice(&id)).await;
+        assert!(drain(&mut b_rx).is_empty(), "a member of another group hears nothing");
+    }
+
+    #[tokio::test]
+    async fn switching_talkgroups_away_and_back_in_one_over() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[92]).await;
+        let (id, gt) = start_call(&state, a, 91, 0).await;
+        assert!(drain(&mut b_rx).is_empty());
+
+        // 92 → 91: joins the running call.
+        sub(&state, b, SUB_DEAFFILIATE, 7001, &[92]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        handle_packet(state.clone(), a, voice(&id)).await;
+        assert_eq!(drain(&mut b_rx), vec![gt, voice(&id)]);
+
+        // 91 → 92 → 91 within the same over: B stays in the call, no second header.
+        sub(&state, b, SUB_DEAFFILIATE, 7001, &[91]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[92]).await;
+        handle_packet(state.clone(), a, voice(&id)).await;
+        sub(&state, b, SUB_DEAFFILIATE, 7001, &[92]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        handle_packet(state.clone(), a, voice(&id)).await;
+        let got = drain(&mut b_rx);
+        assert_eq!(group_tx_count(&got), 0, "already a participant: no repeated GROUP_TX");
+        assert_eq!(got, vec![voice(&id), voice(&id)], "voice keeps flowing to B until the over ends");
+
+        // The next over is routed by affiliation again: B is in 91, so it is a target.
+        handle_packet(state.clone(), a, idle(&id)).await;
+        assert_eq!(drain(&mut b_rx), vec![idle(&id)]);
+        let (_, next) = start_call(&state, a, 91, 0).await;
+        assert_eq!(drain(&mut b_rx), vec![next]);
+    }
+
+    #[tokio::test]
+    async fn switching_away_for_good_leaves_the_next_over_out() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[91]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        drain(&mut b_rx);
+        sub(&state, b, SUB_DEAFFILIATE, 7001, &[91]).await;
+        handle_packet(state.clone(), a, idle(&id)).await;
+        drain(&mut b_rx);
+        start_call(&state, a, 91, 0).await;
+        assert!(drain(&mut b_rx).is_empty(), "no member of 91 left on B");
+    }
+
+    #[tokio::test]
+    async fn an_issi_registering_on_another_bts_brings_its_groups_into_the_call() {
+        // The handover case: 7001 listens on A, moves to B mid-over.
+        let state = strict_state();
+        let (talker, _t_rx) = bts(&state).await;
+        let (a, mut a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, a, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, a, SUB_AFFILIATE, 7001, &[91]).await;
+        let (id, gt) = start_call(&state, talker, 91, 0).await;
+        assert_eq!(drain(&mut a_rx), vec![gt.clone()]);
+        assert!(drain(&mut b_rx).is_empty());
+
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        assert_eq!(drain(&mut b_rx), vec![gt], "the registration keeps 91, so B joins the call");
+        handle_packet(state.clone(), talker, voice(&id)).await;
+        assert_eq!(drain(&mut b_rx), vec![voice(&id)]);
+        assert_eq!(drain(&mut a_rx), vec![voice(&id)], "A stays in the over it was part of");
+    }
+
+    #[tokio::test]
+    async fn a_reregistration_also_joins_the_call() {
+        let state = strict_state();
+        let (talker, _t_rx) = bts(&state).await;
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, a, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, a, SUB_AFFILIATE, 7001, &[91]).await;
+        let (_, gt) = start_call(&state, talker, 91, 0).await;
+        sub(&state, b, protocol::SUB_REREGISTER, 7001, &[]).await;
+        assert_eq!(drain(&mut b_rx), vec![gt]);
+    }
+
+    #[tokio::test]
+    async fn a_connection_already_in_the_call_gets_no_second_header() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        let (_, gt) = start_call(&state, a, 91, 0).await;
+        assert_eq!(drain(&mut b_rx), vec![gt]);
+        // A second radio on B joins 91 during the over.
+        sub(&state, b, SUB_REGISTER, 7002, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7002, &[91]).await;
+        assert!(drain(&mut b_rx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_talkers_own_connection_is_never_sent_its_own_call() {
+        let state = strict_state();
+        let (a, mut a_rx) = bts(&state).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        sub(&state, a, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, a, SUB_AFFILIATE, 7001, &[91]).await;
+        assert!(drain(&mut a_rx).is_empty());
+        assert!(!state.inner.read().await.calls[&id].peers.contains(&a));
+    }
+
+    #[tokio::test]
+    async fn affiliating_to_another_group_joins_nothing() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[92, 93]).await;
+        assert!(drain(&mut b_rx).is_empty());
+        assert!(!state.inner.read().await.calls[&id].peers.contains(&b));
+    }
+
+    #[tokio::test]
+    async fn only_calls_to_the_joined_groups_are_entered() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (c, _c_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let (_, gt91) = start_call(&state, a, 91, 0).await;
+        let id92 = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), c, protocol::build_group_tx(&id92, 2002, 92, 0)).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![gt91]);
+        sub(&state, b, SUB_AFFILIATE, 7001, &[92]).await;
+        assert_eq!(drain(&mut b_rx), vec![protocol::build_group_tx(&id92, 2002, 92, 0)]);
+    }
+
+    #[tokio::test]
+    async fn the_header_comes_in_each_joiners_own_layout() {
+        let state = strict_state();
+        let (a, _a_rx) = connect(&state, ClientMode::Basestation, ConnVersion::V1).await;
+        let (v0, mut v0_rx) = connect(&state, ClientMode::Basestation, ConnVersion::V0).await;
+        let (v1, mut v1_rx) = connect(&state, ClientMode::Basestation, ConnVersion::V1).await;
+        let id = uuid::Uuid::new_v4();
+        let base = protocol::build_group_tx(&id, 1001, 91, 0);
+        let mut named = base.clone();
+        let mut name = [0u8; 34];
+        name[..3].copy_from_slice(b"BOB");
+        named.extend_from_slice(&name);
+        handle_packet(state.clone(), a, named.clone()).await;
+        for (client, issi) in [(v0, 7001), (v1, 7002)] {
+            sub(&state, client, SUB_REGISTER, issi, &[]).await;
+            sub(&state, client, SUB_AFFILIATE, issi, &[91]).await;
+        }
+        assert_eq!(drain(&mut v0_rx), vec![base], "v0: talker name stripped");
+        assert_eq!(drain(&mut v1_rx), vec![named], "v1: as the talker sent it");
+    }
+
+    #[tokio::test]
+    async fn no_late_entry_once_the_over_has_ended() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        handle_packet(state.clone(), a, idle(&id)).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert!(drain(&mut b_rx).is_empty());
+        assert!(state.inner.read().await.group_tx_raw.is_empty(), "the ended call's header is pruned");
+    }
+
+    #[tokio::test]
+    async fn a_preempted_call_is_not_entered_only_the_one_that_won() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (c, _c_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        start_call(&state, a, 91, 0).await;
+        let winner = uuid::Uuid::new_v4();
+        let winner_gt = protocol::build_group_tx(&winner, 2002, 91, 5);
+        handle_packet(state.clone(), c, winner_gt.clone()).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![winner_gt]);
+        assert_eq!(state.inner.read().await.group_tx_raw.len(), 1, "the pre-empted call's header is pruned");
+    }
+
+    #[tokio::test]
+    async fn a_new_talker_in_the_same_call_is_what_a_late_joiner_gets() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), a, protocol::build_group_tx(&id, 1001, 91, 0)).await;
+        let second = protocol::build_group_tx(&id, 1002, 91, 0);
+        handle_packet(state.clone(), a, second.clone()).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![second]);
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_stored_header_gets_a_synthesized_one() {
+        // A SIP-bridged group call is set up by the bridge, not by a GROUP_TX.
+        let state = strict_state();
+        let (b, mut b_rx) = bts(&state).await;
+        let (owner, _o_rx) = connect(&state, ClientMode::Terminal, ConnVersion::V1).await;
+        let id = uuid::Uuid::new_v4();
+        state.inner.write().await.calls.insert(id, ActiveCall {
+            kind: CallKind::Group, owner, source_issi: 0, destination: 91, priority: 0,
+            peers: HashSet::new(), started_at: Instant::now(), last_activity_ms: ActiveCall::new_activity(),
+        });
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![protocol::build_group_tx(&id, 0, 91, 0)]);
+    }
+
+    #[tokio::test]
+    async fn an_emergency_call_reaches_a_late_basestation_as_sent_and_a_late_console_raised() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let (console, mut console_rx) = bts(&state).await;
+        let id = uuid::Uuid::new_v4();
+        let gt = protocol::build_group_tx(&id, 1001, 91, 0);
+        handle_packet(state.clone(), a, gt.clone()).await;
+        emergency_raised(&state, 1001).await;
+        // A console that connects only after the alarm, then listens to 91.
+        state.inner.write().await.consoles.insert(console);
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        sub(&state, console, SUB_REGISTER, 9001, &[]).await;
+        sub(&state, console, SUB_AFFILIATE, 9001, &[91]).await;
+        assert_eq!(drain(&mut b_rx), vec![gt.clone()], "a Basestation gets what the others got");
+        assert_eq!(drain(&mut console_rx), vec![with_emergency_priority(&gt)], "a console is told by the priority");
+    }
+
+    #[tokio::test]
+    async fn an_affiliation_from_a_non_owner_joins_nothing() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (owner, _o_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        sub(&state, owner, SUB_REGISTER, 7001, &[]).await;
+        start_call(&state, a, 91, 0).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        assert!(drain(&mut b_rx).is_empty(), "7001 belongs to another connection");
+    }
+
+    #[tokio::test]
+    async fn a_federation_peer_link_is_left_to_its_routes() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (peer, mut peer_rx) = connect(&state, ClientMode::Peer, ConnVersion::V1).await;
+        start_call(&state, a, 91, 0).await;
+        sub(&state, peer, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, peer, SUB_AFFILIATE, 7001, &[91]).await;
+        assert_eq!(group_tx_count(&drain(&mut peer_rx)), 0);
+    }
+
+    #[tokio::test]
+    async fn a_late_joiner_cannot_take_over_the_floor_by_sending_voice() {
+        let state = strict_state();
+        let (a, mut a_rx) = bts(&state).await;
+        let (b, _b_rx) = bts(&state).await;
+        let (id, _) = start_call(&state, a, 91, 0).await;
+        sub(&state, b, SUB_REGISTER, 7001, &[]).await;
+        sub(&state, b, SUB_AFFILIATE, 7001, &[91]).await;
+        handle_packet(state.clone(), b, voice(&id)).await;
+        assert!(drain(&mut a_rx).is_empty(), "only the talker's connection injects voice");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn under_concurrent_voice_the_header_always_comes_first() {
+        // Voice streams in on other threads while Basestations join: none of
+        // them may see a frame of the call before its GROUP_TX.
+        for _round in 0..50 {
+            let state = strict_state();
+            let (a, _a_rx) = bts(&state).await;
+            let (id, gt) = start_call(&state, a, 91, 0).await;
+            let talker = {
+                let state = state.clone();
+                tokio::spawn(async move {
+                    for _ in 0..200 {
+                        handle_packet(state.clone(), a, voice(&id)).await;
+                        tokio::task::yield_now().await;
+                    }
+                })
+            };
+            let mut joiners = Vec::new();
+            for n in 0..8u32 {
+                let (bs, rx) = bts(&state).await;
+                let state = state.clone();
+                joiners.push((rx, tokio::spawn(async move {
+                    sub(&state, bs, SUB_REGISTER, 7000 + n, &[]).await;
+                    sub(&state, bs, SUB_AFFILIATE, 7000 + n, &[91]).await;
+                })));
+            }
+            talker.await.unwrap();
+            for (mut rx, join) in joiners {
+                join.await.unwrap();
+                let got = drain(&mut rx);
+                assert_eq!(got.first(), Some(&gt), "first packet is the header");
+                assert_eq!(group_tx_count(&got), 1);
+                assert!(got[1..].iter().all(|p| *p == voice(&id)));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn many_basestations_joining_one_over_each_get_one_header() {
+        let state = strict_state();
+        let (a, _a_rx) = bts(&state).await;
+        let (id, gt) = start_call(&state, a, 91, 0).await;
+        let mut joiners = Vec::new();
+        for n in 0..10u32 {
+            let (bs, rx) = bts(&state).await;
+            sub(&state, bs, SUB_REGISTER, 7000 + n, &[]).await;
+            sub(&state, bs, SUB_AFFILIATE, 7000 + n, &[91]).await;
+            sub(&state, bs, SUB_AFFILIATE, 7000 + n, &[91]).await;
+            joiners.push(rx);
+        }
+        handle_packet(state.clone(), a, voice(&id)).await;
+        for rx in &mut joiners {
+            assert_eq!(drain(rx), vec![gt.clone(), voice(&id)]);
+        }
+        assert_eq!(state.inner.read().await.calls[&id].peers.len(), 10);
     }
 }

@@ -158,6 +158,11 @@ pub struct Inner {
     pub group_clients: HashMap<u32, HashSet<ClientId>>,
     pub calls: HashMap<Uuid, ActiveCall>,
     pub group_floor: HashMap<u32, Uuid>,
+    /// The GROUP_TX that set up each running group call (as it arrived), so a
+    /// connection that joins the call's group while it runs can be handed the
+    /// same header (late entry, see `router::late_entry`). Entries whose call
+    /// is gone are pruned whenever a GROUP_TX or a late entry touches this.
+    pub group_tx_raw: HashMap<Uuid, Vec<u8>>,
     pub sds_routes: HashMap<Uuid, SdsRoute>,
     pub digest_nonces: HashMap<String, Instant>,
     /// Session token -> what the discovery GET announced: mode, version (`None`
