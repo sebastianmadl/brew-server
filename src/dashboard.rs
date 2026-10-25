@@ -478,9 +478,9 @@ static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/registrations">Registration event log &rarr;</a></p>
 <p class=map-note style="color:#8fa2b8;font-size:12px">Who is connected and registered right now, not a history of events. Refreshes every 5s.</p>
 
-<section class=panel><h2>Cells<span class=backlink id=cell-count></span></h2><table><thead><tr><th>Cell</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Capabilities</th><th>Basestation address</th><th>Connected</th><th>Registered ISSIs</th></tr></thead><tbody id=cells></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">Cells the Basestations announce (FlowStation with the <code>bts-info</code> extension). Named <i>login/cell</i>: the Brew login of the Basestation and the cell's number within it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan; the name is only a label here. Registered ISSIs are counted per Basestation.</p></section>
-
 <section class=panel><h2>Brew Connections<span class=backlink id=bc-count></span></h2><table><thead><tr><th>ID</th><th>Station</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Registered ISSIs</th><th>Cells</th></tr></thead><tbody id=brew-clients></tbody></table></section>
+
+<section class=panel><h2>Cells<span class=backlink id=cell-count></span></h2><table><thead><tr><th>Cell</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Capabilities</th><th>Basestation address</th><th>Connected</th><th>Registered ISSIs</th></tr></thead><tbody id=cells></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">Cells the Basestations announce (FlowStation with the <code>bts-info</code> extension). Named <i>login/cell</i>: the Brew login of the Basestation and the cell's number within it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan; the name is only a label here. Registered ISSIs are counted per Basestation.</p></section>
 
 <section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Cell</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
 
@@ -1636,6 +1636,12 @@ setInterval(load,2000);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connections_page_shows_the_connections_before_the_cells() {
+        let at = |h: &str| CONNECTIONS_HTML.find(h).unwrap_or_else(|| panic!("{h} missing"));
+        assert!(at("<h2>Brew Connections") < at("<h2>Cells"));
+    }
 
     #[tokio::test]
     async fn ms_cells_lists_registered_subscribers_on_their_cell() {
