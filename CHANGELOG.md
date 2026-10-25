@@ -2,6 +2,25 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.18.0 adds:
+
+- **Late entry for group calls.** A Basestation that affiliates to a group
+  (or registers an ISSI that keeps the group) in the middle of an over now
+  receives the running call's `GROUP_TX` and its voice from then on, instead
+  of hearing nothing until the next over. Sent in the connection's own layout
+  (v0/v1) before any voice frame; federation peer links, the talker's own
+  connection and connections already in the call are skipped. This also
+  covers an announced cell reselection. See [docs/Late-Entry.md](docs/Late-Entry.md).
+- **Optional roaming kick.** With `[roaming] kick_old_issi = 1`, a new
+  registration drops the ISSI from every other Basestation's list and kicks
+  it there over the control channel after `kick_delay_ms`. Off by default.
+  See [docs/Roaming.md](docs/Roaming.md).
+- **Choppy voice fixed.** `TCP_NODELAY` is set on Brew connections (plain and
+  TLS) and outgoing federation links, so Nagle no longer bunches the 60 ms
+  voice frames.
+- **HA heartbeat ping-pong fixed.** A node sends a heartbeat only on its
+  tick or a state change, not in answer to every received one.
+
 Version 1.17.0 adds:
 
 - **Dead Basestation and Terminal connections are dropped.** Only federation
