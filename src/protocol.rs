@@ -115,6 +115,12 @@ pub const SERVICE_HO_RESULT: u8 = 0x17;
 /// `ms-cell` extension.
 pub const SERVICE_MS_CELL: u8 = 0x18;
 
+/// `CLASS_SERVICE` type the server sends to the Basestation an ISSI was
+/// registered on when it registers on another Basestation without a handover
+/// prepared here (`{"issi":N}`): the radio has left. Only sent to a
+/// Basestation that announced the `ms-moved` capability (see `handover`).
+pub const SERVICE_MS_MOVED: u8 = 0x19;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());

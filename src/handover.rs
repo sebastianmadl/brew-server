@@ -435,8 +435,43 @@ pub fn kick_guard(config: &crate::config::Config) -> Duration {
 }
 
 fn has_capability(inner: &Inner, id: ClientId) -> bool {
+    announced(inner, id, CAPABILITY)
+}
+
+/// Capability in `SERVICE_BTS_INFO` for `SERVICE_MS_MOVED`.
+pub const CAPABILITY_MS_MOVED: &str = "ms-moved";
+
+/// Whether Basestation `id` announced `capability` in its `SERVICE_BTS_INFO`.
+pub fn announced(inner: &Inner, id: ClientId, capability: &str) -> bool {
     inner.clients.get(&id).is_some_and(|c| c.mode == ClientMode::Basestation)
-        && inner.carriers.info(id).is_some_and(|info| info.capabilities.iter().any(|c| c == CAPABILITY))
+        && inner.carriers.info(id).is_some_and(|info| info.capabilities.iter().any(|c| c == capability))
+}
+
+/// A radio registered on `to` while it was registered on `from`, without a
+/// handover prepared here (an unannounced cell change, or announced to a cell
+/// this server did not prepare). Returns what the caller does once the lock
+/// is released:
+/// - `SERVICE_MS_MOVED` to `from`, if it announced `ms-moved`: it stops serving
+///   the radio (no SUB_DEREGISTER expected);
+/// - the group calls the radio is talking in through `from`, to be ended, if
+///   `to` announced `handover-v1`: the talker is gone from `from`, and `to`
+///   may now give it the floor (TS 100 392-2 clause 14.5.2.2.1 a), the SwMI
+///   controls who transmits). Without this the call would hold the group's
+///   floor until `from` noticed the silence.
+pub fn radio_moved(inner: &Inner, issi: u32, from: ClientId, to: ClientId) -> (Option<Vec<u8>>, Vec<uuid::Uuid>) {
+    let notice = announced(inner, from, CAPABILITY_MS_MOVED)
+        .then(|| protocol::build_service(protocol::SERVICE_MS_MOVED, &serde_json::json!({ "issi": issi }).to_string()));
+    let talking = if has_capability(inner, to) {
+        inner
+            .calls
+            .iter()
+            .filter(|(_, c)| c.kind == crate::state::CallKind::Group && c.owner == from && c.source_issi == issi)
+            .map(|(id, _)| *id)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (notice, talking)
 }
 
 fn send(inner: &Inner, to: ClientId, packet: Vec<u8>) {
@@ -580,6 +615,18 @@ mod tests {
         let caps = if capable { r#"["handover-v1"]"# } else { "[]" };
         let json = format!(r#"{{"mcc":232,"mnc":5,"cells":[{{"carrier":{carrier},"carrier_ext":{EXT},"location_area":{carrier}}}],"capabilities":{caps}}}"#);
         crate::router::handle_packet(state.clone(), id, protocol::build_service(protocol::SERVICE_BTS_INFO, &json)).await;
+        (id, rx)
+    }
+
+    /// A Basestation with exactly these capabilities.
+    async fn bts_with(state: &Arc<AppState>, carrier: u16, caps: &[&str]) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (id, rx) = connect(state, ClientMode::Basestation).await;
+        let json = serde_json::json!({
+            "mcc": 232, "mnc": 5,
+            "cells": [{ "carrier": carrier, "carrier_ext": EXT, "location_area": carrier }],
+            "capabilities": caps,
+        });
+        crate::router::handle_packet(state.clone(), id, protocol::build_service(protocol::SERVICE_BTS_INFO, &json.to_string())).await;
         (id, rx)
     }
 
@@ -810,6 +857,74 @@ mod tests {
         let tid = got[0].1["transaction_id"].as_u64().unwrap() as u32;
         packet(&state, b, result(tid, 2320002, 0)).await;
         assert!(services(&mut a_rx)[0].1.get("channel").is_none());
+    }
+
+    /// A radio registering elsewhere without a handover: the Basestation it
+    /// left hears of it only if it announced `ms-moved`, and not after a
+    /// handover prepared here (it sent the radio away itself).
+    #[tokio::test]
+    async fn the_basestation_a_radio_left_unprepared_is_told() {
+        let state = test_state(2000);
+        let (a, mut a_rx) = bts_with(&state, 1528, &["handover-v1", CAPABILITY_MS_MOVED]).await;
+        let (old, mut old_rx) = bts_with(&state, 1532, &["handover-v1"]).await;
+        let (b, mut b_rx) = bts_with(&state, 1530, &["handover-v1", CAPABILITY_MS_MOVED]).await;
+        packet(&state, a, protocol::build_subscriber_message(SUB_REGISTER, 2320001, &[])).await;
+        packet(&state, old, protocol::build_subscriber_message(SUB_REGISTER, 2320002, &[])).await;
+        drain(&mut a_rx);
+        drain(&mut old_rx);
+
+        packet(&state, b, protocol::build_subscriber_message(SUB_REGISTER, 2320001, &[])).await;
+        assert_eq!(services(&mut a_rx), vec![(protocol::SERVICE_MS_MOVED, serde_json::json!({ "issi": 2320001 }))]);
+        packet(&state, b, protocol::build_subscriber_message(SUB_REGISTER, 2320002, &[])).await;
+        assert!(services(&mut old_rx).is_empty(), "no ms-moved capability, nothing new");
+
+        // Back to A through a prepared handover: B is not told.
+        packet(&state, b, forward_reg(5, 2320001, 1528)).await;
+        let tid = services(&mut a_rx)[0].1["transaction_id"].as_u64().unwrap() as u32;
+        packet(&state, a, protocol::build_subscriber_message(SUB_REGISTER, 2320001, &[])).await;
+        packet(&state, a, result(tid, 2320001, 0)).await;
+        let got = services(&mut b_rx);
+        let types: Vec<u8> = got.iter().map(|(t, _)| *t).collect();
+        assert_eq!(types, vec![protocol::SERVICE_HO_RESULT], "a radio handed over is not reported as gone");
+    }
+
+    /// The talker of a call through A shows up on B: its over through A ends at
+    /// once (the listeners get GROUP_IDLE), so B's GROUP_TX for the same radio
+    /// takes the group floor. Only when B speaks `handover-v1`.
+    #[tokio::test]
+    async fn a_talker_that_left_unprepared_has_its_over_ended() {
+        for capable in [true, false] {
+            let state = test_state(2000);
+            let (a, _a_rx) = bts_with(&state, 1528, &["handover-v1"]).await;
+            let b_caps: &[&str] = if capable { &["handover-v1"] } else { &[] };
+            let (b, _b_rx) = bts_with(&state, 1530, b_caps).await;
+            let (c, mut c_rx) = bts(&state, 1532, false).await;
+            packet(&state, a, protocol::build_subscriber_message(SUB_REGISTER, 2320001, &[])).await;
+            packet(&state, a, protocol::build_subscriber_message(SUB_AFFILIATE, 2320001, &[91])).await;
+            packet(&state, c, protocol::build_subscriber_message(SUB_REGISTER, 2320009, &[])).await;
+            packet(&state, c, protocol::build_subscriber_message(SUB_AFFILIATE, 2320009, &[91, 92])).await;
+            let over = Uuid::new_v4();
+            packet(&state, a, protocol::build_group_tx(&over, 2320001, 91, 0)).await;
+            // Another radio's over on A is not touched.
+            packet(&state, a, protocol::build_subscriber_message(SUB_REGISTER, 2320002, &[])).await;
+            packet(&state, a, protocol::build_subscriber_message(SUB_AFFILIATE, 2320002, &[92])).await;
+            let other = Uuid::new_v4();
+            packet(&state, a, protocol::build_group_tx(&other, 2320002, 92, 0)).await;
+            drain(&mut c_rx);
+
+            packet(&state, b, protocol::build_subscriber_message(SUB_REGISTER, 2320001, &[])).await;
+            let to_c = drain(&mut c_rx);
+            let idle = to_c.iter().any(|p| p.len() > 1 && p[0] == protocol::CLASS_CALL_CONTROL && p[1] == protocol::CALL_GROUP_IDLE);
+            assert_eq!(idle, capable, "GROUP_IDLE to the listeners (B capable: {capable})");
+            assert_eq!(state.inner.read().await.calls.contains_key(&over), !capable);
+            assert!(state.inner.read().await.calls.contains_key(&other), "another talker's over runs on");
+
+            let again = Uuid::new_v4();
+            packet(&state, b, protocol::build_group_tx(&again, 2320001, 91, 0)).await;
+            let to_c = drain(&mut c_rx);
+            let tx = to_c.iter().any(|p| p.len() > 1 && p[0] == protocol::CLASS_CALL_CONTROL && p[1] == protocol::CALL_GROUP_TX);
+            assert_eq!(tx, capable, "the radio talks on from B");
+        }
     }
 
     #[tokio::test]

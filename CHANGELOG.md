@@ -42,6 +42,12 @@ Version 1.20.0 adds:
 - **Cell Change Log.** The Connections page lists every cell change of a
   radio with from / to cell and how (announced, not announced, within
   station); kept in memory, 200 entries.
+- **Unannounced cell change.** When a radio registers on another Basestation
+  without a prepared handover, the Basestation it left gets
+  `SERVICE_MS_MOVED` if it asked for it (`ms-moved` capability and
+  extension), and an over the radio was talking in there ends, so it can talk
+  on from the new Basestation (which must speak `handover-v1`). See
+  [docs/Roaming.md](docs/Roaming.md).
 - **Backward compatible.** All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older
   Basestations see no change.

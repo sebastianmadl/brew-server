@@ -606,7 +606,7 @@ mod tests {
 
         // FlowStation upgrades without any X-Brew header: a Basestation.
         let (_bs, resp) = upgrade(None).await.unwrap();
-        assert_eq!(resp.headers()["X-Brew-Extensions"], "bts-info, handover-v1, ms-cell");
+        assert_eq!(resp.headers()["X-Brew-Extensions"], "bts-info, handover-v1, ms-cell, ms-moved");
         let (_peer, resp) = upgrade(Some("Peer")).await.unwrap();
         assert!(!resp.headers().contains_key("X-Brew-Extensions"));
         let (_terminal, resp) = upgrade(Some("Terminal")).await.unwrap();

@@ -932,6 +932,9 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
     // released (mirrors how position decoding logs via `state.telemetry`
     // outside of the `inner` lock elsewhere in this module).
     let mut ms_reg_event: Option<&'static str> = None;
+    // A radio that left another Basestation unprepared: what to tell it and
+    // which of its overs there to end (see `handover::radio_moved`).
+    let mut moved: Option<(ClientId, Option<Vec<u8>>, Vec<uuid::Uuid>)> = None;
     // Whatever registers here -- a Basestation, a Terminal or a legacy peer
     // link, for everything behind it -- is a local registration, stamped with
     // this server's registration clock (see `fedroute`).
@@ -947,6 +950,10 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
             if let Some(o) = old.as_ref().filter(|o| o.client_id != source && o.route.path.is_empty()) {
                 let handed_over = inner.handovers.handed_over_to(msg.issi, source, Instant::now(), crate::handover::kick_guard(&state.config));
                 crate::roaming_log::registration_moved(&mut inner, msg.issi, o.client_id, source, handed_over);
+                if !handed_over {
+                    let (notice, talking) = crate::handover::radio_moved(&inner, msg.issi, o.client_id, source);
+                    moved = Some((o.client_id, notice, talking));
+                }
             }
             if source_mode == ClientMode::Terminal { ms_reg_event = Some("register"); }
             Some(local(&mut inner, old.as_ref().map(|o| o.groups.clone()).unwrap_or_default()))
@@ -1016,7 +1023,21 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
     for (tx, packet) in late_entry(&mut inner, source, &joined) {
         let _ = tx.send(packet);
     }
+    if let Some((from, Some(notice), _)) = &moved {
+        if let Some(c) = inner.clients.get(from) {
+            let _ = c.tx.send(notice.clone());
+        }
+        info!(%from, to=%source, issi=msg.issi, "handover: radio left unprepared, old Basestation told");
+    }
     drop(inner);
+    // Its overs on the Basestation it left end now, before this connection's
+    // next message (a GROUP_TX of the same radio) is handled.
+    if let Some((from, _, talking)) = moved {
+        for id in talking {
+            info!(%from, to=%source, issi=msg.issi, uuid=%id, "handover: talker left its Basestation, ending its over there");
+            end_call(state, from, id, protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &id, 0)).await;
+        }
+    }
     // Log Terminal-mode (actual MS) registration lifecycle events to the same
     // dashboard registration log Basestation telemetry registrations use, so
     // an MS registering directly over the Brew protocol is visible there too.

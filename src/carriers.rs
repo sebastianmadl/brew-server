@@ -24,9 +24,10 @@ use tracing::{info, warn};
 pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 
 /// What this server offers in `X_BREW_EXTENSIONS`: `bts-info`
-/// (`SERVICE_BTS_INFO`), `handover-v1` (the handover messages, see `handover`)
-/// and `ms-cell` (`SERVICE_MS_CELL`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell";
+/// (`SERVICE_BTS_INFO`), `handover-v1` (the handover messages, see `handover`),
+/// `ms-cell` (`SERVICE_MS_CELL`) and `ms-moved` (`SERVICE_MS_MOVED`, to a
+/// Basestation that also names it in its capabilities).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved";
 
 /// Most cells one `SERVICE_BTS_INFO` may announce (a FlowStation station runs
 /// at most a handful of SDRs on one Brew connection).
@@ -584,7 +585,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell"]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED]);
     }
 
     #[tokio::test]

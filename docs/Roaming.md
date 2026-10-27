@@ -78,6 +78,27 @@ that carrier is in that location area. A "no target" answer carries a
 `reason`: `gone` (the target Basestation went away), `unknown`, `own_cell`,
 `not_capable` or `no_network`.
 
+## Unannounced cell change
+
+When a radio registers on another Basestation without a prepared handover,
+the Basestation it left does not know that it went. Two things change, both
+only between Basestations that opted in:
+
+- **The old Basestation is told.** If it announced the `ms-moved` capability
+  (the server offers the `ms-moved` extension), it gets
+  `SERVICE_MS_MOVED` (`0x19`) with `{"issi":N}` and stops serving the radio
+  without deregistering it (log line `handover: radio left unprepared, old
+  Basestation told`).
+- **A talker's over there ends.** If the radio was the talker of a group call
+  that the old Basestation owns and the new Basestation speaks `handover-v1`,
+  the over ends at once: the listeners get `GROUP_IDLE`, the group floor is
+  free, and the radio's next `GROUP_TX` from the new Basestation goes through
+  (log line `handover: talker left its Basestation, ending its over there`).
+  Before, the floor stayed taken until the old Basestation noticed the silent
+  uplink, and the radio's PTT on the new cell was denied.
+
+A prepared handover (U-PREPARE relayed) is not reported this way.
+
 ## Known limit
 
 The roam-back check runs just before the kick is sent. If a radio returns to
