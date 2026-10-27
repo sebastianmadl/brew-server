@@ -6,7 +6,45 @@ Version 1.20.0 adds:
 
 - **Server name.** `[header] servername` (default `"Tetra Network Monitor"`)
   sets the main dashboard heading and the browser tab title of every
-  dashboard page.
+  dashboard page:
+
+  ```toml
+  [header]
+  servername = "Tetra Network Monitor"
+  ```
+
+- **Carrier registry.** A Basestation that is offered the `bts-info`
+  extension (`X-Brew-Extensions` header on the WebSocket upgrade) announces
+  its cells (MCC, MNC, carrier, band plan, location area, capabilities) with
+  the new `SERVICE_BTS_INFO` message. The server keeps a table of which
+  Basestation serves which carrier; duplicate carriers are logged and marked
+  on the dashboard (the newest announcement serves).
+- **Cells on the Connections page.** Cells are named `<login>/<cell>`; a
+  "Cells" panel lists carrier, downlink frequency, location area, MCC/MNC,
+  capabilities, address and ISSIs per cell.
+- **Announced handover relay.** Basestations with the `handover-v1`
+  capability can prepare an announced cell change on the target Basestation
+  through the server (`SERVICE_HO_PREPARE`, `SERVICE_HO_FORWARD_REG`,
+  `SERVICE_HO_RESULT`). The target is found by carrier and, when given, its
+  location area; when there is none the serving cell is told why (unknown,
+  gone, own carrier, timeout). The roaming kick skips radios with a handover
+  in flight. Timeout:
+
+  ```toml
+  [handover]
+  timeout_ms = 2000
+  ```
+
+- **Cell of each radio.** With the `ms-cell` extension a Basestation reports
+  the cell a radio registered on (`SERVICE_MS_CELL`). Shown in the subscriber
+  tables (Connections page and main dashboard, `/api/ms-cells`) and in the
+  registration log.
+- **Cell Change Log.** The Connections page lists every cell change of a
+  radio with from / to cell and how (announced, not announced, within
+  station); kept in memory, 200 entries.
+- **Backward compatible.** All new messages are sent only to Basestations
+  that were offered the matching extension; TetraPack, Brandmeister and older
+  Basestations see no change.
 
 Version 1.18.0 adds:
 

@@ -16,6 +16,16 @@ Related Projects:
 
 **Configuration and feature docs:** see the [wiki](https://github.com/ysamouhos/brew-server/wiki)
 
+## Server name
+
+The dashboard heading and the browser tab titles use the server name
+(default "Tetra Network Monitor"). Set your own in the config:
+
+```toml
+[header]
+servername = "Tetra Network Monitor"
+```
+
 ## Run directly
 
 Requires a Rust toolchain and a C compiler (the vendored ACELP codec in
@@ -42,7 +52,7 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 
 ## More documentation
 
-- [Roaming](docs/Roaming.md) -- kick stale registrations on old Basestations
+- [Roaming](docs/Roaming.md) -- kick stale registrations on old Basestations, announced handover between Basestations
 - [Late entry](docs/Late-Entry.md) -- join running group calls mid-over
 - [ISSI blacklist](docs/ISSI-Blacklist.md)
 - [Basestation locations](docs/Basestation-Locations.md)
