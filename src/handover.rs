@@ -149,6 +149,14 @@ pub struct Request {
     pub target_location_area: Option<u16>,
     /// The registration for the target cell (`SERVICE_HO_FORWARD_REG` only).
     pub sdu: Option<Sdu>,
+    /// Group of the call the MS listens to, when the serving cell offers announced
+    /// type 1 reselection (`"call":{"gssi":N}`). Passed on to the target.
+    pub call_gssi: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct CallMessage {
+    gssi: u32,
 }
 
 #[derive(serde::Deserialize)]
@@ -167,6 +175,8 @@ struct RequestMessage {
     sdu: Option<String>,
     #[serde(default)]
     sdu_len_bits: Option<u16>,
+    #[serde(default)]
+    call: Option<serde_json::Value>,
 }
 
 fn check_issi(issi: u32) -> Result<(), String> {
@@ -175,8 +185,9 @@ fn check_issi(issi: u32) -> Result<(), String> {
 
 /// Parses a request: `{"transaction_id":N,"issi":N,"target_carrier":N,
 /// "target_carrier_ext":N,"target_mcc":N,"target_mnc":N,"target_location_area":N,
-/// "sdu":"hex","sdu_len_bits":N}`.
+/// "sdu":"hex","sdu_len_bits":N,"call":{"gssi":N}}`.
 /// `with_sdu`: a `SERVICE_HO_FORWARD_REG`, which must carry the registration.
+/// A malformed `call` is dropped (the handover goes on as type 2), not refused.
 pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
     let msg: RequestMessage = serde_json::from_str(json).map_err(|e| e.to_string())?;
     check_issi(msg.issi)?;
@@ -190,6 +201,16 @@ pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
         (true, Some(hex), Some(bits)) => Some(Sdu::parse(&hex, bits)?),
         (true, _, _) => return Err("forwarded registration without sdu / sdu_len_bits".into()),
     };
+    let call_gssi = msg
+        .call
+        .filter(|c| !c.is_null())
+        .and_then(|c| match serde_json::from_value::<CallMessage>(c) {
+            Ok(c) if c.gssi <= 0xff_ffff => Some(c.gssi),
+            _ => {
+                warn!(issi = msg.issi, "handover request with a malformed call; passed on without it");
+                None
+            }
+        });
     Ok(Request {
         transaction_id: msg.transaction_id,
         issi: msg.issi,
@@ -199,6 +220,7 @@ pub fn parse_request(json: &str, with_sdu: bool) -> Result<Request, String> {
         target_mnc: msg.target_mnc,
         target_location_area: msg.target_location_area,
         sdu,
+        call_gssi,
     })
 }
 
@@ -210,6 +232,24 @@ pub struct HoResult {
     pub status: Status,
     /// The target's MM answer for D-NEW-CELL, if any.
     pub sdu: Option<Sdu>,
+    /// The target's traffic channel for the call named in the request (type 1).
+    pub channel: Option<Channel>,
+}
+
+/// The target cell's channel for the MS's group call: call identifier (14 bits), carrier
+/// (12 bits, the serving cell's band plan), timeslot 1-4 and usage marker 4-63.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Channel {
+    pub call_id: u16,
+    pub carrier: u16,
+    pub timeslot: u8,
+    pub usage: u8,
+}
+
+impl Channel {
+    fn valid(&self) -> bool {
+        self.call_id <= 0x3fff && self.carrier <= 0xfff && (1..=4).contains(&self.timeslot) && (4..=63).contains(&self.usage)
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -221,10 +261,13 @@ struct ResultMessage {
     sdu: Option<String>,
     #[serde(default)]
     sdu_len_bits: Option<u16>,
+    #[serde(default)]
+    channel: Option<serde_json::Value>,
 }
 
-/// Parses `{"transaction_id":N,"issi":N,"status":N,"sdu":"hex","sdu_len_bits":N}`
-/// (`sdu` / `sdu_len_bits` optional, together).
+/// Parses `{"transaction_id":N,"issi":N,"status":N,"sdu":"hex","sdu_len_bits":N,
+/// "channel":{"call_id":N,"carrier":N,"timeslot":N,"usage":N}}` (`sdu` / `sdu_len_bits`
+/// optional, together; `channel` optional, dropped when malformed or not with status ok).
 pub fn parse_result(json: &str) -> Result<HoResult, String> {
     let msg: ResultMessage = serde_json::from_str(json).map_err(|e| e.to_string())?;
     check_issi(msg.issi)?;
@@ -234,7 +277,18 @@ pub fn parse_result(json: &str) -> Result<HoResult, String> {
         (Some(hex), Some(bits)) => Some(Sdu::parse(&hex, bits)?),
         _ => return Err("sdu and sdu_len_bits go together".into()),
     };
-    Ok(HoResult { transaction_id: msg.transaction_id, issi: msg.issi, status, sdu })
+    let channel = msg
+        .channel
+        .filter(|c| !c.is_null())
+        .and_then(|c| match serde_json::from_value::<Channel>(c) {
+            Ok(c) if c.valid() => Some(c),
+            _ => {
+                warn!(issi = msg.issi, "handover result with a malformed channel; relayed without it");
+                None
+            }
+        })
+        .filter(|_| status == Status::Ok);
+    Ok(HoResult { transaction_id: msg.transaction_id, issi: msg.issi, status, sdu, channel })
 }
 
 fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey, location_area: Option<u16>) -> String {
@@ -253,12 +307,18 @@ fn request_json(req: &Request, transaction_id: u32, key: &CarrierKey, location_a
         v["sdu"] = sdu.hex().into();
         v["sdu_len_bits"] = sdu.len_bits.into();
     }
+    if let Some(gssi) = req.call_gssi {
+        v["call"] = serde_json::json!({ "gssi": gssi });
+    }
     v.to_string()
 }
 
 /// A `SERVICE_HO_RESULT` packet.
-pub fn build_result(transaction_id: u32, issi: u32, status: Status, sdu: Option<&Sdu>) -> Vec<u8> {
-    let v = serde_json::json!({ "transaction_id": transaction_id, "issi": issi, "status": status as u8 });
+pub fn build_result(transaction_id: u32, issi: u32, status: Status, sdu: Option<&Sdu>, channel: Option<&Channel>) -> Vec<u8> {
+    let mut v = serde_json::json!({ "transaction_id": transaction_id, "issi": issi, "status": status as u8 });
+    if let Some(c) = channel {
+        v["channel"] = serde_json::json!(c);
+    }
     result_packet(v, sdu)
 }
 
@@ -450,7 +510,7 @@ pub async fn handle_request(state: &Arc<AppState>, source: ClientId, service_typ
         let mut inner = state.inner.write().await;
         if let Some(p) = inner.handovers.expire(id) {
             warn!(source = %p.source, target = %p.target, issi = p.issi, transaction_id = p.source_transaction, "handover: target did not answer in time");
-            send(&inner, p.source, build_result(p.source_transaction, p.issi, Status::Timeout, None));
+            send(&inner, p.source, build_result(p.source_transaction, p.issi, Status::Timeout, None, None));
         }
     });
 }
@@ -476,7 +536,7 @@ pub async fn handle_result(state: &Arc<AppState>, source: ClientId, json: &str) 
         let keep = kick_guard(&state.config);
         inner.handovers.note_completed(p.issi, source, Instant::now(), keep);
     }
-    send(&inner, p.source, build_result(p.source_transaction, p.issi, result.status, result.sdu.as_ref()));
+    send(&inner, p.source, build_result(p.source_transaction, p.issi, result.status, result.sdu.as_ref(), result.channel.as_ref()));
     info!(source = %p.source, target = %source, issi = p.issi, status = result.status.as_str(),
         ms = p.started.elapsed().as_millis() as u64, "handover: result relayed to the serving Basestation");
 }
@@ -693,6 +753,63 @@ mod tests {
         assert!(inner.subscribers[&2320001].groups.contains(&91));
         assert_eq!(inner.handovers.pending_count(), 0);
         assert!(inner.handovers.recently_handed_over(2320001, Instant::now(), Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn type1_call_and_channel_parse_and_bad_ones_are_dropped() {
+        let base = r#""transaction_id":7,"issi":1,"target_carrier":1530,"target_carrier_ext":268,"sdu":"a1b2c0","sdu_len_bits":18"#;
+        assert_eq!(parse_request(&format!(r#"{{{base},"call":{{"gssi":91}}}}"#), true).unwrap().call_gssi, Some(91));
+        assert_eq!(parse_request(&format!("{{{base}}}"), true).unwrap().call_gssi, None);
+        for bad in [r#""call":{"gssi":16777216}"#, r#""call":{"group":91}"#, r#""call":7"#, r#""call":null"#] {
+            let req = parse_request(&format!("{{{base},{bad}}}"), true).unwrap_or_else(|e| panic!("refused {bad}: {e}"));
+            assert_eq!(req.call_gssi, None, "{bad}");
+        }
+
+        let channel = Channel { call_id: 16383, carrier: 1530, timeslot: 4, usage: 63 };
+        let ok = r#"{"transaction_id":7,"issi":1,"status":0,"channel":{"call_id":16383,"carrier":1530,"timeslot":4,"usage":63}}"#;
+        assert_eq!(parse_result(ok).unwrap().channel, Some(channel));
+        for bad in [
+            r#""call_id":16384,"carrier":1530,"timeslot":2,"usage":9"#,
+            r#""call_id":5,"carrier":4096,"timeslot":2,"usage":9"#,
+            r#""call_id":5,"carrier":1530,"timeslot":0,"usage":9"#,
+            r#""call_id":5,"carrier":1530,"timeslot":5,"usage":9"#,
+            r#""call_id":5,"carrier":1530,"timeslot":2,"usage":3"#,
+            r#""call_id":5,"carrier":1530,"timeslot":2"#,
+        ] {
+            let res = parse_result(&format!(r#"{{"transaction_id":7,"issi":1,"status":0,"channel":{{{bad}}}}}"#)).unwrap();
+            assert_eq!(res.channel, None, "{bad}");
+        }
+        // Only an accepted handover has a channel.
+        let rejected = r#"{"transaction_id":7,"issi":1,"status":1,"channel":{"call_id":5,"carrier":1530,"timeslot":2,"usage":9}}"#;
+        assert_eq!(parse_result(rejected).unwrap().channel, None);
+    }
+
+    /// Announced type 1: the call A names goes to B, B's channel comes back to A.
+    /// Without them nothing new is sent (an older Basestation on either side).
+    #[tokio::test]
+    async fn type1_call_and_channel_are_relayed() {
+        let state = test_state(2000);
+        let (a, mut a_rx) = bts(&state, 1528, true).await;
+        let (b, mut b_rx) = bts(&state, 1530, true).await;
+        let req = protocol::build_service(protocol::SERVICE_HO_FORWARD_REG, &format!(
+            r#"{{"transaction_id":3,"issi":2320001,"target_carrier":1530,"target_carrier_ext":{EXT},"sdu":"a1b2c0","sdu_len_bits":18,"call":{{"gssi":91}}}}"#));
+        packet(&state, a, req).await;
+        let got = services(&mut b_rx);
+        assert_eq!(got[0].1["call"]["gssi"].as_u64(), Some(91));
+        let tid = got[0].1["transaction_id"].as_u64().unwrap() as u32;
+        let res = protocol::build_service(protocol::SERVICE_HO_RESULT, &format!(
+            r#"{{"transaction_id":{tid},"issi":2320001,"status":0,"sdu":"0f80","sdu_len_bits":9,"channel":{{"call_id":12,"carrier":1530,"timeslot":3,"usage":9}}}}"#));
+        packet(&state, b, res).await;
+        let got = services(&mut a_rx);
+        assert_eq!(got[0].1["transaction_id"].as_u64(), Some(3));
+        assert_eq!(got[0].1["channel"], serde_json::json!({ "call_id": 12, "carrier": 1530, "timeslot": 3, "usage": 9 }));
+
+        packet(&state, a, forward_reg(4, 2320002, 1530)).await;
+        let got = services(&mut b_rx);
+        assert!(got[0].1.get("call").is_none());
+        let tid = got[0].1["transaction_id"].as_u64().unwrap() as u32;
+        packet(&state, b, result(tid, 2320002, 0)).await;
+        assert!(services(&mut a_rx)[0].1.get("channel").is_none());
     }
 
     #[tokio::test]
