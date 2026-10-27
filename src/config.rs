@@ -53,6 +53,21 @@ pub struct Config {
     pub roaming: RoamingConfig,
     /// Announced cell changes between Basestations. See `HandoverConfig`.
     pub handover: HandoverConfig,
+    /// Dashboard heading and browser tab titles. See `HeaderConfig`.
+    pub header: HeaderConfig,
+}
+
+/// `[header]`: how the dashboard names this server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeaderConfig {
+    /// Shown as the main dashboard heading and in the browser tab title of
+    /// every page.
+    pub servername: String,
+}
+
+impl Default for HeaderConfig {
+    fn default() -> Self { Self { servername: "Tetra Network Monitor".into() } }
 }
 
 /// `[roaming]`: what happens when a mobile station registers on one
@@ -801,6 +816,7 @@ impl Default for Config {
             ha: HaConfig::default(),
             roaming: RoamingConfig::default(),
             handover: HandoverConfig::default(),
+            header: HeaderConfig::default(),
         }
     }
 }
@@ -1036,5 +1052,11 @@ mod roaming_config_tests {
     fn handover_timeout_defaults_below_the_basestation_fallback() {
         assert_eq!(parse("").unwrap().handover.timeout_ms, 2000);
         assert_eq!(parse("[handover]\ntimeout_ms = 1500\n").unwrap().handover.timeout_ms, 1500);
+    }
+
+    #[test]
+    fn header_servername_defaults_and_parses() {
+        assert_eq!(parse("").unwrap().header.servername, "Tetra Network Monitor");
+        assert_eq!(parse("[header]\nservername = \"My Net\"\n").unwrap().header.servername, "My Net");
     }
 }

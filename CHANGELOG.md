@@ -2,6 +2,12 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.20.0 adds:
+
+- **Server name.** `[header] servername` (default `"Tetra Network Monitor"`)
+  sets the main dashboard heading and the browser tab title of every
+  dashboard page.
+
 Version 1.18.0 adds:
 
 - **Late entry for group calls.** A Basestation that affiliates to a group

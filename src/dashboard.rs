@@ -20,6 +20,23 @@ use std::{collections::HashMap, sync::Arc};
 /// Server version shown under the "Live" indicator in every page header.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Server name from `[header] servername`, HTML-escaped. Set once at startup,
+/// before the first page is built; pages built without it use the default.
+static SERVER_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the name shown as page heading and in the browser tab titles.
+pub fn set_server_name(name: &str) {
+    let _ = SERVER_NAME.set(html_escape(name));
+}
+
+fn server_name() -> &'static str {
+    SERVER_NAME.get_or_init(|| html_escape(&config::HeaderConfig::default().servername))
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
 /// Runs the monitoring dashboard on its own listener (separate from the Brew
 /// API). Gated behind optional HTTP Basic auth and optional TLS via the
 /// `[dashboard]` config section. Returns immediately if disabled.
@@ -226,7 +243,7 @@ fn basic_challenge(realm: &str) -> Response {
 /// The main dashboard HTML with the shared stylesheet substituted in, built
 /// once on first access.
 static INDEX_HTML: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| HTML.replace("__STYLE__", STYLE).replace("__VERSION__", VERSION));
+    std::sync::LazyLock::new(|| HTML.replace("__STYLE__", STYLE).replace("__VERSION__", VERSION).replace("__SERVERNAME__", server_name()));
 
 pub async fn index() -> Html<&'static str> { Html(INDEX_HTML.as_str()) }
 
@@ -237,7 +254,7 @@ pub async fn index() -> Html<&'static str> { Html(INDEX_HTML.as_str()) }
 fn log_page(title: &str, endpoint: &str, extract_js: &str, row_js: &str, columns: &[&str], per_page: usize, empty_msg: &str) -> String {
     let headers: String = columns.iter().map(|c| format!("<th>{c}</th>")).collect();
     let colspan = columns.len();
-    format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{title} - TETRA Network</title>{style}</head><body><header><h1>{title}</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
+    format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{title} - {name}</title>{style}</head><body><header><h1>{title}</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a></p>
 <section class=panel><table><thead><tr>{headers}</tr></thead><tbody id=log></tbody></table><div class=pager id=log-pager></div></section>
 </main><script>
@@ -268,7 +285,7 @@ function draw(){{renderPaged('log',last,x=>{row_js},{per_page},{colspan},'{empty
 async function load(){{try{{const d=await(await fetch('{endpoint}')).json();last={extract_js};draw();$('status').textContent='Live';}}catch(e){{$('status').textContent='Disconnected';}}}}
 load();setInterval(load,2000);
 </script></body></html>"#,
-        title = title, style = STYLE, ver = VERSION, headers = headers, colspan = colspan,
+        title = title, style = STYLE, ver = VERSION, name = server_name(), headers = headers, colspan = colspan,
         row_js = row_js, per_page = per_page, empty_msg = empty_msg,
         endpoint = endpoint, extract_js = extract_js,
     )
@@ -311,7 +328,7 @@ static SMS_CENTER_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
 /// OpenStreetMap base layer using Leaflet (loaded from unpkg CDN). Positions
 /// come only from *textual* beacons; the page explains that binary LIP is not
 /// yet decoded so an empty map is not mistaken for a bug.
-static MAP_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>MS Map - TETRA Network</title>
+static MAP_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>MS Map - {name}</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 {style}
 <style>#map{{height:70vh;border:1px solid #203047;border-radius:12px}}.map-note{{font-size:12px;color:#8fa2b8;margin-top:10px}}.leaflet-popup-content{{color:#0d1826}}.emg-pin{{animation:emgpulse 1.2s ease-in-out infinite}}@keyframes emgpulse{{0%,100%{{box-shadow:0 0 0 0 rgba(229,57,53,.8)}}50%{{box-shadow:0 0 0 14px rgba(229,57,53,0)}}}}.emg-pop{{color:#c62828;font-weight:700}}</style>
@@ -385,11 +402,11 @@ async function load(){{
   }}catch(e){{}}
 }}
 load();setInterval(load,3000);
-</script></body></html>"#, style = STYLE, ver = VERSION));
+</script></body></html>"#, style = STYLE, ver = VERSION, name = server_name()));
 
 /// SIP live panel: registrations, trunks and active calls, polled from
 /// /api/sip every 2s. Renders a clear "disabled" notice when SIP is off.
-static SIP_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>SIP / VoIP - TETRA Network</title>{style}</head><body><header><h1>SIP / VoIP</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
+static SIP_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>SIP / VoIP - {name}</title>{style}</head><body><header><h1>SIP / VoIP</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/sip-config">SIP configuration &rarr;</a></p>
 <div class=banner id=disabled-banner>SIP subsystem is disabled. Enable it in the <code>[sip]</code> section of the config file.</div>
 <section class=cards>
@@ -427,12 +444,12 @@ async function load(){{
   }}catch(e){{$('status').textContent='Disconnected';}}
 }}
 load();setInterval(load,2000);
-</script></body></html>"#, style = STYLE, ver = VERSION));
+</script></body></html>"#, style = STYLE, ver = VERSION, name = server_name()));
 
 /// SIP configuration screen: a read-only view of the provisioned extensions,
 /// trunks and voice routes from the config file, plus an inline explanation
 /// that edits are made in the TOML (which the server hot-reloads).
-static SIP_CONFIG_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>SIP Config - TETRA Network</title>{style}</head><body><header><h1>SIP CONFIGURATION</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
+static SIP_CONFIG_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>SIP Config - {name}</title>{style}</head><body><header><h1>SIP CONFIGURATION</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/sip">SIP live panel &rarr;</a></p>
 <div class=banner id=disabled-banner>SIP subsystem is disabled. Set <code>enabled = true</code> under <code>[sip]</code>.</div>
 <section class=panel><h2>General</h2><table><tbody id=general></tbody></table>
@@ -468,13 +485,13 @@ async function load(){{
   }}catch(e){{$('status').textContent='Disconnected';}}
 }}
 load();setInterval(load,5000);
-</script></body></html>"#, style = STYLE, ver = VERSION));
+</script></body></html>"#, style = STYLE, ver = VERSION, name = server_name()));
 
 /// Live "who's connected now" page: Brew connections, registered mobile
 /// stations, and SIP registrations/trunks. Distinct from `/registrations`,
 /// which is a historical event log (registers/deregisters over time), not a
 /// current-state snapshot.
-static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Connections - TETRA Network</title>{style}</head><body><header><h1>LIVE CONNECTIONS</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
+static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Connections - {name}</title>{style}</head><body><header><h1>LIVE CONNECTIONS</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/registrations">Registration event log &rarr;</a></p>
 <p class=map-note style="color:#8fa2b8;font-size:12px">Who is connected and registered right now, not a history of events. Refreshes every 5s.</p>
 
@@ -522,9 +539,9 @@ async function load(){{
   }}catch(e){{$('status').textContent='Disconnected';}}
 }}
 load();setInterval(load,5000);
-</script></body></html>"#, style = STYLE, ver = VERSION));
+</script></body></html>"#, style = STYLE, ver = VERSION, name = server_name()));
 
-static SETTINGS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Settings - TETRA Network</title>{style}</head><body><header><h1>SETTINGS</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
+static SETTINGS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!(r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Settings - {name}</title>{style}</head><body><header><h1>SETTINGS</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a> &nbsp;·&nbsp; <a class=backlink href="/sip-config">SIP Config (read-only view) &rarr;</a></p>
 <div class=banner id=save-banner></div>
 <p class=map-note style="color:#8fa2b8;font-size:12px">Every save here writes the server's TOML config file and the process restarts within a couple seconds to apply it (the same mechanism as hand-editing the file). A brief connection drop across the restart is expected.</p>
@@ -651,7 +668,7 @@ async function saveRaw(){{
   banner(true,'Saved. Restarting to apply…');
 }}
 loadSip();loadRaw();loadBtsLocs();loadBlk();
-</script></body></html>"#, style = STYLE, ver = VERSION));
+</script></body></html>"#, style = STYLE, ver = VERSION, name = server_name()));
 
 pub async fn calls_page() -> Html<&'static str> { Html(CALLS_HTML.as_str()) }
 pub async fn sds_page() -> Html<&'static str> { Html(SDS_HTML.as_str()) }
@@ -1168,7 +1185,7 @@ pub async fn control_command(
 /// Shared CSS for the dashboard and its sub-pages, so the standalone log pages
 /// match the main dashboard exactly.
 const STYLE: &str = r#"<style>
-:root{font-family:Inter,system-ui,sans-serif;color:#e7edf5;background:#09111c}*{box-sizing:border-box}body{margin:0}header{padding:22px 28px;border-bottom:1px solid #203047;display:flex;justify-content:space-between;align-items:center}h1{font-size:20px;margin:0}.muted{color:#8fa2b8}.wrap{padding:24px;max-width:1500px;margin:auto}.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.card,.panel{background:#101b2a;border:1px solid #203047;border-radius:12px}.card{padding:16px}.n{font-size:28px;font-weight:700;margin-top:6px}.panel{margin-top:16px;padding:18px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:#8fa2b8;margin:0 0 14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #1c2a3c;font-size:13px}th{color:#8fa2b8}.pill{padding:3px 8px;border-radius:99px;background:#203047}.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#52d273;margin-right:7px}.hdr-status{display:flex;flex-direction:column;align-items:flex-end;gap:2px}.ver{font-size:11px;color:#8fa2b8}.hdr-user{display:flex;align-items:center;gap:8px;font-size:12px;color:#cfe0f2}#logout-btn,#login-btn{display:none;background:#203047;color:#e7edf5;border:1px solid #2c405c;border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer}#logout-btn:hover,#login-btn:hover{background:#2c405c}body.not-admin .admin-only{display:none!important}@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px}}
+:root{font-family:Inter,system-ui,sans-serif;color:#e7edf5;background:#09111c}*{box-sizing:border-box}body{margin:0}header{padding:22px 28px;border-bottom:1px solid #203047;display:flex;justify-content:space-between;align-items:center}h1{font-size:20px;margin:0}h1.srvname{text-transform:uppercase}.muted{color:#8fa2b8}.wrap{padding:24px;max-width:1500px;margin:auto}.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.card,.panel{background:#101b2a;border:1px solid #203047;border-radius:12px}.card{padding:16px}.n{font-size:28px;font-weight:700;margin-top:6px}.panel{margin-top:16px;padding:18px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:#8fa2b8;margin:0 0 14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #1c2a3c;font-size:13px}th{color:#8fa2b8}.pill{padding:3px 8px;border-radius:99px;background:#203047}.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#52d273;margin-right:7px}.hdr-status{display:flex;flex-direction:column;align-items:flex-end;gap:2px}.ver{font-size:11px;color:#8fa2b8}.hdr-user{display:flex;align-items:center;gap:8px;font-size:12px;color:#cfe0f2}#logout-btn,#login-btn{display:none;background:#203047;color:#e7edf5;border:1px solid #2c405c;border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer}#logout-btn:hover,#login-btn:hover{background:#2c405c}body.not-admin .admin-only{display:none!important}@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px}}
 .health-ok{background:#173822;color:#52d273}.health-degraded{background:#3a2f12;color:#e8b93d}.health-critical{background:#3a1414;color:#f2545b}.health-unknown{background:#203047;color:#8fa2b8}
 .bts-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}.bts-grid.wide{grid-template-columns:repeat(auto-fill,minmax(min(480px,100%),1fr))}.bts-card{min-width:0}.bts-card{background:#0d1826;border:1px solid #203047;border-radius:10px;padding:14px}.bts-card h3{margin:0;font-size:15px}.bts-meta{font-size:12px;margin-top:4px}.bts-card table{margin-top:10px}.bts-card th,.bts-card td{padding:6px;font-size:12px}
 .emg-ribbon{display:none;position:sticky;top:0;z-index:50;align-items:center;gap:10px;flex-wrap:wrap;background:#c62828;color:#fff;padding:10px 24px;font-weight:700;border-bottom:2px solid #ff8a80}.emg-ribbon.on{display:flex}.emg-dot{width:10px;height:10px;border-radius:50%;background:#fff;animation:emgb 1.6s ease-in-out infinite}.emg-chip{background:rgba(255,255,255,.2);border-radius:4px;padding:2px 8px;font-weight:600;font-size:13px}@keyframes emgb{50%{opacity:.3}}
@@ -1215,7 +1232,7 @@ a.className='badge ha-hdr ha-'+d.role;a.textContent='HA '+d.node+': '+d.role.toU
 tick();setInterval(tick,5000);});
 </script>"#;
 
-const HTML: &str = r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>TETRA Network</title>__STYLE__</head><body><div class=emg-ribbon id=emergency-banner role=alert><span class=emg-dot></span><span>EMERGENCY ACTIVE</span><span id=emergency-list style="display:flex;flex-wrap:wrap;gap:8px"></span></div><header><h1>TETRA NETWORK MONITOR</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v__VERSION__</div></div></header><main class=wrap>
+const HTML: &str = r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>__SERVERNAME__</title>__STYLE__</head><body><div class=emg-ribbon id=emergency-banner role=alert><span class=emg-dot></span><span>EMERGENCY ACTIVE</span><span id=emergency-list style="display:flex;flex-wrap:wrap;gap:8px"></span></div><header><h1 class=srvname>__SERVERNAME__</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v__VERSION__</div></div></header><main class=wrap>
 <section class=cards><div class=card><div class=muted>Basestations</div><div class=n id=bs>-</div></div><div class=card><div class=muted>Subscribers</div><div class=n id=subs>-</div></div><div class=card><div class=muted>Groups</div><div class=n id=groups>-</div></div><div class=card><div class=muted>Active calls</div><div class=n id=active>-</div></div><div class=card><div class=muted>Total calls</div><div class=n id=calls>-</div></div><div class=card><div class=muted>SDS</div><div class=n id=sds>-</div></div></section><section class=panel><h2>Live calls</h2><table><thead><tr><th>Type</th><th>From</th><th>To</th><th>Priority</th><th>Duration</th><th>Voice frames</th><th>MS RSSI</th><th>UUID</th></tr></thead><tbody id=livecalls></tbody></table></section><section class=panel><h2>Menu</h2><div class=navlinks><a class=navlink href="/calls">Recent calls<span class=sub>Completed call history</span></a><a class=navlink href="/sds">Recent SDS<span class=sub>Short data messages</span></a><a class=navlink href="/telemetry-sds">Telemetry SDS Log<span class=sub>Per-Basestation SDS stream</span></a><a class=navlink href="/map">MS Map<span class=sub>Plot positioned mobiles</span></a><a class=navlink href="/sms-center">SMS Center<span class=sub>Messages stored for offline radios</span></a><a class=navlink href="/connections">Live Connections<span class=sub>Who's connected now: Brew, MS &amp; SIP</span></a><a class=navlink href="/sip">SIP / VoIP<span class=sub>Registrations, trunks &amp; calls</span></a><a class=navlink href="/sip-config">SIP Config<span class=sub>Extensions, trunks &amp; routes</span></a><a class=navlink href="/ha">High Availability<span class=sub>Active/standby role, VIP &amp; failover</span></a><a class=navlink id=settings-link href="/settings">Settings<span class=sub>Edit &amp; save server configuration</span></a></div></section>
 <section class=panel><h2>Basestation Telemetry</h2><div class="bts-grid wide" id=telemetry-stations></div></section>
 <section class=panel><h2>Registered Subscribers <a class=backlink href="/registrations">(view registration log &rarr;)</a></h2><div class=bts-grid id=registrations></div></section>
@@ -1521,9 +1538,9 @@ async fn dashboard_healthz(State(state): State<Arc<AppState>>) -> String {
 pub async fn ha_page() -> Html<&'static str> { Html(HA_HTML.as_str()) }
 
 static HA_HTML: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| HA_PAGE.replace("__STYLE__", STYLE).replace("__VERSION__", VERSION));
+    std::sync::LazyLock::new(|| HA_PAGE.replace("__STYLE__", STYLE).replace("__VERSION__", VERSION).replace("__SERVERNAME__", server_name()));
 
-const HA_PAGE: &str = r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>High Availability - TETRA Network</title>__STYLE__</head><body><header><h1>HIGH AVAILABILITY</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v__VERSION__</div></div></header><main class=wrap>
+const HA_PAGE: &str = r#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>High Availability - __SERVERNAME__</title>__STYLE__</head><body><header><h1>HIGH AVAILABILITY</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v__VERSION__</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a></p>
 <div class=banner id=ha-banner></div>
 <div id=ha-off class=panel style="display:none"><p class=muted>HA is not enabled on this node. Fill in the form below and set <b>enabled</b> to turn it on (the node restarts to apply it).</p></div>
@@ -1677,6 +1694,31 @@ mod tests {
         assert_eq!(conn["roaming_log"][0]["to"]["station"], "2320998");
         assert!(CONNECTIONS_HTML.contains("id=roaming-log"));
         assert!(REGISTRATIONS_HTML.contains("<th>Cell</th>") && REGISTRATIONS_HTML.contains("x.cell"));
+    }
+
+    #[test]
+    fn server_name_is_the_heading_and_every_tab_title() {
+        let name = server_name();
+        assert_eq!(name, "Tetra Network Monitor", "default without [header]");
+        assert!(INDEX_HTML.contains("<title>Tetra Network Monitor</title>"));
+        assert!(INDEX_HTML.contains("<h1 class=srvname>Tetra Network Monitor</h1>"));
+        for (page, html) in [
+            ("calls", CALLS_HTML.as_str()),
+            ("map", MAP_HTML.as_str()),
+            ("sip", SIP_HTML.as_str()),
+            ("sip-config", SIP_CONFIG_HTML.as_str()),
+            ("connections", CONNECTIONS_HTML.as_str()),
+            ("settings", SETTINGS_HTML.as_str()),
+            ("ha", HA_HTML.as_str()),
+        ] {
+            assert!(html.contains(" - Tetra Network Monitor</title>"), "{page}: tab title");
+            assert!(!html.contains("__SERVERNAME__") && !html.contains("TETRA Network"), "{page}: no old name");
+        }
+    }
+
+    #[test]
+    fn server_name_is_escaped() {
+        assert_eq!(html_escape(r#"A&B <x> "y""#), "A&amp;B &lt;x&gt; &quot;y&quot;");
     }
 
     #[test]
