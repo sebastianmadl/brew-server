@@ -99,6 +99,28 @@ only between Basestations that opted in:
 
 A prepared handover (U-PREPARE relayed) is not reported this way.
 
+## Cell change log: how the radio left
+
+The Connections page lists the last 200 cell changes ("Cell Change Log").
+If the Basestation the radio left offers it (FlowStation with the
+`ms-reselection` extension), each change shows the category of cell
+reselection (TS 100 392-2 clause 18.3.4.7.0):
+
+| Shown | Meaning |
+|---|---|
+| undeclared | no call running on the old cell |
+| unannounced | left a call without telling the old cell |
+| announced type 1 | told the old cell (U-PREPARE), got D-NEW-CELL "follow MAC channel change" |
+| announced type 2 | told the old cell, got D-NEW-CELL "change channel immediately" |
+| announced type 3 | told the old cell without naming a cell, got D-NEW-CELL |
+
+"prepared here" is added when the target was prepared through this server.
+Without the report the column shows "announced" / "not announced" as before.
+The Basestation sends `SERVICE_MS_RESELECTION` (`0x1A`,
+`{"issi":N,"type":"announced_type_3"}`) only when the server offers
+`ms-reselection`; the report and the move may come in either order, up to
+10 s apart.
+
 ## Known limit
 
 The roam-back check runs just before the kick is sent. If a radio returns to

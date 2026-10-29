@@ -121,6 +121,12 @@ pub const SERVICE_MS_CELL: u8 = 0x18;
 /// Basestation that announced the `ms-moved` capability (see `handover`).
 pub const SERVICE_MS_MOVED: u8 = 0x19;
 
+/// `CLASS_SERVICE` type a Basestation sends when a radio left it, naming the
+/// category of cell reselection (`{"issi":N,"type":"announced_type_3"}`, see
+/// `roaming_log::Reselection`). Only sent to a server that offered the
+/// `ms-reselection` extension.
+pub const SERVICE_MS_RESELECTION: u8 = 0x1A;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());
