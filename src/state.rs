@@ -193,6 +193,9 @@ pub struct Inner {
     pub handovers: crate::handover::Handovers,
     /// The last cell changes of the radios (see `roaming_log`).
     pub roaming_log: crate::roaming_log::RoamingLog,
+    /// Individual calls that can move to another Basestation with their
+    /// radio (see `call_restore`).
+    pub call_restores: crate::call_restore::CallRestores,
 }
 
 impl Inner {

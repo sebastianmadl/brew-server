@@ -26,9 +26,10 @@ pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 /// What this server offers in `X_BREW_EXTENSIONS`: `bts-info`
 /// (`SERVICE_BTS_INFO`), `handover-v1` (the handover messages, see `handover`),
 /// `ms-cell` (`SERVICE_MS_CELL`), `ms-moved` (`SERVICE_MS_MOVED`, to a
-/// Basestation that also names it in its capabilities) and `ms-reselection`
-/// (`SERVICE_MS_RESELECTION`, see `roaming_log`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection";
+/// Basestation that also names it in its capabilities), `ms-reselection`
+/// (`SERVICE_MS_RESELECTION`, see `roaming_log`) and `call-restore`
+/// (`SERVICE_CALL_RESTORE`, see `call_restore`).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore";
 
 /// Most cells one `SERVICE_BTS_INFO` may announce (a FlowStation station runs
 /// at most a handful of SDRs on one Brew connection).
@@ -586,7 +587,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection"]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY]);
     }
 
     #[tokio::test]

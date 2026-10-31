@@ -193,6 +193,9 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_RESELECTION => {
             crate::roaming_log::handle_reselection(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_CALL_RESTORE => {
+            crate::call_restore::handle_request(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) => {
             debug!(%source, service_type = svc.service_type, json = %svc.json_data, "service message ignored");
         }
@@ -590,10 +593,10 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
     // Prefer the structured CircularCall payload (parsed per Brew v1). Fall back
     // to the conservative raw source/destination pair for any peer that sends a
     // payload we could not fully structure.
-    let (source_issi, destination, number, mnemonic, service, priority) = match &payload {
-        CallPayload::CircularCall(c) => (c.source, c.destination, c.number.clone(), c.mnemonic.clone(), c.service, c.priority),
+    let (source_issi, destination, number, mnemonic, service, priority, duplex) = match &payload {
+        CallPayload::CircularCall(c) => (c.source, c.destination, c.number.clone(), c.mnemonic.clone(), c.service, c.priority, Some(c.duplex)),
         other => match protocol::raw_peer_pair(other) {
-            Some((s, d)) => (s, d, String::new(), None, 0, 0),
+            Some((s, d)) => (s, d, String::new(), None, 0, 0, None),
             None => {
                 warn!(%source, uuid=%id, "private SETUP_REQUEST has no routable source/destination pair");
                 return;
@@ -677,6 +680,11 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
     }
     let peers = HashSet::from([target_client]);
     inner.calls.insert(id, ActiveCall { kind: CallKind::Private, owner: source, source_issi, destination, priority, peers: peers.clone(), started_at: std::time::Instant::now(), last_activity_ms: ActiveCall::new_activity() });
+    // Between two radios on Brew connections: may move with a radio to another
+    // Basestation (see `call_restore`).
+    if let Some(duplex) = duplex.filter(|_| source_issi != 0) {
+        crate::call_restore::note_setup(&mut inner, id, duplex);
+    }
     let target = inner.clients.get(&target_client).map(|c| (c.tx.clone(), c.forward_version()));
     // For an ambience-listening setup, also learn the Brew username the target's
     // Basestation authenticated as, so we can send it the control-channel
@@ -735,10 +743,21 @@ async fn route_private_control(state: &Arc<AppState>, source: ClientId, id: uuid
         end_call(state, source, id, raw).await;
         return;
     }
-    let inner = state.inner.read().await;
+    let mut inner = state.inner.write().await;
     let Some(call) = inner.calls.get(&id) else { debug!(uuid=%id, "private control for unknown call"); return; };
     if call.kind != CallKind::Private { return; }
+    // A Basestation the call moved away from (see `call_restore`) no longer
+    // speaks for it.
+    if call.owner != source && !call.peers.contains(&source) {
+        debug!(%source, uuid=%id, "private control from a connection not in the call");
+        return;
+    }
     call.touch();
+    let floor = raw.get(1).copied().filter(|s| *s == CALL_SIMPLEX_GRANTED || *s == CALL_SIMPLEX_IDLE);
+    if let Some(s) = floor {
+        crate::call_restore::note_floor(&mut inner, source, id, s == CALL_SIMPLEX_GRANTED);
+    }
+    let Some(call) = inner.calls.get(&id) else { return };
     let mut recipients = call.peers.clone();
     recipients.insert(call.owner);
     recipients.remove(&source);
@@ -840,13 +859,14 @@ pub async fn run_call_duration_sweep(state: Arc<AppState>) {
     }
 }
 
-async fn end_call(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid, raw: Vec<u8>) {
+pub(crate) async fn end_call(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid, raw: Vec<u8>) {
     let mut inner = state.inner.write().await;
     let Some(call) = inner.calls.remove(&id) else { debug!(uuid=%id, "call end for unknown call"); return; };
     let participant = call.owner == source || call.peers.contains(&source);
     if !participant { inner.calls.insert(id, call); return; }
     if call.kind == CallKind::Group && call.owner != source { inner.calls.insert(id, call); return; }
     if call.kind == CallKind::Group && inner.group_floor.get(&call.destination) == Some(&id) { inner.group_floor.remove(&call.destination); }
+    crate::call_restore::forget(&mut inner, &id);
     // A copy of the call's setup still on its way over another peer link must
     // not bring it back as a zombie that holds the group floor.
     crate::fedroute::note_call(&mut inner, id, call.source_issi, call.owner, Instant::now());
@@ -938,6 +958,8 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
     // A radio that left another Basestation unprepared: what to tell it and
     // which of its overs there to end (see `handover::radio_moved`).
     let mut moved: Option<(ClientId, Option<Vec<u8>>, Vec<uuid::Uuid>)> = None;
+    // Individual calls that moved here with the radio (see `call_restore`).
+    let mut moved_calls: Vec<uuid::Uuid> = Vec::new();
     // Whatever registers here -- a Basestation, a Terminal or a legacy peer
     // link, for everything behind it -- is a local registration, stamped with
     // this server's registration clock (see `fedroute`).
@@ -953,6 +975,11 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
             if let Some(o) = old.as_ref().filter(|o| o.client_id != source && o.route.path.is_empty()) {
                 let handed_over = inner.handovers.handed_over_to(msg.issi, source, Instant::now(), crate::handover::kick_guard(&state.config));
                 crate::roaming_log::registration_moved(&mut inner, msg.issi, o.client_id, source, handed_over);
+                moved_calls = crate::call_restore::move_calls(&mut inner, msg.issi, o.client_id, source);
+                for id in &moved_calls {
+                    info!(from=%o.client_id, to=%source, issi=msg.issi, uuid=%id, "call restore: individual call moved with the radio");
+                    crate::call_restore::release_on_old(&inner, o.client_id, id);
+                }
                 if !handed_over {
                     let (notice, talking) = crate::handover::radio_moved(&inner, msg.issi, o.client_id, source);
                     moved = Some((o.client_id, notice, talking));
@@ -1033,6 +1060,9 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
         info!(%from, to=%source, issi=msg.issi, "handover: radio left unprepared, old Basestation told");
     }
     drop(inner);
+    for id in moved_calls {
+        crate::call_restore::spawn_window(state, id);
+    }
     // Its overs on the Basestation it left end now, before this connection's
     // next message (a GROUP_TX of the same radio) is handled.
     if let Some((from, _, talking)) = moved {

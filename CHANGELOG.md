@@ -48,6 +48,13 @@ Version 1.20.0 adds:
   extension), and an over the radio was talking in there ends, so it can talk
   on from the new Basestation (which must speak `handover-v1`). See
   [docs/Roaming.md](docs/Roaming.md).
+- **Individual calls follow the radio.** When a radio in an individual call
+  with a Brew party registers on another Basestation with the `call-restore`
+  capability, the call moves there; the old Basestation gets `CALL_RELEASE`
+  (cause 14) and lets its leg go, the new one asks for the call when the
+  radio restores it (`SERVICE_CALL_RESTORE`). Not restored within 8 s: the
+  other party gets `CALL_RELEASE` (cause 19). See
+  [docs/Roaming.md](docs/Roaming.md).
 - **Backward compatible.** All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older
   Basestations see no change.

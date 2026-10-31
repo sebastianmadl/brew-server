@@ -60,6 +60,9 @@ pub const CAUSE_CALLED_PARTY_NOT_REACHABLE: u8 = 3;
 /// "SwMI requested disconnection": the network ended the call, here because
 /// a participant's connection dropped.
 pub const CAUSE_SWMI_REQUESTED_DISCONNECTION: u8 = 14;
+/// "Call restoration of the other user failed": a radio that left its
+/// Basestation mid-call did not restore the call on the new one in time.
+pub const CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED: u8 = 19;
 
 pub const FRAME_TRAFFIC_CHANNEL: u8 = 0;
 pub const FRAME_SDS_TRANSFER: u8 = 1;
@@ -127,6 +130,14 @@ pub const SERVICE_MS_MOVED: u8 = 0x19;
 /// `ms-reselection` extension.
 pub const SERVICE_MS_RESELECTION: u8 = 0x1A;
 
+/// `CLASS_SERVICE` type for restoring an individual call on another
+/// Basestation: the Basestation a radio restores the call on asks
+/// (`{"issi":N,"peer":N}`) and the server answers with the call
+/// (`uuid`, `duplex`, `priority`, `floor`) or without `uuid` when it has
+/// none (see `call_restore`). Only used with a Basestation that announced the
+/// `call-restore` capability.
+pub const SERVICE_CALL_RESTORE: u8 = 0x1B;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());
@@ -188,6 +199,9 @@ pub struct CircularCall {
     /// TETRA basic service byte. Relayed untouched; the router reads it only
     /// to recognise an ambience-listening call setup (see `router`).
     pub service: u8,
+    /// Duplex (true) or simplex call, as set up; read only to restore the
+    /// call on another Basestation (see `call_restore`).
+    pub duplex: bool,
     pub mnemonic: Option<String>,
 }
 
@@ -507,6 +521,7 @@ fn parse_call_control(data: &[u8], version: ConnVersion) -> Result<(BrewMessage,
                 number: ascii_field(&payload[8..40]),
                 priority: payload[40],
                 service: payload[41],
+                duplex: payload[43] != 0,
                 mnemonic,
             })
         }
@@ -522,6 +537,7 @@ fn parse_call_control(data: &[u8], version: ConnVersion) -> Result<(BrewMessage,
                 number: ascii_field(&payload[8..40]),
                 priority: payload[40],
                 service: payload[41],
+                duplex: payload[43] != 0,
                 mnemonic: None,
             })
         }

@@ -121,6 +121,32 @@ The Basestation sends `SERVICE_MS_RESELECTION` (`0x1A`,
 `ms-reselection`; the report and the move may come in either order, up to
 10 s apart.
 
+## Individual calls across Basestations
+
+A radio in an individual call with a Brew party (a terminal, an app) that
+changes to another Basestation restores the call there with U-CALL RESTORE
+(TS 100 392-2 clause 14.5.1.2.4). The new Basestation never saw the call, so
+the server moves it, between Basestations that announced the `call-restore`
+capability (the server offers the `call-restore` extension):
+
+- **At the registration.** Every individual call of the radio that is up on
+  the old Basestation moves to the new one (log line `call restore:
+  individual call moved with the radio`). The old Basestation gets
+  `CALL_RELEASE` with cause 14 (SwMI requested disconnection) and releases
+  its leg without ending the call; anything it still sends for the call is
+  ignored. Calls bridged to SIP are not moved.
+- **At the restore.** The new Basestation asks with `SERVICE_CALL_RESTORE`
+  (`0x1B`, `{"issi":N,"peer":P}`, `peer` 0 = any) and gets the call back
+  (`uuid`, `duplex`, `priority`, `floor` = who holds a simplex floor, 0 for
+  nobody), or no `uuid` when there is none (log lines `call restore: radio
+  restores its call here` / `no call of this radio to restore`).
+- **Not restored.** If the radio does not restore the call within 8 s (the
+  radio gives up after T306, at most 6 s), the other party gets
+  `CALL_RELEASE` with cause 19, "call restoration of the other user failed"
+  (log line `call restore: the radio did not restore the call, ending it`).
+
+A Basestation without the capability keeps its calls as before.
+
 ## Known limit
 
 The roam-back check runs just before the kick is sent. If a radio returns to
