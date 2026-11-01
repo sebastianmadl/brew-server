@@ -53,7 +53,9 @@ Version 1.20.0 adds:
   capability, the call moves there; the old Basestation gets `CALL_RELEASE`
   (cause 14) and lets its leg go, the new one asks for the call when the
   radio restores it (`SERVICE_CALL_RESTORE`). Not restored within 8 s: the
-  other party gets `CALL_RELEASE` (cause 19). See
+  other party gets `CALL_RELEASE` (cause 19) -- at once when the new
+  Basestation reports a plain roaming registration
+  (`SERVICE_CALL_NOT_RESTORED`) or the radio sets up a new call. See
   [docs/Roaming.md](docs/Roaming.md).
 - **Backward compatible.** All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older

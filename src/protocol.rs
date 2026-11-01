@@ -138,6 +138,14 @@ pub const SERVICE_MS_RESELECTION: u8 = 0x1A;
 /// `call-restore` capability.
 pub const SERVICE_CALL_RESTORE: u8 = 0x1B;
 
+/// `CLASS_SERVICE` type a Basestation sends when a radio registered on it
+/// with a plain roaming location update (`{"issi":N}`): by TS 100 392-2
+/// clause 16.4 a) a radio with a circuit mode call registers with "service
+/// restoration roaming" instead, so it has no call to restore (see
+/// `call_restore`). Only used with a Basestation that announced the
+/// `call-restore` capability.
+pub const SERVICE_CALL_NOT_RESTORED: u8 = 0x1C;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());

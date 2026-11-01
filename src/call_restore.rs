@@ -22,6 +22,13 @@
 //! - A call not restored within `RESTORE_WINDOW` ends: the other party gets
 //!   `CALL_RELEASE` with "call restoration of the other user failed" (table
 //!   14.55).
+//! - It ends the same way at once when the radio shows it has given the call
+//!   up: its Basestation reports a plain roaming registration with
+//!   `SERVICE_CALL_NOT_RESTORED` (`{"issi":N}`; a radio with a circuit mode
+//!   call registers with "service restoration roaming", clause 16.4 a)), or
+//!   the radio sets up a new call (after a cell change it sends no call
+//!   related signalling for the call other than U-CALL RESTORE, clause
+//!   14.5.1.2.4).
 //!
 //! Calls bridged to SIP are left alone: their media path is bound to the
 //! connection that set them up.
@@ -152,6 +159,10 @@ pub async fn window_closed(state: &Arc<AppState>, id: Uuid) {
     let waiting = state.inner.write().await.call_restores.waiting.remove(&id);
     let Some(w) = waiting else { return };
     info!(uuid = %id, issi = w.issi, "call restore: the radio did not restore the call, ending it");
+    end_unrestored(state, w, id).await;
+}
+
+async fn end_unrestored(state: &Arc<AppState>, w: Waiting, id: Uuid) {
     crate::router::end_call(
         state,
         w.on,
@@ -159,6 +170,50 @@ pub async fn window_closed(state: &Arc<AppState>, id: Uuid) {
         protocol::build_call_cause(protocol::CALL_RELEASE, &id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED),
     )
     .await;
+}
+
+/// Radio `issi` on Basestation `source` has given up the calls that moved
+/// there with it (`why`, for the log): they end now instead of at the end of
+/// their restore window.
+pub async fn abandoned(state: &Arc<AppState>, source: ClientId, issi: u32, why: &str) {
+    let ended: Vec<(Uuid, Waiting)> = {
+        let mut inner = state.inner.write().await;
+        let ids: Vec<Uuid> = inner
+            .call_restores
+            .waiting
+            .iter()
+            .filter(|(_, w)| w.issi == issi && w.on == source)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter().filter_map(|id| inner.call_restores.waiting.remove(&id).map(|w| (id, w))).collect()
+    };
+    for (id, w) in ended {
+        info!(%source, issi, uuid = %id, why, "call restore: the radio gave up the call, ending it");
+        end_unrestored(state, w, id).await;
+    }
+}
+
+#[derive(Deserialize)]
+struct NotRestored {
+    issi: u32,
+}
+
+/// A `SERVICE_CALL_NOT_RESTORED` report from Basestation `source`: radio
+/// `issi` registered there with a plain roaming location update, so it has
+/// no call to restore (clause 16.4 a)).
+pub async fn handle_not_restored(state: &Arc<AppState>, source: ClientId, json: &str) {
+    let report: NotRestored = match serde_json::from_str(json) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(%source, error = %e, json, "malformed call not restored report");
+            return;
+        }
+    };
+    if !crate::handover::announced(&*state.inner.read().await, source, CAPABILITY) {
+        warn!(%source, issi = report.issi, "call not restored report from a connection without call-restore ignored");
+        return;
+    }
+    abandoned(state, source, report.issi, "registered by roaming, not service restoration roaming").await;
 }
 
 #[derive(Deserialize)]
@@ -330,6 +385,21 @@ mod tests {
             .collect()
     }
 
+    fn not_restored(issi: u32) -> Vec<u8> {
+        protocol::build_service(protocol::SERVICE_CALL_NOT_RESTORED, &serde_json::json!({ "issi": issi }).to_string())
+    }
+
+    /// The private call setups among `packets`.
+    fn setups(packets: &[Vec<u8>]) -> Vec<Uuid> {
+        packets
+            .iter()
+            .filter_map(|p| match protocol::parse_with_version(p, ConnVersion::V0) {
+                Ok((BrewMessage::CallControl(cc), _)) if cc.call_state == protocol::CALL_SETUP_REQUEST => Some(cc.identifier),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn restore_request(issi: u32, peer: u32) -> Vec<u8> {
         protocol::build_service(protocol::SERVICE_CALL_RESTORE, &serde_json::json!({ "issi": issi, "peer": peer }).to_string())
     }
@@ -416,6 +486,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_plain_roaming_registration_ends_the_moved_call_at_once() {
+        let (state, id, (bs1, _), (bs2, mut bs2_rx), (_app, mut app_rx)) = field_case(true).await;
+        // Reports from the station the radio left, or for another radio, change nothing.
+        packet(&state, bs1, not_restored(RADIO)).await;
+        packet(&state, bs2, not_restored(APP)).await;
+        assert!(drain(&mut app_rx).is_empty());
+        assert!(state.inner.read().await.calls.contains_key(&id));
+        // BS2: the radio registered by roaming, not service restoration roaming (16.4 a)).
+        packet(&state, bs2, not_restored(RADIO)).await;
+        assert_eq!(releases(&drain(&mut app_rx)), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)]);
+        assert!(!state.inner.read().await.calls.contains_key(&id));
+        // The window closing later does nothing more.
+        window_closed(&state, id).await;
+        assert!(drain(&mut app_rx).is_empty());
+        assert!(drain(&mut bs2_rx).iter().all(|p| releases(std::slice::from_ref(p)).is_empty()));
+    }
+
+    #[tokio::test]
+    async fn a_new_call_from_the_radio_ends_the_moved_call_first() {
+        let (state, id, _, (bs2, _), (_app, mut app_rx)) = field_case(true).await;
+        let new = Uuid::new_v4();
+        packet(&state, bs2, setup(&new, RADIO, APP, true)).await;
+        let got = drain(&mut app_rx);
+        // The release of the old call reaches the app before the new setup.
+        assert_eq!(releases(&got), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)]);
+        assert_eq!(setups(&got), vec![new]);
+        let release_at = got.iter().position(|p| !releases(std::slice::from_ref(p)).is_empty()).unwrap();
+        let setup_at = got.iter().position(|p| !setups(std::slice::from_ref(p)).is_empty()).unwrap();
+        assert!(release_at < setup_at);
+        let inner = state.inner.read().await;
+        assert!(!inner.calls.contains_key(&id));
+        assert!(inner.calls.contains_key(&new));
+    }
+
+    #[tokio::test]
     async fn a_station_without_the_capability_keeps_the_old_behaviour() {
         let (state, id, (bs1, mut bs1_rx), (bs2, mut bs2_rx), (app, mut app_rx)) = field_case(false).await;
         assert!(releases(&drain(&mut bs1_rx)).is_empty(), "BS1 keeps its leg");
@@ -499,6 +604,10 @@ mod tests {
             let restores = k % 5 != 0;
             if restores {
                 packet(&state, to, restore_request(*a, *b)).await;
+            } else if k % 10 == 0 {
+                // Gives the call up with a plain roaming registration: ends at once.
+                packet(&state, to, not_restored(*a)).await;
+                assert!(!state.inner.read().await.calls.contains_key(id), "call {k}");
             }
             let new = stations.iter_mut().find(|(i, _)| *i == to).unwrap();
             assert_eq!(answers(&drain(&mut new.1)).len(), restores as usize, "call {k}");

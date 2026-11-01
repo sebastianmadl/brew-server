@@ -144,6 +144,12 @@ capability (the server offers the `call-restore` extension):
   radio gives up after T306, at most 6 s), the other party gets
   `CALL_RELEASE` with cause 19, "call restoration of the other user failed"
   (log line `call restore: the radio did not restore the call, ending it`).
+- **Given up.** The call ends the same way at once when the radio shows it
+  has no call left: the new Basestation reports a plain roaming registration
+  with `SERVICE_CALL_NOT_RESTORED` (`0x1C`, `{"issi":N}`; a radio with a
+  circuit mode call registers with "service restoration roaming", clause
+  16.4 a)), or the radio sets up a new call from there (log line `call
+  restore: the radio gave up the call, ending it`).
 
 A Basestation without the capability keeps its calls as before.
 

@@ -196,6 +196,9 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_CALL_RESTORE => {
             crate::call_restore::handle_request(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_CALL_NOT_RESTORED => {
+            crate::call_restore::handle_not_restored(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) => {
             debug!(%source, service_type = svc.service_type, json = %svc.json_data, "service message ignored");
         }
@@ -604,6 +607,11 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
         },
     };
     let ambience = service == AMBIENCE_LISTENING_SERVICE;
+    // A radio whose individual call moved here with it sets up a new call
+    // instead of restoring it: the old one is given up (see `call_restore`).
+    if source_issi != 0 {
+        crate::call_restore::abandoned(state, source, source_issi, "set up a new call").await;
+    }
     let mut inner = state.inner.write().await;
     // A copy of a setup already accepted over another peer link: dropped
     // silently -- never rejected, never offered to SIP a second time.
