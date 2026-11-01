@@ -52,7 +52,9 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 
 ## More documentation
 
-- [Roaming](docs/Roaming.md) -- kick stale registrations on old Basestations, announced handover between Basestations
+- [Roaming](docs/Roaming.md) -- kick stale registrations on old Basestations
+- [Handover](docs/Handover.md) -- radios keep group and individual calls when they move between Basestations
+- [Brew extensions](docs/Brew-Extensions.md) -- the protocol behind it, for other server and Basestation implementations
 - [Late entry](docs/Late-Entry.md) -- join running group calls mid-over
 - [ISSI blacklist](docs/ISSI-Blacklist.md)
 - [Basestation locations](docs/Basestation-Locations.md)

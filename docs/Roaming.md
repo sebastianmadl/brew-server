@@ -43,115 +43,12 @@ is not connected on the control channel.
 
 With `kick_old_issi = 0` the behaviour is exactly as before.
 
-## Announced handover
+## Cell changes between Basestations
 
-TETRA has no network-controlled handover: the radio changes cells by cell
-reselection (TS 100 392-2 clause 18.3.4). In announced reselection it tells
-its serving cell first (U-PREPARE, answered with D-NEW-CELL or
-D-PREPARE-FAIL); in unannounced reselection it does not, but restores its
-call on the new cell (U-RESTORE). "Handover" here only names the relay that
-prepares an announced reselection between two Basestations.
-
-A radio that changes cells by announced reselection (U-PREPARE relayed between
-two Basestations that both speak `handover-v1`, see `src/handover.rs`) is not
-kicked: its registration on the new Basestation came with the handover, and
-the old Basestation lets it go by itself. The kick is skipped while the
-handover is in flight and for `kick_delay_ms + [handover] timeout_ms` after it
-succeeded (log line `roaming: radio was handed over, kick skipped`). A
-handover that fails, times out or finds no target does not count, so the
-unannounced move that follows is kicked as usual.
-
-The guard is per ISSI, not per Basestation: if the radio moves on again
-without preparation within that window (ping-pong back to the old cell right
-after the handover), the kick of the cell it just left is skipped too, and
-that Basestation keeps its stale entry until its own timeout.
-
-```toml
-[handover]
-timeout_ms = 2000      # how long the target Basestation has to answer
-```
-
-The serving Basestation may name the target's location area
-(`target_location_area`, from its neighbour entry). Carriers are reused
-across a network, so the server then only picks a Basestation whose cell on
-that carrier is in that location area. A "no target" answer carries a
-`reason`: `gone` (the target Basestation went away), `unknown`, `own_cell`,
-`not_capable` or `no_network`.
-
-## Unannounced cell change
-
-When a radio registers on another Basestation without a prepared handover,
-the Basestation it left does not know that it went. Two things change, both
-only between Basestations that opted in:
-
-- **The old Basestation is told.** If it announced the `ms-moved` capability
-  (the server offers the `ms-moved` extension), it gets
-  `SERVICE_MS_MOVED` (`0x19`) with `{"issi":N}` and stops serving the radio
-  without deregistering it (log line `handover: radio left unprepared, old
-  Basestation told`).
-- **A talker's over there ends.** If the radio was the talker of a group call
-  that the old Basestation owns and the new Basestation speaks `handover-v1`,
-  the over ends at once: the listeners get `GROUP_IDLE`, the group floor is
-  free, and the radio's next `GROUP_TX` from the new Basestation goes through
-  (log line `handover: talker left its Basestation, ending its over there`).
-  Before, the floor stayed taken until the old Basestation noticed the silent
-  uplink, and the radio's PTT on the new cell was denied.
-
-A prepared handover (U-PREPARE relayed) is not reported this way.
-
-## Cell change log: how the radio left
-
-The Connections page lists the last 200 cell changes ("Cell Change Log").
-If the Basestation the radio left offers it (FlowStation with the
-`ms-reselection` extension), each change shows the category of cell
-reselection (TS 100 392-2 clause 18.3.4.7.0):
-
-| Shown | Meaning |
-|---|---|
-| undeclared | no call running on the old cell |
-| unannounced | left a call without telling the old cell |
-| announced type 1 | told the old cell (U-PREPARE), got D-NEW-CELL "follow MAC channel change" |
-| announced type 2 | told the old cell, got D-NEW-CELL "change channel immediately" |
-| announced type 3 | told the old cell without naming a cell, got D-NEW-CELL |
-
-"prepared here" is added when the target was prepared through this server.
-Without the report the column shows "announced" / "not announced" as before.
-The Basestation sends `SERVICE_MS_RESELECTION` (`0x1A`,
-`{"issi":N,"type":"announced_type_3"}`) only when the server offers
-`ms-reselection`; the report and the move may come in either order, up to
-10 s apart.
-
-## Individual calls across Basestations
-
-A radio in an individual call with a Brew party (a terminal, an app) that
-changes to another Basestation restores the call there with U-CALL RESTORE
-(TS 100 392-2 clause 14.5.1.2.4). The new Basestation never saw the call, so
-the server moves it, between Basestations that announced the `call-restore`
-capability (the server offers the `call-restore` extension):
-
-- **At the registration.** Every individual call of the radio that is up on
-  the old Basestation moves to the new one (log line `call restore:
-  individual call moved with the radio`). The old Basestation gets
-  `CALL_RELEASE` with cause 14 (SwMI requested disconnection) and releases
-  its leg without ending the call; anything it still sends for the call is
-  ignored. Calls bridged to SIP are not moved.
-- **At the restore.** The new Basestation asks with `SERVICE_CALL_RESTORE`
-  (`0x1B`, `{"issi":N,"peer":P}`, `peer` 0 = any) and gets the call back
-  (`uuid`, `duplex`, `priority`, `floor` = who holds a simplex floor, 0 for
-  nobody), or no `uuid` when there is none (log lines `call restore: radio
-  restores its call here` / `no call of this radio to restore`).
-- **Not restored.** If the radio does not restore the call within 8 s (the
-  radio gives up after T306, at most 6 s), the other party gets
-  `CALL_RELEASE` with cause 19, "call restoration of the other user failed"
-  (log line `call restore: the radio did not restore the call, ending it`).
-- **Given up.** The call ends the same way at once when the radio shows it
-  has no call left: the new Basestation reports a plain roaming registration
-  with `SERVICE_CALL_NOT_RESTORED` (`0x1C`, `{"issi":N}`; a radio with a
-  circuit mode call registers with "service restoration roaming", clause
-  16.4 a)), or the radio sets up a new call from there (log line `call
-  restore: the radio gave up the call, ending it`).
-
-A Basestation without the capability keeps its calls as before.
+Announced cell changes, an unannounced change during a call, the cell change
+log and individual calls that follow their radio are described in
+[Handover.md](Handover.md). The kick skips a radio whose cell change was
+prepared through the server (see there).
 
 ## Known limit
 

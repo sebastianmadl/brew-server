@@ -47,7 +47,7 @@ Version 1.20.0 adds:
   `SERVICE_MS_MOVED` if it asked for it (`ms-moved` capability and
   extension), and an over the radio was talking in there ends, so it can talk
   on from the new Basestation (which must speak `handover-v1`). See
-  [docs/Roaming.md](docs/Roaming.md).
+  [docs/Handover.md](docs/Handover.md).
 - **Individual calls follow the radio.** When a radio in an individual call
   with a Brew party registers on another Basestation with the `call-restore`
   capability, the call moves there; the old Basestation gets `CALL_RELEASE`
@@ -56,10 +56,11 @@ Version 1.20.0 adds:
   other party gets `CALL_RELEASE` (cause 19) -- at once when the new
   Basestation reports a plain roaming registration
   (`SERVICE_CALL_NOT_RESTORED`) or the radio sets up a new call. See
-  [docs/Roaming.md](docs/Roaming.md).
+  [docs/Handover.md](docs/Handover.md).
 - **Backward compatible.** All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older
-  Basestations see no change.
+  Basestations see no change. The messages are specified for other
+  implementations in [docs/Brew-Extensions.md](docs/Brew-Extensions.md).
 
 Version 1.18.0 adds:
 
