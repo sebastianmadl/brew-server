@@ -67,4 +67,4 @@ one LAN. See [docs/High-Availability.md](docs/High-Availability.md).
 ## Credits
 
 - Joaquin EA5GVK
-- Sebastian OE14SXM
+- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions
