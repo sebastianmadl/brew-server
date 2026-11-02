@@ -28,6 +28,10 @@ into another server or Basestation.
 
 ## Requirements
 
+- brew-server 1.20.0 or newer and Basestations that speak the extensions:
+  FlowStation (Bost) 0.5.6 or newer. Until they are released upstream, both
+  are only in the forks `sebastianmadl/brew-server` and
+  `sebastianmadl/bost-flowstation`, branch `handover`.
 - Every Basestation connects in Basestation mode and is offered the
   extensions on the WebSocket upgrade (`X-Brew-Extensions`); brew-server
   always offers them. A Basestation uses only the ones it knows.
