@@ -642,8 +642,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silent_inbound_peer_is_dropped_but_basestation_is_not() {
+    async fn silent_connections_are_dropped_but_answering_ones_stay() {
         use super::{brew_discovery, get, AppState, Arc, SocketAddr};
+        use futures_util::StreamExt;
         use std::time::Duration;
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -660,11 +661,15 @@ mod tests {
             axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await
         });
 
-        // Neither client is ever read from, so neither answers a ping.
+        // The peer and the first Basestation are never read from, so neither
+        // answers a ping. The second Basestation is read, and the client stack
+        // answers pings on its own.
         let mut peer_request = format!("ws://{addr}/brew").into_client_request().unwrap();
         peer_request.headers_mut().insert("X-Brew-Mode", "Peer".parse().unwrap());
         let (_peer, _) = tokio_tungstenite::connect_async(peer_request).await.unwrap();
-        let (_basestation, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/brew")).await.unwrap();
+        let (_silent, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/brew")).await.unwrap();
+        let (mut answering, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/brew")).await.unwrap();
+        tokio::spawn(async move { while answering.next().await.is_some() {} });
 
         let modes = || async {
             state.inner.read().await.clients.values().map(|c| c.mode).collect::<Vec<_>>()
@@ -675,11 +680,11 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         };
-        wait_for(2, Duration::from_secs(2)).await;
-        assert_eq!(modes().await.len(), 2, "both connections registered");
+        wait_for(3, Duration::from_secs(2)).await;
+        assert_eq!(modes().await.len(), 3, "all connections registered");
         wait_for(1, Duration::from_secs(6)).await;
-        // Margin: had the Basestation been pinged too, it would go at the same time.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Margin: had the answering one been timed out too, it would go now.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(modes().await, vec![ClientMode::Basestation]);
     }
 
