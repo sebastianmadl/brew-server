@@ -40,7 +40,7 @@ The extensions use:
 | --- | --- | --- |
 | `CLASS_SUBSCRIBER` | `0xf0` | `SUB_REGISTER` (1), `SUB_REREGISTER` (2), `SUB_DEREGISTER` (0), `SUB_AFFILIATE` (8): unchanged. A registration on B is what moves a radio. |
 | `CLASS_CALL_CONTROL` | `0xf1` | `GROUP_TX` (2), `GROUP_IDLE` (3), `CALL_RELEASE` (10) with its cause byte, `SIMPLEX_GRANTED` (12), `SIMPLEX_IDLE` (13): unchanged. |
-| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1C`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
+| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1D`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
 
 Routing stays as in Brew: one routing entry per ISSI, the newest registration
 wins, and a registration keeps the ISSI's group affiliations.
@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, cell-directory
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -78,6 +78,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `handover-v1` | answers relayed handover requests as target, and grants the floor to a talker that moved to it (section 7.3) | `handover-v1` |
 | `ms-moved` | wants `SERVICE_MS_MOVED` | `ms-moved` (FlowStation: together with `handover-v1`) |
 | `call-restore` | takes individual calls that move with their radio | `call-restore` (FlowStation: together with `handover-v1`) |
+| `cell-directory` | wants `SERVICE_CELL_DIRECTORY` (section 5.3) | `cell-directory` (FlowStation: on its own, also on multi-cell stations) |
 
 ### 3.3 Summary
 
@@ -92,6 +93,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1A` | `SERVICE_MS_RESELECTION` | A → server | `ms-reselection` | – |
 | `0x1B` | `SERVICE_CALL_RESTORE` | B → server → B | `call-restore` | B: `call-restore` |
 | `0x1C` | `SERVICE_CALL_NOT_RESTORED` | B → server | `call-restore` | B: `call-restore` |
+| `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
 reselection), and add the others one by one; each is independent except where
@@ -180,6 +182,67 @@ connection's previous one completely.
 | `cells[].cell` | no | the cell's number within the Basestation (label only, unique in the message); default its position in the list |
 | `cells[].carrier`, `cells[].carrier_ext`, `cells[].location_area` | yes | as in section 4 |
 | `capabilities` | no | up to 16 strings of 1 to 32 characters (section 3.2); default none |
+| `cells[].ms_txpwr_max_dbm` etc. | no | what the cell broadcasts, see 5.1.1 |
+
+#### 5.1.1 Optional cell fields: what the cell broadcasts
+
+A Basestation may add what each cell broadcasts, so other Basestations can
+list the cell as a neighbour with the right values (section 5.3). FlowStation
+sends them when the server offered `cell-directory`; a server that does not
+know them ignores them (unknown fields, section 4).
+
+```json
+{"cell":0,"carrier":1528,"carrier_ext":264,"location_area":2,
+ "ms_txpwr_max_dbm":30,"rxlev_access_min_dbm":-100,
+ "service_details":{"registration":true,"deregistration":true,"priority_cell":false,
+   "no_minimum_mode":false,"migration":false,"system_wide_services":true,"voice_service":true,
+   "circuit_mode_data_service":false,"sndcp_service":false,"aie_service":false,"advanced_link":false},
+ "neighbours":[{"mcc":232,"mnc":5,"carrier":1530,"carrier_ext":264,"location_area":1}]}
+```
+
+| Field | Range | Meaning (TS 100 392-2) |
+| --- | --- | --- |
+| `ms_txpwr_max_dbm` | 15 to 45 in 5 dB steps | MS_TXPWR_MAX_CELL of the cell's SYSINFO: the highest power an MS may use on the cell. Element values 1 to 7 of table 18.57 (value = 10 + 5 × element); element 0 is reserved and never sent. A neighbour entry carries it as "maximum MS transmit power", used by the MS in C2 (clause 23.7.1.2) |
+| `rxlev_access_min_dbm` | −125 to −50 in 5 dB steps | RXLEV_ACCESS_MIN of the SYSINFO (table 21.65: element 0 = −125 dBm, each step +5 dB): the lowest level at which an MS may access the cell, reference of C1 / C2. A neighbour entry carries it as "minimum RX access level" |
+| `service_details` | object of `true` / `false` | the "BS service details" the cell broadcasts (clause 18.5.2.1, table 18.26), one key per bit, see below |
+| `neighbours` | 0 to 7 entries | the neighbour cells the cell broadcasts in D-NWRK-BROADCAST (at most 7, table 18.71), see below |
+
+`service_details` keys, in the bit order of table 18.26 (the reserved bit
+between circuit mode data and SNDCP is not sent):
+
+| Key | Bit is 1 when |
+| --- | --- |
+| `registration` | registration is mandatory on the cell |
+| `deregistration` | de-registration is requested on the cell |
+| `priority_cell` | the cell is a priority cell |
+| `no_minimum_mode` | the cell never uses minimum mode ("minimum mode service" element) |
+| `migration` | migration is supported by the cell |
+| `system_wide_services` | normal mode, system wide services supported (0 = temporarily not supported) |
+| `voice_service` | TETRA voice service is supported |
+| `circuit_mode_data_service` | circuit mode data service is supported |
+| `sndcp_service` | SNDCP service is available |
+| `aie_service` | air interface encryption is available |
+| `advanced_link` | advanced link is supported |
+
+Send the bits as the cell broadcasts them at that moment (FlowStation sends
+`system_wide_services` true while a network link is configured, as its SYSINFO
+does). A key may be left out (unknown); unknown keys are ignored.
+
+`neighbours[]` entries, one per "neighbour cell information for CA" element
+(table 18.64) the cell broadcasts, including the Basestation's own other
+cells:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `carrier` | yes | main carrier number |
+| `carrier_ext` | yes | absolute band plan (section 4). Where the broadcast element leaves the extension out, the neighbour is on the serving cell's band plan (table 18.64 note 1): fill that in |
+| `mcc`, `mnc` | no | default: the announcement's `mcc` / `mnc` (table 18.64 note 2: absent = same as the serving cell) |
+| `location_area` | no | default: the LA of the cell that lists it (note 2). FlowStation always fills it in |
+
+Server: a value out of range or of the wrong type in an optional field is
+logged and that field alone is dropped; the cell and the rest of the
+announcement still count, so a newer or wrong optional field never costs a
+Basestation its handovers. More than 7 neighbours drops `neighbours`.
 
 Server:
 
@@ -205,6 +268,74 @@ Server: accepts only a carrier the connection announced; keeps the last
 report per ISSI for display. Ignored for an ISSI not registered on that
 connection. Not used for routing. Only useful for display and logs, needed
 mostly by Basestations that serve several cells on one connection.
+
+### 5.3 `SERVICE_CELL_DIRECTORY` (0x1D)
+
+Server → Basestation, extension `cell-directory`, only to a Basestation that
+named the `cell-directory` capability in its last `SERVICE_BTS_INFO`. The
+cells of every *other* Basestation the server knows, so the Basestation can
+show its neighbours by name and online state, warn when values do not match,
+and let its operator pick a neighbour from the list. It changes nothing on the
+air and nothing in routing.
+
+```json
+{"cells":[
+ {"id":"1000002/0","station":"1000002","cell":0,"online":true,
+  "mcc":232,"mnc":5,"carrier":1530,"carrier_ext":264,"location_area":1,
+  "ms_txpwr_max_dbm":35,"rxlev_access_min_dbm":-100,
+  "service_details":{"registration":true,"voice_service":true},
+  "neighbours":[{"mcc":232,"mnc":5,"carrier":1528,"carrier_ext":264,"location_area":2}]},
+ {"id":"1000003/0","station":"1000003","cell":0,"online":false,"last_seen_ms":1793689200000,
+  "mcc":232,"mnc":5,"carrier":1534,"carrier_ext":264,"location_area":1}]}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `cells` | yes | 0 to 256 entries, online cells first, then sorted by station and cell |
+| `id` | yes | global cell id `<station>/<cell>` |
+| `station` | yes | the Basestation's Brew login (without authentication: the first 8 hex digits of its connection id) |
+| `cell` | yes | the cell number from `SERVICE_BTS_INFO` |
+| `online` | yes | `true` while a connection announces the cell |
+| `last_seen_ms` | no | offline cells: when the station went away (Unix time, ms) |
+| `mcc`, `mnc`, `carrier`, `carrier_ext`, `location_area` | yes | as in section 4 |
+| `ms_txpwr_max_dbm`, `rxlev_access_min_dbm`, `service_details`, `neighbours` | no | as the station reported them (5.1.1); absent = not reported |
+
+Server:
+
+- Sends the list to a capable Basestation right after each of its
+  `SERVICE_BTS_INFO`, and to every capable Basestation whenever the list
+  changes (another station announces something new, connects or goes). The
+  same announcement again sends nothing to the others.
+- Leaves out the recipient's own cells.
+- Keeps the cells of a station with a Brew login as offline after its last
+  connection closes, until it announces again; at most 64 such stations, the
+  oldest forgotten first. Stations without a login have no stable name and
+  are dropped when they go. Offline cells serve nothing (section 5.1).
+- Two connections announcing the same cell both appear.
+
+Basestation:
+
+- Keeps the last list; a malformed message is dropped and the previous list
+  stays; a single bad entry is left out. Forget the list on reconnect (a new
+  one follows the announcement).
+- Matching a neighbour entry to a directory cell: same `mcc`, `mnc`,
+  `carrier`, `carrier_ext` and `location_area`, where an element the entry
+  leaves out is the serving cell's own (table 18.64 notes 1 and 2).
+- Useful checks (FlowStation shows them as warnings, it never changes the
+  config by itself):
+  - the directory cell does not list this cell back: radios there are not
+    told about this cell (the MS may use the D-NWRK-BROADCAST neighbour list
+    to choose which channels to scan, clause 18.3.4.1), so they may not find
+    it in time;
+  - the entry's minimum RX access level / maximum MS transmit power (absent:
+    the serving cell's own, note 2) differs from what the cell broadcasts:
+    the MS then computes C2 with wrong values (clause 23.7.1.2);
+  - the entry's BS service details (absent: the serving cell's own) differ.
+- Picking a neighbour from the list fills in carrier, band plan, LA, the
+  network when it is not the Basestation's own, the two levels (as table
+  18.57 / 21.65 elements) and the service details. The cell identifier,
+  reselection types, "neighbour cell synchronized" and cell load are local
+  choices and stay with the operator.
 
 ## 6. Announced reselection: the relay (`handover-v1`)
 
@@ -603,6 +734,8 @@ over. Without late entry it would hear nothing until the next over.
 | with extensions | A with, B without `handover-v1` | A's requests to B's cells get status 2 `not_capable`; A answers as without the extension; no over ended for a talker moving to B |
 | with extensions | A without `ms-moved` | no `SERVICE_MS_MOVED`; A ends overs on uplink inactivity |
 | with extensions | B without `call-restore` | individual calls stay on A and end there as before |
+| without `cell-directory` | with | the Basestation gets no list; its neighbour list works as configured, only without names and checks |
+| with `cell-directory` | older Basestation | no capability, no list; the server lists its cells to the others without the optional fields |
 
 Every new field is optional for the receiver, and unknown fields and types
 are ignored, so a newer side can always talk to an older one.
@@ -623,6 +756,8 @@ Server:
       handover was prepared.
 - [ ] Answer `SERVICE_CALL_RESTORE`; restore window; `SERVICE_CALL_NOT_RESTORED`.
 - [ ] Optional: `SERVICE_MS_CELL`, `SERVICE_MS_RESELECTION` for display.
+- [ ] Optional: keep the optional cell fields of `SERVICE_BTS_INFO` (5.1.1)
+      and send `SERVICE_CELL_DIRECTORY` (5.3) to capable Basestations.
 
 Basestation:
 
@@ -637,13 +772,15 @@ Basestation:
 - [ ] On `SERVICE_MS_MOVED`: end the radio's over, drop it silently.
 - [ ] `call-restore`: release on cause 14 without a release back; ask for an
       unknown individual call on U-CALL RESTORE; report "roaming" updates.
+- [ ] Optional: report what each cell broadcasts in `SERVICE_BTS_INFO`
+      (5.1.1); take `SERVICE_CELL_DIRECTORY` to name and check neighbours.
 
 ## 13. Reference implementation
 
 - brew-server: `src/carriers.rs` (registry, `SERVICE_BTS_INFO`,
-  `SERVICE_MS_CELL`), `src/handover.rs` (relay, `SERVICE_MS_MOVED`),
+  `SERVICE_MS_CELL`, `SERVICE_CELL_DIRECTORY`), `src/handover.rs` (relay, `SERVICE_MS_MOVED`),
   `src/roaming_log.rs` (`SERVICE_MS_RESELECTION`), `src/call_restore.rs`,
   `src/router.rs` (registration handling and late entry).
 - FlowStation: `crates/tetra-entities/src/net_brew/protocol.rs` (messages),
-  `net_brew/worker.rs` (negotiation), `mle/mle_bs.rs` (U-PREPARE,
+  `net_brew/worker.rs` (negotiation, cell directory), `net_dashboard/roaming.rs` (Roaming page), `mle/mle_bs.rs` (U-PREPARE,
   D-NEW-CELL, D-PREPARE-FAIL), the Brew entity and CMCE for restores.

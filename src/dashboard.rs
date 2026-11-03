@@ -497,7 +497,7 @@ static CONNECTIONS_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 
 <section class=panel><h2>Brew Connections<span class=backlink id=bc-count></span></h2><table><thead><tr><th>ID</th><th>Station</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Registered ISSIs</th><th>Cells</th></tr></thead><tbody id=brew-clients></tbody></table></section>
 
-<section class=panel><h2>Cells<span class=backlink id=cell-count></span></h2><table><thead><tr><th>Cell</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Capabilities</th><th>Basestation address</th><th>Connected</th><th>Registered ISSIs</th></tr></thead><tbody id=cells></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">Cells the Basestations announce (FlowStation with the <code>bts-info</code> extension). Named <i>login/cell</i>: the Brew login of the Basestation and the cell's number within it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan; the name is only a label here. Registered ISSIs are counted per Basestation.</p></section>
+<section class=panel><h2>Cells<span class=backlink id=cell-count></span></h2><table><thead><tr><th>Cell</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Neighbours</th><th>Capabilities</th><th>Basestation address</th><th>Connected</th><th>Registered ISSIs</th></tr></thead><tbody id=cells></tbody></table><p class=map-note style="color:#8fa2b8;font-size:12px">Cells the Basestations announce (FlowStation with the <code>bts-info</code> extension). Named <i>login/cell</i>: the Brew login of the Basestation and the cell's number within it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan; the name is only a label here. Registered ISSIs are counted per Basestation. Neighbours are the cells a cell broadcasts, named when the server knows them; a station that went away stays listed as <i>offline</i> until it connects again (stations with a login only).</p></section>
 
 <section class=panel><h2>Registered Subscribers<span class=backlink id=ms-count></span></h2><table><thead><tr><th>ISSI</th><th>Registered via</th><th>Basestation</th><th>Cell</th><th>Basestation address</th><th>Groups</th></tr></thead><tbody id=mobile-stations></tbody></table></section>
 
@@ -526,7 +526,7 @@ async function load(){{
     $('ms-count').textContent=' ('+d.mobile_stations.length+')';
     $('brew-clients').innerHTML=d.brew_clients.map(c=>`<tr><td class=muted>${{esc(c.id).slice(0,8)}}</td><td>${{esc(c.station)}}</td><td>${{esc(c.mode)}}</td><td>${{c.version}}</td><td>${{esc(c.remote_addr||'-')}}</td><td>${{ago(c.connected_at_ms)}}</td><td>${{c.registered_issis}}</td><td>${{cellsCell(c)}}</td></tr>`).join('')||'<tr><td colspan=8 class=muted>No Brew connections</td></tr>';
     $('cell-count').textContent=' ('+(d.cells||[]).length+')';
-    $('cells').innerHTML=(d.cells||[]).map(x=>`<tr><td><b>${{esc(x.name)}}</b>${{dupTag(x)}}</td><td>${{x.carrier}}</td><td>${{mhz(x.downlink_hz)}}</td><td>${{x.location_area}}</td><td>${{x.mcc}} / ${{x.mnc}}</td><td>${{(x.capabilities||[]).map(esc).join(', ')||'<span class=muted>-</span>'}}</td><td>${{esc(x.remote_addr||'-')}}</td><td>${{ago(x.connected_at_ms)}}</td><td>${{x.registered_issis}}</td></tr>`).join('')||'<tr><td colspan=9 class=muted>No cells announced</td></tr>';
+    $('cells').innerHTML=(d.cells||[]).map(x=>`<tr${{x.online===false?' class=muted':''}}><td><b>${{esc(x.name)}}</b>${{dupTag(x)}}${{x.online===false?' <span class=muted>offline</span>':''}}</td><td>${{x.carrier}}</td><td>${{mhz(x.downlink_hz)}}</td><td>${{x.location_area}}</td><td>${{x.mcc}} / ${{x.mnc}}</td><td>${{x.neighbours?(x.neighbours.map(esc).join(', ')||'none'):'<span class=muted>-</span>'}}</td><td>${{(x.capabilities||[]).map(esc).join(', ')||'<span class=muted>-</span>'}}</td><td>${{x.online===false?'-':esc(x.remote_addr||'-')}}</td><td>${{x.online===false?(x.last_seen_ms?'gone '+ago(x.last_seen_ms):'-'):ago(x.connected_at_ms)}}</td><td>${{x.online===false?'-':x.registered_issis}}</td></tr>`).join('')||'<tr><td colspan=10 class=muted>No cells announced</td></tr>';
     const place=p=>p.cell?`${{esc(p.cell)}} <span class=muted>(${{p.carrier}})</span>`:esc(p.station);
     const how={{handover:'<span class="badge badge-reg-in">announced</span>',reselection:'<span class="badge badge-reg-out">not announced</span>',within_station:'<span class=badge>within station</span>'}};
     const resel={{undeclared:['badge-reg-out','undeclared'],unannounced:['badge-reg-out','unannounced'],announced_type_1:['badge-reg-in','announced type 1'],announced_type_2:['badge-reg-in','announced type 2'],announced_type_3:['badge-reg-in','announced type 3']}};
@@ -842,6 +842,21 @@ pub async fn bts_locations_snapshot(
 /// what the main dashboard's "Registered Subscribers" panel shows), and SIP
 /// registrations/trunks. Unlike `/api/registrations` (a historical event
 /// log), this reflects only what is connected/registered at this instant.
+/// The neighbours `cell` reported, named after the directory cell they match
+/// (network, carrier, band plan and LA; an absent LA is the reporting cell's
+/// own, TS 100 392-2 table 18.64 note 2), else `carrier N`; `None` when the
+/// station did not report its neighbours.
+fn neighbour_names(directory: &[crate::carriers::DirectoryEntry], cell: &crate::carriers::Cell) -> Option<Vec<String>> {
+    let list = cell.extra.neighbours.as_ref()?;
+    Some(list.iter().map(|n| {
+        directory.iter()
+            .filter(|e| e.cell.key == crate::carriers::CarrierKey { mcc: n.mcc, mnc: n.mnc, carrier: n.carrier, carrier_ext: n.carrier_ext })
+            .find(|e| n.location_area.unwrap_or(cell.location_area) == e.cell.location_area)
+            .map(|e| crate::carriers::cell_name(&e.station, e.cell.cell))
+            .unwrap_or_else(|| format!("carrier {}", n.carrier))
+    }).collect())
+}
+
 pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let (brew_clients, mobile_stations, cells, duplicate_carriers, handovers_pending, roaming_log) = {
         let inner = state.inner.read().await;
@@ -889,6 +904,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                 })
             }).collect();
         // Every announced cell, one row each: the overview of the radio network.
+        let directory = inner.carriers.directory(station);
         let mut cells: Vec<_> = inner.carriers.announcements().flat_map(|(id, info)| {
             let client = inner.clients.get(&id);
             let station = station(id);
@@ -911,7 +927,32 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
             "registered_issis": issis,
             "duplicate": inner.carriers.is_duplicate(&cell.key),
             "serving": inner.carriers.owner(&cell.key) == Some(id),
+            "online": true,
+            "rxlev_access_min_dbm": cell.extra.rxlev_access_min_dbm,
+            "ms_txpwr_max_dbm": cell.extra.ms_txpwr_max_dbm,
+            "neighbours": neighbour_names(&directory, cell),
         })).collect();
+        // Cells of stations with a login that went away (cell directory).
+        cells.extend(directory.iter().filter(|e| e.client.is_none()).map(|e| serde_json::json!({
+            "name": crate::carriers::cell_name(&e.station, e.cell.cell),
+            "station": e.station,
+            "cell": e.cell.cell,
+            "mcc": e.cell.key.mcc,
+            "mnc": e.cell.key.mnc,
+            "carrier": e.cell.key.carrier,
+            "carrier_ext": e.cell.key.carrier_ext,
+            "downlink_hz": e.cell.key.downlink_hz(),
+            "location_area": e.cell.location_area,
+            "capabilities": [],
+            "registered_issis": 0,
+            "duplicate": false,
+            "serving": false,
+            "online": false,
+            "last_seen_ms": e.last_seen_ms,
+            "rxlev_access_min_dbm": e.cell.extra.rxlev_access_min_dbm,
+            "ms_txpwr_max_dbm": e.cell.extra.ms_txpwr_max_dbm,
+            "neighbours": neighbour_names(&directory, &e.cell),
+        })));
         cells.sort_by(|a, b| (a["station"].as_str(), a["cell"].as_u64()).cmp(&(b["station"].as_str(), b["cell"].as_u64())));
         (brew_clients, mobile_stations, cells, inner.carriers.duplicates(), inner.handovers.pending_count(), inner.roaming_log.newest_first())
     };
@@ -1815,7 +1856,7 @@ mod tests {
         use crate::carriers::{BtsInfo, CarrierKey, Cell};
         use crate::state::{Client, ClientMode};
         let state = crate::state::AppState::for_test();
-        let cell = |carrier| Cell { key: CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 268 }, location_area: 7, cell: 0 };
+        let cell = |carrier| Cell { key: CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 268 }, location_area: 7, cell: 0, ..Default::default() };
         let (bs1, bs2, bs3) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         {
             let mut inner = state.inner.write().await;
@@ -1853,6 +1894,38 @@ mod tests {
             "without a login the station is named after its connection");
         assert_eq!(out["duplicate_carriers"].as_array().unwrap().len(), 1);
         assert_eq!(out["duplicate_carriers"][0]["carrier"], 1530);
+    }
+
+    #[tokio::test]
+    async fn cells_overview_names_neighbours_and_keeps_offline_stations() {
+        use crate::carriers::{BtsInfo, CarrierKey, Cell, CellExtra, NeighbourRef};
+        use crate::state::{Client, ClientMode};
+        let state = AppState::for_test();
+        let (bs1, bs2) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let key = |carrier| CarrierKey { mcc: 232, mnc: 5, carrier, carrier_ext: 268 };
+        let near = |carrier| NeighbourRef { mcc: 232, mnc: 5, carrier, carrier_ext: 268, location_area: None };
+        {
+            let mut inner = state.inner.write().await;
+            for (id, login) in [(bs1, "1000001"), (bs2, "1000002")] {
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                inner.clients.insert(id, Client { tx, mode: ClientMode::Basestation, version: crate::protocol::ConnVersion::V0, version_announced: false, remote_addr: None, connected_at_ms: 0, username: Some(login.into()) });
+                inner.carriers.set_login(id, login);
+            }
+            // Without an LA a neighbour is in the reporting cell's LA (2), so the second entry is
+            // not 1000002/0 (LA 1).
+            let extra = CellExtra { neighbours: Some(vec![NeighbourRef { location_area: Some(1), ..near(1530) }, near(1530), near(1600)]), rxlev_access_min_dbm: Some(-100), ..Default::default() };
+            inner.carriers.announce(bs1, BtsInfo { cells: vec![Cell { key: key(1528), location_area: 2, cell: 0, extra }], capabilities: vec![] });
+            inner.carriers.announce(bs2, BtsInfo { cells: vec![Cell { key: key(1530), location_area: 1, cell: 0, ..Default::default() }], capabilities: vec![] });
+        }
+        state.cleanup_client(bs2).await;
+        let Json(out) = connections_snapshot(State(state)).await;
+        let rows = out["cells"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["name"], "1000001/0");
+        assert_eq!(rows[0]["neighbours"], serde_json::json!(["1000002/0", "carrier 1530", "carrier 1600"]));
+        assert_eq!(rows[0]["rxlev_access_min_dbm"], -100);
+        assert_eq!((rows[1]["name"].as_str(), rows[1]["online"].as_bool()), (Some("1000002/0"), Some(false)));
+        assert!(rows[1]["neighbours"].is_null(), "not reported");
     }
 
     #[tokio::test]

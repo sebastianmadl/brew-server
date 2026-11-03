@@ -38,7 +38,10 @@ into another server or Basestation.
   network if the location areas differ (see "Target lookup").
 - On the radio side the Basestations list each other as neighbour cells
   (FlowStation: `[[cell_info.neighbor_cells_ca]]`), otherwise the radio has no
-  neighbour to announce.
+  neighbour to announce. With the `cell-directory` extension the server sends
+  each Basestation the other Basestations' cells with what they broadcast;
+  FlowStation's Roaming page uses it to pick neighbours and to warn when two
+  cells do not list each other or the levels in an entry differ.
 - TetraPack, Brandmeister and Basestations without the extensions are not
   affected: they get none of the new messages and behave as before.
 
@@ -163,8 +166,10 @@ Basestation ends the call when the radio's uplink stays silent.
 
 - **Connections page, "Cells":** every cell of every Basestation, named
   `<login>/<cell>`, with carrier, downlink frequency, location area,
-  MCC/MNC, capabilities, address and ISSIs. A carrier claimed by two
-  Basestations is flagged; the newest announcement serves it.
+  MCC/MNC, neighbours, capabilities, address and ISSIs. A carrier claimed by
+  two Basestations is flagged; the newest announcement serves it. Neighbours
+  are the cells a cell broadcasts, named when the server knows them. A
+  station with a login that went away stays listed as offline.
 - **Cell per radio:** subscriber tables on the Connections page and the main
   dashboard ("Registered Subscribers", `/api/ms-cells`), and the cell of each
   entry in the registration log.

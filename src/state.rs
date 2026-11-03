@@ -524,8 +524,15 @@ impl AppState {
         inner.consoles.remove(&id);
         inner.fed.ms_links.remove(&id);
         inner.fed.em_links.remove(&id);
+        let announced_cells = inner.carriers.info(id).is_some();
         for (key, next) in inner.carriers.remove(id) {
             tracing::info!(gone = %id, serving = %next, carrier = key.carrier, carrier_ext = key.carrier_ext, "carrier handed back to the other Basestation announcing it");
+        }
+        if announced_cells {
+            // Its cells are offline now (or gone, without a login).
+            for (to, packet) in crate::carriers::directory_updates(&inner, None) {
+                if let Some(client) = inner.clients.get(&to) { let _ = client.tx.send(packet); }
+            }
         }
         crate::handover::client_gone(&mut inner, id);
 

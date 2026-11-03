@@ -21,7 +21,15 @@ Version 1.20.0 adds:
   on the dashboard (the newest announcement serves).
 - **Cells on the Connections page.** Cells are named `<login>/<cell>`; a
   "Cells" panel lists carrier, downlink frequency, location area, MCC/MNC,
-  capabilities, address and ISSIs per cell.
+  neighbours, capabilities, address and ISSIs per cell. A station with a login
+  that went away stays listed as offline until it connects again.
+- **Cell directory.** `SERVICE_BTS_INFO` may carry what each cell broadcasts
+  (maximum MS power, minimum access level, BS service details, neighbour
+  list). With the new `cell-directory` extension the server sends a
+  Basestation that asks for it the cells of all other Basestations, online
+  and offline, with those values (`SERVICE_CELL_DIRECTORY`, 0x1D), so it can
+  name its neighbours, check that both sides list each other and pick a
+  neighbour from the list (FlowStation: Roaming page).
 - **Announced handover relay.** Basestations with the `handover-v1`
   capability can prepare an announced cell change on the target Basestation
   through the server (`SERVICE_HO_PREPARE`, `SERVICE_HO_FORWARD_REG`,

@@ -146,6 +146,13 @@ pub const SERVICE_CALL_RESTORE: u8 = 0x1B;
 /// `call-restore` capability.
 pub const SERVICE_CALL_NOT_RESTORED: u8 = 0x1C;
 
+/// `CLASS_SERVICE` type the server sends to a Basestation with the cells of the
+/// other Basestations it knows, online and offline, with what they broadcast
+/// (`{"cells":[...]}`), so the Basestation can show and pick its neighbours.
+/// Only sent to a Basestation that announced the `cell-directory` capability
+/// (see `carriers::directory_updates`).
+pub const SERVICE_CELL_DIRECTORY: u8 = 0x1D;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());
