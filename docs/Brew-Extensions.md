@@ -153,7 +153,13 @@ Example: band 4, offset 0, duplex spacing 4, normal operation =
 438.200 MHz.
 
 **Cell key.** A cell is found network wide by `(mcc, mnc, carrier,
-carrier_ext)`, optionally narrowed by `location_area`.
+carrier_ext)`, optionally narrowed by `location_area`. When no cell has that
+exact key, the server takes a cell on the same downlink: same network,
+carrier, frequency band and offset (bits 9 to 4 of `carrier_ext`). The duplex
+spacing and reverse operation bits (3 to 0) only set the uplink, and a
+neighbour entry without an extension takes the serving cell's band plan
+(TS 100 392-2 table 18.64 note 1), so they may differ between how a cell is
+listed as a neighbour and how its own Basestation announces it.
 
 **`sdu`** is the MM PDU exactly as the air interface carries it: lower-case
 hex (upper case accepted on input), exactly `ceil(sdu_len_bits / 8)` bytes,
@@ -319,8 +325,9 @@ Basestation:
   stays; a single bad entry is left out. Forget the list on reconnect (a new
   one follows the announcement).
 - Matching a neighbour entry to a directory cell: same `mcc`, `mnc`,
-  `carrier`, `carrier_ext` and `location_area`, where an element the entry
-  leaves out is the serving cell's own (table 18.64 notes 1 and 2).
+  `carrier`, downlink band and offset (`carrier_ext` bits 9 to 4, see the cell
+  key in section 4) and `location_area`, where an element the entry leaves out
+  is the serving cell's own (table 18.64 notes 1 and 2).
 - Useful checks (FlowStation shows them as warnings, it never changes the
   config by itself):
   - the directory cell does not list this cell back: radios there are not

@@ -30,6 +30,11 @@ Version 1.20.0 adds:
   and offline, with those values (`SERVICE_CELL_DIRECTORY`, 0x1D), so it can
   name its neighbours, check that both sides list each other and pick a
   neighbour from the list (FlowStation: Roaming page).
+- **Handover target by downlink.** When no cell has the exact carrier key of
+  a handover request, the target is the cell on the same downlink (network,
+  carrier, band, offset): duplex spacing and reverse operation only set the
+  uplink, and a neighbour listed without an extension carries the serving
+  cell's band plan.
 - **Announced handover relay.** Basestations with the `handover-v1`
   capability can prepare an announced cell change on the target Basestation
   through the server (`SERVICE_HO_PREPARE`, `SERVICE_HO_FORWARD_REG`,

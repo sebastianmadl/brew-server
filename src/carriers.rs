@@ -97,6 +97,17 @@ impl CarrierKey {
         };
         (band * 100_000_000 + u64::from(self.carrier) * 25_000).saturating_add_signed(offset)
     }
+
+    /// Whether `other` is the same cell on the downlink: same network, carrier,
+    /// band and offset (bits 9-4 of the extension). Duplex spacing and reverse
+    /// operation (bits 3-0) only set the uplink, and a neighbour entry without
+    /// an extension takes the serving cell's band plan (TS 100 392-2 table 18.64
+    /// note 1), so they may differ between how a cell is listed and how its
+    /// station announces it.
+    pub fn same_downlink(&self, other: &CarrierKey) -> bool {
+        self.mcc == other.mcc && self.mnc == other.mnc && self.carrier == other.carrier
+            && (self.carrier_ext & 0x3f0) == (other.carrier_ext & 0x3f0)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -306,6 +317,22 @@ impl CarrierRegistry {
             .filter(|(_, (_, info))| info.cells.iter().any(|c| c.key == *key && c.location_area == la))
             .max_by_key(|(_, (seq, _))| *seq)
             .map(|(id, _)| *id)
+    }
+
+    /// The connection serving `key` (in location area `la`, when given): the
+    /// exact key first, else the newest claimant of a cell on the same downlink
+    /// (`CarrierKey::same_downlink`).
+    pub fn find_target(&self, key: &CarrierKey, la: Option<u16>) -> Option<ClientId> {
+        let exact = match la {
+            Some(la) => self.owner_in_location_area(key, la),
+            None => self.owner(key),
+        };
+        exact.or_else(|| {
+            self.by_client.iter()
+                .filter(|(_, (_, info))| info.cells.iter().any(|c| c.key.same_downlink(key) && la.is_none_or(|la| la == c.location_area)))
+                .max_by_key(|(_, (seq, _))| *seq)
+                .map(|(id, _)| *id)
+        })
     }
 
     /// What `client` announced last.
@@ -914,6 +941,22 @@ mod tests {
         reg.announce(bs2b, info(&[1530]));
         let dir = reg.directory(|id| if id == bs1 { "1000001".into() } else { "1000002".into() });
         assert_eq!(dir.iter().map(|e| (e.cell.key.carrier, e.client.is_some())).collect::<Vec<_>>(), [(1528, true), (1530, true)]);
+    }
+
+    #[test]
+    fn a_target_is_found_by_its_downlink_when_the_duplex_bits_differ() {
+        let mut reg = CarrierRegistry::default();
+        let bs2 = Uuid::new_v4();
+        // BS2 announces duplex spacing 7 (ext 270); BS1 lists it without an
+        // extension, so its request carries BS1's own band plan (264).
+        let k = |ext| CarrierKey { mcc: 232, mnc: 5, carrier: 1530, carrier_ext: ext };
+        reg.announce(bs2, BtsInfo { cells: vec![Cell { key: k(270), location_area: 1, cell: 0, ..Default::default() }], capabilities: vec![] });
+        assert_eq!(reg.owner(&k(264)), None);
+        assert_eq!(reg.find_target(&k(264), None), Some(bs2));
+        assert_eq!(reg.find_target(&k(264), Some(1)), Some(bs2));
+        assert_eq!(reg.find_target(&k(264), Some(2)), None, "other LA");
+        assert_eq!(reg.find_target(&k(264 | 0x10), None), None, "other offset = other frequency");
+        assert_eq!(reg.find_target(&CarrierKey { carrier: 1531, ..k(270) }, None), None);
     }
 
     #[test]

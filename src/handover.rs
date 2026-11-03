@@ -505,10 +505,7 @@ pub async fn handle_request(state: &Arc<AppState>, source: ClientId, service_typ
         return;
     };
     let key = CarrierKey { mcc, mnc, carrier: req.target_carrier, carrier_ext: req.target_carrier_ext };
-    let owner = match req.target_location_area {
-        Some(la) => inner.carriers.owner_in_location_area(&key, la),
-        None => inner.carriers.owner(&key),
-    };
+    let owner = inner.carriers.find_target(&key, req.target_location_area);
     let target = match owner {
         None => Err(NoTargetReason::Unknown),
         Some(t) if t == source => Err(NoTargetReason::OwnCell),

@@ -843,14 +843,14 @@ pub async fn bts_locations_snapshot(
 /// registrations/trunks. Unlike `/api/registrations` (a historical event
 /// log), this reflects only what is connected/registered at this instant.
 /// The neighbours `cell` reported, named after the directory cell they match
-/// (network, carrier, band plan and LA; an absent LA is the reporting cell's
+/// (network, carrier, band and offset, LA; an absent LA is the reporting cell's
 /// own, TS 100 392-2 table 18.64 note 2), else `carrier N`; `None` when the
 /// station did not report its neighbours.
 fn neighbour_names(directory: &[crate::carriers::DirectoryEntry], cell: &crate::carriers::Cell) -> Option<Vec<String>> {
     let list = cell.extra.neighbours.as_ref()?;
     Some(list.iter().map(|n| {
         directory.iter()
-            .filter(|e| e.cell.key == crate::carriers::CarrierKey { mcc: n.mcc, mnc: n.mnc, carrier: n.carrier, carrier_ext: n.carrier_ext })
+            .filter(|e| e.cell.key.same_downlink(&crate::carriers::CarrierKey { mcc: n.mcc, mnc: n.mnc, carrier: n.carrier, carrier_ext: n.carrier_ext }))
             .find(|e| n.location_area.unwrap_or(cell.location_area) == e.cell.location_area)
             .map(|e| crate::carriers::cell_name(&e.station, e.cell.cell))
             .unwrap_or_else(|| format!("carrier {}", n.carrier))
