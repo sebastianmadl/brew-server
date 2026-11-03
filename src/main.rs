@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     let path = std::env::args().nth(1).unwrap_or_else(|| "brew-server.toml".to_owned());
     let config = Config::load(&path)?;
-    dashboard::set_server_name(&config.header.servername);
+    dashboard::set_server_name(&config.dashboard.servername);
     let (state, aprs_rx) = AppState::new(config, std::path::PathBuf::from(&path));
     let state = Arc::new(state);
 

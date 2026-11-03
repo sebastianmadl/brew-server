@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 /// Server version shown under the "Live" indicator in every page header.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Server name from `[header] servername`, HTML-escaped. Set once at startup,
+/// Server name from `[dashboard] servername`, HTML-escaped. Set once at startup,
 /// before the first page is built; pages built without it use the default.
 static SERVER_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -30,7 +30,7 @@ pub fn set_server_name(name: &str) {
 }
 
 fn server_name() -> &'static str {
-    SERVER_NAME.get_or_init(|| html_escape(&config::HeaderConfig::default().servername))
+    SERVER_NAME.get_or_init(|| html_escape(&config::DashboardConfig::default().servername))
 }
 
 fn html_escape(s: &str) -> String {
@@ -1744,7 +1744,7 @@ mod tests {
     #[test]
     fn server_name_is_the_heading_and_every_tab_title() {
         let name = server_name();
-        assert_eq!(name, "Tetra Network Monitor", "default without [header]");
+        assert_eq!(name, "Tetra Network Monitor", "default without [dashboard] servername");
         assert!(INDEX_HTML.contains("<title>Tetra Network Monitor</title>"));
         assert!(INDEX_HTML.contains("<h1 class=srvname>Tetra Network Monitor</h1>"));
         for (page, html) in [

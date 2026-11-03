@@ -53,21 +53,6 @@ pub struct Config {
     pub roaming: RoamingConfig,
     /// Announced cell changes between Basestations. See `HandoverConfig`.
     pub handover: HandoverConfig,
-    /// Dashboard heading and browser tab titles. See `HeaderConfig`.
-    pub header: HeaderConfig,
-}
-
-/// `[header]`: how the dashboard names this server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct HeaderConfig {
-    /// Shown as the main dashboard heading and in the browser tab title of
-    /// every page.
-    pub servername: String,
-}
-
-impl Default for HeaderConfig {
-    fn default() -> Self { Self { servername: "Tetra Network Monitor".into() } }
 }
 
 /// `[roaming]`: what happens when a mobile station registers on one
@@ -448,6 +433,9 @@ pub struct DashboardConfig {
     /// Has no effect when `users` itself is empty (auth disabled entirely).
     pub admins: Vec<String>,
     pub realm: String,
+    /// Name of this server: the main dashboard heading and the browser tab
+    /// title of every dashboard page.
+    pub servername: String,
     /// UI behavior toggles (currently just read-only/open mode).
     pub ui: DashboardUiConfig,
     pub tls: TlsConfig,
@@ -461,6 +449,7 @@ impl Default for DashboardConfig {
             users: HashMap::new(),
             admins: Vec::new(),
             realm: "brew-server-dashboard".into(),
+            servername: "Tetra Network Monitor".into(),
             ui: DashboardUiConfig::default(),
             tls: TlsConfig::default(),
         }
@@ -816,7 +805,6 @@ impl Default for Config {
             ha: HaConfig::default(),
             roaming: RoamingConfig::default(),
             handover: HandoverConfig::default(),
-            header: HeaderConfig::default(),
         }
     }
 }
@@ -1035,6 +1023,13 @@ mod roaming_config_tests {
     fn parse(toml_src: &str) -> std::result::Result<Config, toml::de::Error> { toml::from_str(toml_src) }
 
     #[test]
+    fn server_name_is_a_dashboard_setting() {
+        assert_eq!(parse("").unwrap().dashboard.servername, "Tetra Network Monitor");
+        let cfg = parse("[dashboard]\nservername = \"OE Tetra\"\n").unwrap();
+        assert_eq!(cfg.dashboard.servername, "OE Tetra");
+    }
+
+    #[test]
     fn kick_old_issi_defaults_off() {
         assert!(!parse("").unwrap().roaming.kick_old_issi);
         assert!(!parse("[roaming]\n").unwrap().roaming.kick_old_issi);
@@ -1052,11 +1047,5 @@ mod roaming_config_tests {
     fn handover_timeout_defaults_below_the_basestation_fallback() {
         assert_eq!(parse("").unwrap().handover.timeout_ms, 2000);
         assert_eq!(parse("[handover]\ntimeout_ms = 1500\n").unwrap().handover.timeout_ms, 1500);
-    }
-
-    #[test]
-    fn header_servername_defaults_and_parses() {
-        assert_eq!(parse("").unwrap().header.servername, "Tetra Network Monitor");
-        assert_eq!(parse("[header]\nservername = \"My Net\"\n").unwrap().header.servername, "My Net");
     }
 }

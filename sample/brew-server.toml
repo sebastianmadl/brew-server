@@ -15,11 +15,6 @@ max_call_duration_seconds = 14400
 # was lost. Shared by Brew and SIP calls. 0 disables it.
 call_inactivity_timeout_seconds = 60
 
-# Name of this server: main dashboard heading and the browser tab title of
-# every dashboard page.
-[header]
-servername = "Tetra Network Monitor"
-
 [tls]
 enabled = true
 cert_path = "/etc/ssl/brew/server.crt"
@@ -84,6 +79,9 @@ key_path = "/etc/ssl/brew/server.key"
 enabled = true
 listen = "0.0.0.0:9003"
 realm = "brew-server-dashboard"
+# Name of this server: main dashboard heading and the browser tab title of
+# every dashboard page.
+servername = "Tetra Network Monitor"
 admins = ["admin"]
 
 [dashboard.ui]

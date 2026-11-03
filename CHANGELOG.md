@@ -4,12 +4,12 @@ All notable changes to brew-server, newest first.
 
 Version 1.20.0 adds:
 
-- **Server name.** `[header] servername` (default `"Tetra Network Monitor"`)
+- **Server name.** `[dashboard] servername` (default `"Tetra Network Monitor"`)
   sets the main dashboard heading and the browser tab title of every
-  dashboard page:
+  dashboard page. It belongs in the `[dashboard]` section:
 
   ```toml
-  [header]
+  [dashboard]
   servername = "Tetra Network Monitor"
   ```
 

@@ -19,10 +19,11 @@ Related Projects:
 ## Server name
 
 The dashboard heading and the browser tab titles use the server name
-(default "Tetra Network Monitor"). Set your own in the config:
+(default "Tetra Network Monitor"). Set your own in the `[dashboard]` section
+of the config:
 
 ```toml
-[header]
+[dashboard]
 servername = "Tetra Network Monitor"
 ```
 
