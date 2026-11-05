@@ -70,6 +70,12 @@ Version 1.20.0 adds:
   Basestation reports a plain roaming registration
   (`SERVICE_CALL_NOT_RESTORED`) or the radio sets up a new call. See
   [docs/Handover.md](docs/Handover.md).
+- **Calls between two radios survive a station change.** With the new
+  `call-handoff` extension (`SERVICE_CALL_HANDOFF`, 0x1E) a local call
+  between two radios of one Basestation is handed to the network when one
+  radio restores it on another Basestation, and a call between radios on two
+  Basestations becomes local again when one radio comes to the other's
+  Basestation. See [docs/Handover.md](docs/Handover.md).
 - **Backward compatible.** All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older
   Basestations see no change. The messages are specified for other

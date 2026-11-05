@@ -146,6 +146,14 @@ pub const SERVICE_CALL_RESTORE: u8 = 0x1B;
 /// `call-restore` capability.
 pub const SERVICE_CALL_NOT_RESTORED: u8 = 0x1C;
 
+/// `CLASS_SERVICE` type for a call between two radios of one Basestation when
+/// one of them goes to another Basestation: the server asks the Basestation
+/// holding it (`{"issi":N,"peer":N}`) and that one answers with the call it
+/// bridged to Brew (`uuid`, `calling`, `duplex`, `priority`, `floor`) or
+/// without `uuid` (see `call_restore`). Only used with a Basestation that
+/// announced the `call-handoff` capability.
+pub const SERVICE_CALL_HANDOFF: u8 = 0x1E;
+
 /// `CLASS_SERVICE` type the server sends to a Basestation with the cells of the
 /// other Basestations it knows, online and offline, with what they broadcast
 /// (`{"cells":[...]}`), so the Basestation can show and pick its neighbours.

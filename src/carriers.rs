@@ -27,11 +27,12 @@ pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 /// (`SERVICE_BTS_INFO`), `handover-v1` (the handover messages, see `handover`),
 /// `ms-cell` (`SERVICE_MS_CELL`), `ms-moved` (`SERVICE_MS_MOVED`, to a
 /// Basestation that also names it in its capabilities), `ms-reselection`
-/// (`SERVICE_MS_RESELECTION`, see `roaming_log`) and `call-restore`
-/// (`SERVICE_CALL_RESTORE`, see `call_restore`).
+/// (`SERVICE_MS_RESELECTION`, see `roaming_log`), `call-restore`
+/// (`SERVICE_CALL_RESTORE`, see `call_restore`), `call-handoff`
+/// (`SERVICE_CALL_HANDOFF`, see `call_restore`) and
 /// `cell-directory` (`SERVICE_CELL_DIRECTORY`, to a Basestation that also names
 /// it in its capabilities, see `directory_updates`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, cell-directory";
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory";
 
 /// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`) for
 /// `SERVICE_CELL_DIRECTORY`.
@@ -865,7 +866,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, CAPABILITY_CELL_DIRECTORY]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY]);
     }
 
     #[test]

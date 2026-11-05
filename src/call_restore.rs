@@ -32,6 +32,24 @@
 //!
 //! Calls bridged to SIP are left alone: their media path is bound to the
 //! connection that set them up.
+//!
+//! Calls between two radios of one Basestation (extension `call-handoff`,
+//! `SERVICE_CALL_HANDOFF`):
+//!
+//! - A call between two radios of one Basestation runs there alone; the server
+//!   does not hold it. When one radio restores it on another Basestation, that
+//!   one asks with `SERVICE_CALL_RESTORE` as for any call. Holding none, the
+//!   server asks the Basestation where `peer` is registered, if it announced
+//!   `call-handoff`: `{"issi":N,"peer":N}`. That Basestation bridges `peer`'s
+//!   leg to Brew and answers with the call (`uuid`, `calling`, `duplex`,
+//!   `priority`, `floor`), or without `uuid`. The server records it as a
+//!   private call between the two Basestations and answers the restore
+//!   request with it. No answer within `HANDOFF_TIMEOUT`: no call.
+//! - The other way round, a radio that registers on the Basestation its peer
+//!   is on, if that one announced `call-handoff`: the Basestation it left lets
+//!   its leg go ("SwMI requested disconnection"), and the new one joins the two
+//!   legs itself and ends the Brew call with the same cause. Not joined within
+//!   `RESTORE_WINDOW`, the call ends for the peer as any moved call.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -42,7 +60,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::protocol;
-use crate::state::{AppState, CallKind, ClientId, Inner};
+use crate::state::{ActiveCall, AppState, CallKind, ClientId, Inner};
 
 /// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`)
 /// for `SERVICE_CALL_RESTORE`.
@@ -53,6 +71,15 @@ pub const CAPABILITY: &str = "call-restore";
 /// waits for D-CALL RESTORE with T306 (4 s to 6 s, clause 14.6); the field
 /// test of 2026-10-30 had the U-CALL RESTORE 0.9 s after the registration.
 pub const RESTORE_WINDOW: Duration = Duration::from_secs(8);
+
+/// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`)
+/// for `SERVICE_CALL_HANDOFF`.
+pub const CAPABILITY_HANDOFF: &str = "call-handoff";
+
+/// How long a restore request waits for the Basestation asked to hand its
+/// local call over. Project value: the asking Basestation gives the whole
+/// answer 2 s (FlowStation `NETWORK_RESTORE_TIMEOUT_TS`).
+pub const HANDOFF_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// What the server knows of a Brew-to-Brew individual call beyond `ActiveCall`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,12 +94,26 @@ struct CallInfo {
 struct Waiting {
     issi: u32,
     on: ClientId,
+    /// The radio came to the Basestation its peer is on, which joins the two
+    /// legs itself (`call-handoff`); this is the Basestation it left. Not
+    /// joined in time, the call ends for the peer on `on`.
+    joins_from: Option<ClientId>,
+}
+
+/// A restore request from `asker` for `issi`'s call with `peer`, waiting for
+/// the Basestation holding the call locally to hand it over.
+#[derive(Debug, Clone, Copy)]
+struct PendingHandoff {
+    asker: ClientId,
+    peer: u32,
 }
 
 #[derive(Default)]
 pub struct CallRestores {
     calls: HashMap<Uuid, CallInfo>,
     waiting: HashMap<Uuid, Waiting>,
+    /// (Basestation asked, issi) -> the restore request waiting for its answer
+    handoffs: HashMap<(ClientId, u32), PendingHandoff>,
 }
 
 /// A private call between two Brew connections was set up.
@@ -115,21 +156,32 @@ pub fn move_calls(inner: &mut Inner, issi: u32, from: ClientId, to: ClientId) ->
     if from == to || !crate::handover::announced(inner, to, CAPABILITY) {
         return Vec::new();
     }
+    let joins = crate::handover::announced(inner, to, CAPABILITY_HANDOFF);
     let Inner { calls, call_restores, .. } = inner;
     let mut moved = Vec::new();
     for (id, call) in calls.iter_mut() {
         if call.kind != CallKind::Private || !call_restores.calls.contains_key(id) {
             continue;
         }
+        let mut joins_from = None;
         if call.source_issi == issi && call.owner == from && !call.peers.contains(&to) {
             call.owner = to;
         } else if call.destination == issi && call.peers == HashSet::from([from]) && call.owner != to {
             call.peers = HashSet::from([to]);
+        } else if joins && call.source_issi == issi && call.owner == from && call.peers == HashSet::from([to]) {
+            // To the peer's Basestation, which joins the legs itself and then
+            // ends the Brew call. `from` no longer speaks for the call.
+            call.owner = to;
+            joins_from = Some(from);
+        } else if joins && call.destination == issi && call.peers == HashSet::from([from]) && call.owner == to {
+            call.peers = HashSet::from([to]);
+            joins_from = Some(from);
         } else {
-            // Both parties on `to`, or the radio's side is not on `from`.
+            // Both parties on `to` (without `call-handoff`), or the radio's
+            // side is not on `from`.
             continue;
         }
-        call_restores.waiting.insert(*id, Waiting { issi, on: to });
+        call_restores.waiting.insert(*id, Waiting { issi, on: to, joins_from });
         moved.push(*id);
     }
     moved
@@ -163,13 +215,25 @@ pub async fn window_closed(state: &Arc<AppState>, id: Uuid) {
 }
 
 async fn end_unrestored(state: &Arc<AppState>, w: Waiting, id: Uuid) {
-    crate::router::end_call(
-        state,
-        w.on,
-        id,
-        protocol::build_call_cause(protocol::CALL_RELEASE, &id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED),
-    )
-    .await;
+    let raw = protocol::build_call_cause(protocol::CALL_RELEASE, &id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED);
+    if w.joins_from.is_none() {
+        crate::router::end_call(state, w.on, id, raw).await;
+        return;
+    }
+    // A call to be joined on `on`: both sides are there now, so the release
+    // goes to `on` for the party that stayed.
+    let tx = {
+        let mut inner = state.inner.write().await;
+        if inner.calls.remove(&id).is_none() {
+            return;
+        }
+        forget(&mut inner, &id);
+        inner.clients.get(&w.on).map(|c| c.tx.clone())
+    };
+    if let Some(tx) = tx {
+        let _ = tx.send(raw);
+    }
+    state.monitor.call_ended(id).await;
 }
 
 /// Radio `issi` on Basestation `source` has given up the calls that moved
@@ -302,6 +366,23 @@ pub async fn handle_request(state: &Arc<AppState>, source: ClientId, json: &str)
             answer(req.issi, peer, Some((id, info, priority)))
         }
         None => {
+            // A call between two radios of one Basestation: ask that one for it.
+            if let Some(holder) = handoff_holder(&inner, source, req.issi, req.peer) {
+                inner.call_restores.handoffs.insert((holder, req.issi), PendingHandoff { asker: source, peer: req.peer });
+                if let Some(c) = inner.clients.get(&holder) {
+                    let json = serde_json::json!({ "issi": req.issi, "peer": req.peer }).to_string();
+                    let _ = c.tx.send(protocol::build_service(protocol::SERVICE_CALL_HANDOFF, &json));
+                }
+                info!(%source, %holder, issi = req.issi, peer = req.peer, "call restore: asking the peer's Basestation for its local call");
+                drop(inner);
+                spawn_handoff_timeout(state, holder, req.issi);
+                for id in moved {
+                    if state.inner.read().await.call_restores.waiting.contains_key(&id) {
+                        spawn_window(state, id);
+                    }
+                }
+                return;
+            }
             info!(%source, issi = req.issi, peer = req.peer, "call restore: no call of this radio to restore");
             answer(req.issi, req.peer, None)
         }
@@ -316,6 +397,126 @@ pub async fn handle_request(state: &Arc<AppState>, source: ClientId, json: &str)
         if state.inner.read().await.call_restores.waiting.contains_key(&id) {
             spawn_window(state, id);
         }
+    }
+}
+
+/// The Basestation to ask for a local call of `issi` with `peer`, restored on
+/// `source`: where `peer` is registered, if that is another Basestation that
+/// announced `call-handoff`.
+fn handoff_holder(inner: &Inner, source: ClientId, issi: u32, peer: u32) -> Option<ClientId> {
+    if peer == 0 || peer == issi {
+        return None;
+    }
+    let holder = inner.subscribers.get(&peer)?.client_id;
+    (holder != source && crate::handover::announced(inner, holder, CAPABILITY_HANDOFF)).then_some(holder)
+}
+
+/// Ends a restore request whose Basestation did not answer the handoff in time.
+fn spawn_handoff_timeout(state: &Arc<AppState>, holder: ClientId, issi: u32) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(HANDOFF_TIMEOUT).await;
+        handoff_timed_out(&state, holder, issi).await;
+    });
+}
+
+/// The handoff asked of `holder` for `issi` was not answered in time: the
+/// restore request gets no call.
+pub async fn handoff_timed_out(state: &Arc<AppState>, holder: ClientId, issi: u32) {
+    let mut inner = state.inner.write().await;
+    let Some(pending) = inner.call_restores.handoffs.remove(&(holder, issi)) else { return };
+    info!(%holder, issi, peer = pending.peer, "call restore: no handoff answer, no call");
+    if let Some(c) = inner.clients.get(&pending.asker) {
+        let _ = c.tx.send(answer(issi, pending.peer, None));
+    }
+}
+
+#[derive(Deserialize)]
+struct Handoff {
+    issi: u32,
+    peer: u32,
+    uuid: Option<Uuid>,
+    #[serde(default)]
+    calling: u32,
+    #[serde(default)]
+    duplex: bool,
+    #[serde(default)]
+    priority: u8,
+    #[serde(default)]
+    floor: u32,
+}
+
+/// A `SERVICE_CALL_HANDOFF` answer from Basestation `source`: its local call
+/// of `issi` with `peer`, now bridged to Brew under `uuid`, or none. The call
+/// becomes a private call between `source` (the peer's side) and the
+/// Basestation that asked, which gets it as the answer to its restore request.
+pub async fn handle_handoff(state: &Arc<AppState>, source: ClientId, json: &str) {
+    let h: Handoff = match serde_json::from_str(json) {
+        Ok(h) => h,
+        Err(e) => {
+            warn!(%source, error = %e, json, "malformed call handoff");
+            return;
+        }
+    };
+    let mut inner = state.inner.write().await;
+    if !crate::handover::announced(&inner, source, CAPABILITY_HANDOFF) {
+        warn!(%source, issi = h.issi, "call handoff from a connection without call-handoff ignored");
+        return;
+    }
+    let pending = inner.call_restores.handoffs.get(&(source, h.issi)).copied().filter(|p| p.peer == h.peer);
+    let Some(pending) = pending else {
+        // Nobody waits for it (answered too late): end the leg the Basestation
+        // just bridged, or its radio would hold a call nobody joins.
+        if let (Some(id), Some(c)) = (h.uuid, inner.clients.get(&source)) {
+            info!(%source, issi = h.issi, uuid = %id, "call handoff came too late, ending it");
+            let _ = c.tx.send(protocol::build_call_cause(protocol::CALL_RELEASE, &id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED));
+        }
+        return;
+    };
+    inner.call_restores.handoffs.remove(&(source, h.issi));
+    let call = match h.uuid {
+        Some(id) if !inner.calls.contains_key(&id) && (h.calling == h.issi || h.calling == h.peer) => {
+            // The radio that moved is on the asking Basestation, the peer here.
+            let (owner, source_issi, destination, peer_client) = if h.calling == h.peer {
+                (source, h.peer, h.issi, pending.asker)
+            } else {
+                (pending.asker, h.issi, h.peer, source)
+            };
+            inner.calls.insert(id, ActiveCall {
+                kind: CallKind::Private,
+                owner,
+                source_issi,
+                destination,
+                priority: h.priority,
+                peers: HashSet::from([peer_client]),
+                started_at: std::time::Instant::now(),
+                last_activity_ms: ActiveCall::new_activity(),
+            });
+            note_setup(&mut inner, id, h.duplex);
+            let info = CallInfo { duplex: h.duplex, floor: (h.floor != 0).then_some(h.floor) };
+            inner.call_restores.calls.insert(id, info);
+            info!(%source, asker = %pending.asker, issi = h.issi, peer = h.peer, uuid = %id, duplex = h.duplex, "call handoff: a local call now runs between two Basestations");
+            Some((id, info, h.priority, source_issi, destination))
+        }
+        Some(id) => {
+            warn!(%source, issi = h.issi, uuid = %id, calling = h.calling, "call handoff with a known uuid or wrong parties ignored");
+            if let Some(c) = inner.clients.get(&source) {
+                let _ = c.tx.send(protocol::build_call_cause(protocol::CALL_RELEASE, &id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED));
+            }
+            None
+        }
+        None => {
+            info!(%source, issi = h.issi, peer = h.peer, "call handoff: the Basestation has no such call");
+            None
+        }
+    };
+    let reply = answer(h.issi, h.peer, call.map(|(id, info, priority, ..)| (id, info, priority)));
+    if let Some(c) = inner.clients.get(&pending.asker) {
+        let _ = c.tx.send(reply);
+    }
+    drop(inner);
+    if let Some((id, _, priority, source_issi, destination)) = call {
+        state.monitor.call_started(id, "private", source_issi, destination, priority).await;
     }
 }
 
@@ -346,6 +547,41 @@ mod tests {
         });
         packet(state, id, protocol::build_service(protocol::SERVICE_BTS_INFO, &json.to_string())).await;
         (id, rx)
+    }
+
+    /// A Basestation on `carrier` that also hands local calls over (`call-handoff`).
+    async fn bts_handoff(state: &Arc<AppState>, carrier: u16) -> (ClientId, Rx) {
+        let (id, rx) = connect(state, ClientMode::Basestation).await;
+        let json = serde_json::json!({
+            "mcc": 232, "mnc": 5,
+            "cells": [{ "carrier": carrier, "carrier_ext": 270, "location_area": carrier }],
+            "capabilities": ["handover-v1", "ms-moved", CAPABILITY, CAPABILITY_HANDOFF],
+        });
+        packet(state, id, protocol::build_service(protocol::SERVICE_BTS_INFO, &json.to_string())).await;
+        (id, rx)
+    }
+
+    /// The `SERVICE_CALL_HANDOFF` requests among `packets`.
+    fn handoff_requests(packets: &[Vec<u8>]) -> Vec<serde_json::Value> {
+        packets
+            .iter()
+            .filter_map(|p| match protocol::parse_with_version(p, ConnVersion::V0) {
+                Ok((BrewMessage::Service(s), _)) if s.service_type == protocol::SERVICE_CALL_HANDOFF => serde_json::from_str(&s.json_data).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A Basestation's answer to a handoff request: its local call, now bridged as `id`.
+    fn handoff(issi: u32, peer: u32, call: Option<(&Uuid, u32, bool, u32)>) -> Vec<u8> {
+        let json = match call {
+            Some((id, calling, duplex, floor)) => serde_json::json!({
+                "issi": issi, "peer": peer, "uuid": id.to_string(), "calling": calling,
+                "duplex": duplex, "priority": 0, "floor": floor,
+            }),
+            None => serde_json::json!({ "issi": issi, "peer": peer }),
+        };
+        protocol::build_service(protocol::SERVICE_CALL_HANDOFF, &json.to_string())
     }
 
     async fn packet(state: &Arc<AppState>, from: ClientId, raw: Vec<u8>) {
@@ -626,5 +862,251 @@ mod tests {
         let inner = state.inner.read().await;
         assert_eq!(inner.calls.len(), 20);
         assert!(inner.call_restores.waiting.is_empty());
+    }
+
+    const MTH: u32 = 2320980;
+
+    /// Both radios in a local call on BS1; the radio moves to BS2.
+    async fn local_case() -> (Arc<AppState>, (ClientId, Rx), (ClientId, Rx)) {
+        let state = AppState::for_test();
+        let (bs1, bs1_rx) = bts_handoff(&state, 1528).await;
+        let (bs2, bs2_rx) = bts_handoff(&state, 1530).await;
+        register(&state, bs1, RADIO).await;
+        register(&state, bs1, MTH).await;
+        register(&state, bs2, RADIO).await;
+        (state, (bs1, bs1_rx), (bs2, bs2_rx))
+    }
+
+    #[tokio::test]
+    async fn a_local_call_is_handed_over_when_one_radio_changes_station() {
+        let (state, (bs1, mut bs1_rx), (bs2, mut bs2_rx)) = local_case().await;
+        drain(&mut bs1_rx);
+        drain(&mut bs2_rx);
+        // The server knows no call: it asks the peer's station for its local one.
+        packet(&state, bs2, restore_request(RADIO, MTH)).await;
+        assert!(answers(&drain(&mut bs2_rx)).is_empty(), "no answer before the handoff");
+        assert_eq!(handoff_requests(&drain(&mut bs1_rx)), vec![serde_json::json!({ "issi": RADIO, "peer": MTH })]);
+
+        // BS1 bridges its call (MTH called the radio, duplex).
+        let id = Uuid::new_v4();
+        packet(&state, bs1, handoff(RADIO, MTH, Some((&id, MTH, true, 0)))).await;
+        assert_eq!(
+            answers(&drain(&mut bs2_rx)),
+            vec![serde_json::json!({ "issi": RADIO, "peer": MTH, "uuid": id.to_string(), "duplex": true, "priority": 0, "floor": 0 })]
+        );
+        {
+            let inner = state.inner.read().await;
+            let call = &inner.calls[&id];
+            assert_eq!((call.owner, call.source_issi, call.destination), (bs1, MTH, RADIO));
+            assert_eq!(call.peers, HashSet::from([bs2]));
+            assert!(inner.call_restores.handoffs.is_empty());
+        }
+        // Voice both ways.
+        packet(&state, bs1, voice(&id)).await;
+        assert_eq!(drain(&mut bs2_rx), vec![voice(&id)]);
+        packet(&state, bs2, voice(&id)).await;
+        assert_eq!(drain(&mut bs1_rx), vec![voice(&id)]);
+        // A timeout after the answer does nothing.
+        handoff_timed_out(&state, bs1, RADIO).await;
+        assert!(drain(&mut bs2_rx).is_empty());
+        // Ends like any call between two stations.
+        packet(&state, bs2, protocol::build_call_cause(CALL_RELEASE, &id, 1)).await;
+        assert_eq!(releases(&drain(&mut bs1_rx)), vec![(id, 1)]);
+        assert!(state.inner.read().await.calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_handed_over_simplex_call_keeps_the_caller_and_the_floor() {
+        let (state, (bs1, mut bs1_rx), (bs2, mut bs2_rx)) = local_case().await;
+        packet(&state, bs2, restore_request(RADIO, MTH)).await;
+        drain(&mut bs1_rx);
+        // The radio that moved called, MTH talks.
+        let id = Uuid::new_v4();
+        packet(&state, bs1, handoff(RADIO, MTH, Some((&id, RADIO, false, MTH)))).await;
+        let answer = answers(&drain(&mut bs2_rx));
+        assert_eq!((answer[0]["duplex"].clone(), answer[0]["floor"].clone()), (false.into(), MTH.into()));
+        let inner = state.inner.read().await;
+        let call = &inner.calls[&id];
+        assert_eq!((call.owner, call.source_issi, call.destination), (bs2, RADIO, MTH));
+        assert_eq!(call.peers, HashSet::from([bs1]));
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_handoff_gets_no_call_and_a_late_one_is_ended() {
+        let (state, (bs1, mut bs1_rx), (bs2, mut bs2_rx)) = local_case().await;
+        packet(&state, bs2, restore_request(RADIO, MTH)).await;
+        drain(&mut bs1_rx);
+        handoff_timed_out(&state, bs1, RADIO).await;
+        assert_eq!(answers(&drain(&mut bs2_rx)), vec![serde_json::json!({ "issi": RADIO, "peer": MTH })]);
+        // BS1 answers too late: its bridged leg is ended, BS2 hears nothing more.
+        let id = Uuid::new_v4();
+        packet(&state, bs1, handoff(RADIO, MTH, Some((&id, MTH, true, 0)))).await;
+        assert_eq!(releases(&drain(&mut bs1_rx)), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)]);
+        assert!(drain(&mut bs2_rx).is_empty());
+        assert!(state.inner.read().await.calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_station_without_the_call_or_without_call_handoff_answers_no_call() {
+        let (state, (bs1, mut bs1_rx), (bs2, mut bs2_rx)) = local_case().await;
+        packet(&state, bs2, restore_request(RADIO, MTH)).await;
+        drain(&mut bs1_rx);
+        packet(&state, bs1, handoff(RADIO, MTH, None)).await;
+        assert_eq!(answers(&drain(&mut bs2_rx)), vec![serde_json::json!({ "issi": RADIO, "peer": MTH })]);
+        // A handoff nobody asked for (or from a station not asked) changes nothing.
+        let id = Uuid::new_v4();
+        packet(&state, bs2, handoff(MTH, RADIO, Some((&id, MTH, true, 0)))).await;
+        assert!(answers(&drain(&mut bs1_rx)).is_empty());
+        assert!(!state.inner.read().await.calls.contains_key(&id));
+
+        // Peer on a station without call-handoff: answered at once, nobody asked.
+        let state = AppState::for_test();
+        let (old, mut old_rx) = bts(&state, 1528, true).await;
+        let (new, mut new_rx) = bts_handoff(&state, 1530).await;
+        register(&state, old, RADIO).await;
+        register(&state, old, MTH).await;
+        register(&state, new, RADIO).await;
+        drain(&mut old_rx);
+        packet(&state, new, restore_request(RADIO, MTH)).await;
+        assert_eq!(answers(&drain(&mut new_rx)), vec![serde_json::json!({ "issi": RADIO, "peer": MTH })]);
+        assert!(handoff_requests(&drain(&mut old_rx)).is_empty());
+    }
+
+    /// The radio on BS1 and MTH on BS2 in a call over Brew; the radio comes to BS2.
+    async fn join_case(duplex: bool) -> (Arc<AppState>, Uuid, (ClientId, Rx), (ClientId, Rx)) {
+        let state = AppState::for_test();
+        let (bs1, mut bs1_rx) = bts_handoff(&state, 1528).await;
+        let (bs2, mut bs2_rx) = bts_handoff(&state, 1530).await;
+        register(&state, bs1, RADIO).await;
+        register(&state, bs2, MTH).await;
+        let id = Uuid::new_v4();
+        packet(&state, bs1, setup(&id, RADIO, MTH, duplex)).await;
+        packet(&state, bs2, protocol::build_call_control_empty(protocol::CALL_SETUP_ACCEPT, &id)).await;
+        drain(&mut bs1_rx);
+        drain(&mut bs2_rx);
+        register(&state, bs2, RADIO).await;
+        (state, id, (bs1, bs1_rx), (bs2, bs2_rx))
+    }
+
+    #[tokio::test]
+    async fn a_radio_coming_to_its_peers_station_is_joined_there() {
+        for duplex in [true, false] {
+            let (state, id, (bs1, mut bs1_rx), (bs2, mut bs2_rx)) = join_case(duplex).await;
+            // BS1 lets its leg go; BS2 hears nothing: it joins the legs itself.
+            assert_eq!(releases(&drain(&mut bs1_rx)), vec![(id, protocol::CAUSE_SWMI_REQUESTED_DISCONNECTION)]);
+            assert!(drain(&mut bs2_rx).is_empty());
+            // BS1's own late release does not reach BS2.
+            packet(&state, bs1, protocol::build_call_cause(CALL_RELEASE, &id, 13)).await;
+            assert!(drain(&mut bs2_rx).is_empty());
+            assert!(state.inner.read().await.calls.contains_key(&id));
+            // BS2 joined: it ends the Brew call, nobody else gets it.
+            packet(&state, bs2, protocol::build_call_cause(CALL_RELEASE, &id, protocol::CAUSE_SWMI_REQUESTED_DISCONNECTION)).await;
+            assert!(drain(&mut bs1_rx).is_empty() && drain(&mut bs2_rx).is_empty());
+            let inner = state.inner.read().await;
+            assert!(inner.calls.is_empty() && inner.call_restores.waiting.is_empty() && inner.call_restores.calls.is_empty());
+            drop(inner);
+            window_closed(&state, id).await;
+            assert!(drain(&mut bs2_rx).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_joined_call_the_radio_does_not_restore_ends_for_the_peer() {
+        let (state, id, (_bs1, mut bs1_rx), (bs2, mut bs2_rx)) = join_case(true).await;
+        drain(&mut bs1_rx);
+        window_closed(&state, id).await;
+        assert_eq!(releases(&drain(&mut bs2_rx)), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)]);
+        assert!(drain(&mut bs1_rx).is_empty());
+        assert!(state.inner.read().await.calls.is_empty());
+        // The same through a plain roaming registration.
+        let (state, id, _, (bs2b, mut rx)) = join_case(false).await;
+        packet(&state, bs2b, not_restored(RADIO)).await;
+        assert_eq!(releases(&drain(&mut rx)), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)]);
+        let _ = bs2;
+    }
+
+    #[tokio::test]
+    async fn without_call_handoff_a_radio_coming_to_its_peer_keeps_the_old_behaviour() {
+        let state = AppState::for_test();
+        let (bs1, mut bs1_rx) = bts(&state, 1528, true).await;
+        let (bs2, mut bs2_rx) = bts(&state, 1530, true).await;
+        register(&state, bs1, RADIO).await;
+        register(&state, bs2, MTH).await;
+        let id = Uuid::new_v4();
+        packet(&state, bs1, setup(&id, RADIO, MTH, true)).await;
+        drain(&mut bs1_rx);
+        drain(&mut bs2_rx);
+        register(&state, bs2, RADIO).await;
+        assert!(releases(&drain(&mut bs1_rx)).is_empty());
+        assert!(state.inner.read().await.call_restores.waiting.is_empty());
+    }
+
+    /// Internal simulation (project rule): 10 Basestations, 52 radios in 26
+    /// individual calls between two radios. 13 calls start on one station and
+    /// one radio moves away (handed over); 13 run between two stations and one
+    /// radio comes to its peer's station (joined there). Every fourth radio
+    /// does not restore.
+    #[tokio::test]
+    async fn sim_10_stations_52_radios_radio_to_radio_calls_survive_station_changes() {
+        let state = AppState::for_test();
+        let mut stations = Vec::new();
+        for n in 0..10u16 {
+            stations.push(bts_handoff(&state, 1500 + n).await);
+        }
+        let ids: Vec<ClientId> = stations.iter().map(|(id, _)| *id).collect();
+        let rx_of = |stations: &mut Vec<(ClientId, Rx)>, id: ClientId| drain(&mut stations.iter_mut().find(|(i, _)| *i == id).unwrap().1);
+        let mut kept = 0;
+        for k in 0..26u32 {
+            let (a, b) = (4_000_000 + 2 * k, 4_000_001 + 2 * k);
+            let duplex = k % 2 == 0;
+            let restores = k % 4 != 3;
+            if k < 13 {
+                // Local call on `home`; `a` moves to `to`.
+                let (home, to) = (ids[k as usize % 10], ids[(k as usize + 1) % 10]);
+                register(&state, home, a).await;
+                register(&state, home, b).await;
+                register(&state, to, a).await;
+                for (_, rx) in stations.iter_mut() {
+                    drain(rx);
+                }
+                if !restores {
+                    continue; // nothing asked, nothing happens
+                }
+                packet(&state, to, restore_request(a, b)).await;
+                assert_eq!(handoff_requests(&rx_of(&mut stations, home)).len(), 1, "call {k}");
+                let id = Uuid::new_v4();
+                packet(&state, home, handoff(a, b, Some((&id, b, duplex, 0)))).await;
+                let got = answers(&rx_of(&mut stations, to));
+                assert_eq!(got[0]["uuid"], id.to_string(), "call {k}");
+                packet(&state, to, voice(&id)).await;
+                assert_eq!(rx_of(&mut stations, home), vec![voice(&id)], "call {k}");
+                kept += 1;
+            } else {
+                // Over Brew between `sa` and `sb`; `a` comes to `sb`.
+                let (sa, sb) = (ids[k as usize % 10], ids[(k as usize + 4) % 10]);
+                register(&state, sa, a).await;
+                register(&state, sb, b).await;
+                let id = Uuid::new_v4();
+                packet(&state, sa, setup(&id, a, b, duplex)).await;
+                packet(&state, sb, protocol::build_call_control_empty(protocol::CALL_SETUP_ACCEPT, &id)).await;
+                for (_, rx) in stations.iter_mut() {
+                    drain(rx);
+                }
+                register(&state, sb, a).await;
+                assert_eq!(releases(&rx_of(&mut stations, sa)), vec![(id, protocol::CAUSE_SWMI_REQUESTED_DISCONNECTION)], "call {k}");
+                if restores {
+                    packet(&state, sb, protocol::build_call_cause(CALL_RELEASE, &id, protocol::CAUSE_SWMI_REQUESTED_DISCONNECTION)).await;
+                    assert!(rx_of(&mut stations, sb).is_empty(), "call {k}");
+                } else {
+                    window_closed(&state, id).await;
+                    assert_eq!(releases(&rx_of(&mut stations, sb)), vec![(id, protocol::CAUSE_CALL_RESTORATION_OF_THE_OTHER_USER_FAILED)], "call {k}");
+                }
+                assert!(!state.inner.read().await.calls.contains_key(&id), "call {k}");
+            }
+        }
+        let inner = state.inner.read().await;
+        assert_eq!(kept, 10);
+        assert_eq!(inner.calls.len(), 10, "the handed-over calls run between two stations");
+        assert!(inner.call_restores.waiting.is_empty() && inner.call_restores.handoffs.is_empty());
     }
 }

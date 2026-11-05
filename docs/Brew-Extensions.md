@@ -40,7 +40,7 @@ The extensions use:
 | --- | --- | --- |
 | `CLASS_SUBSCRIBER` | `0xf0` | `SUB_REGISTER` (1), `SUB_REREGISTER` (2), `SUB_DEREGISTER` (0), `SUB_AFFILIATE` (8): unchanged. A registration on B is what moves a radio. |
 | `CLASS_CALL_CONTROL` | `0xf1` | `GROUP_TX` (2), `GROUP_IDLE` (3), `CALL_RELEASE` (10) with its cause byte, `SIMPLEX_GRANTED` (12), `SIMPLEX_IDLE` (13): unchanged. |
-| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1D`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
+| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1E`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
 
 Routing stays as in Brew: one routing entry per ISSI, the newest registration
 wins, and a registration keeps the ISSI's group affiliations.
@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, cell-directory
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -78,6 +78,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `handover-v1` | answers relayed handover requests as target, and grants the floor to a talker that moved to it (section 7.3) | `handover-v1` |
 | `ms-moved` | wants `SERVICE_MS_MOVED` | `ms-moved` (FlowStation: together with `handover-v1`) |
 | `call-restore` | takes individual calls that move with their radio | `call-restore` (FlowStation: together with `handover-v1`) |
+| `call-handoff` | hands a local call between two of its radios to the network, and joins a network call of two of its radios locally (section 8.5) | `call-handoff` (FlowStation: together with `call-restore`, not on multi-cell stations yet) |
 | `cell-directory` | wants `SERVICE_CELL_DIRECTORY` (section 5.3) | `cell-directory` (FlowStation: on its own, also on multi-cell stations) |
 
 ### 3.3 Summary
@@ -94,6 +95,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1B` | `SERVICE_CALL_RESTORE` | B → server → B | `call-restore` | B: `call-restore` |
 | `0x1C` | `SERVICE_CALL_NOT_RESTORED` | B → server | `call-restore` | B: `call-restore` |
 | `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
+| `0x1E` | `SERVICE_CALL_HANDOFF` | server → A → server | `call-handoff` | A: `call-handoff` |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
 reselection), and add the others one by one; each is independent except where
@@ -704,6 +706,93 @@ restore as before. A Basestation that does not announce the capability keeps
 its calls where they are: A ends the call when the radio's uplink stays
 silent.
 
+### 8.5 Calls between two radios (`call-handoff`)
+
+An individual call between two radios of one Basestation is local: the
+server never sees it. Sections 8.1 to 8.3 cannot move it, and a call between
+radios on two Basestations would stay on Brew when one radio comes to the
+other's Basestation. `call-handoff` covers both.
+
+**One radio leaves (A holds the call, the radio restores on B).** B asks with
+`SERVICE_CALL_RESTORE` as in 8.2. The server finds no call, the peer is
+registered on A, and A announced `call-handoff`: the server asks A instead of
+answering.
+
+```mermaid
+sequenceDiagram
+    participant MS as Radio (moved)
+    participant B as B (new)
+    participant S as Server
+    participant A as A (holds the call)
+    participant P as Peer radio on A
+    MS->>B: U-CALL RESTORE (A's call id, peer)
+    B->>S: SERVICE_CALL_RESTORE {"issi","peer"}
+    S->>A: SERVICE_CALL_HANDOFF {"issi","peer"}
+    A->>S: SERVICE_CALL_HANDOFF {"issi","peer","uuid","calling","duplex","priority","floor"}
+    S->>B: SERVICE_CALL_RESTORE {"issi","peer","uuid","duplex","priority","floor"}
+    B->>MS: D-CALL RESTORE (B's call id, channel)
+    Note over B,P: voice and call control between B and A under uuid; P noticed nothing
+```
+
+Request, server → A:
+
+```json
+{"issi":2320972,"peer":2320980}
+```
+
+`issi`: the radio that restores on B; `peer`: the other party, a radio of A.
+
+Answer, A → server, same type:
+
+```json
+{"issi":2320972,"peer":2320980,"uuid":"0b5f1d2e-9a47-4c1e-8c55-3e1f00c0ffee","calling":2320980,"duplex":true,"priority":0,"floor":0}
+```
+
+or `{"issi":…,"peer":…}` without `uuid` when A holds no such call.
+
+| Field | Meaning |
+| --- | --- |
+| `uuid` | a new Brew call UUID chosen by A; the call runs under it from now on |
+| `calling` | the calling party's ISSI (`issi` or `peer`) |
+| `duplex`, `priority` | as in 8.2 |
+| `floor` | simplex: the ISSI holding the floor, 0 for nobody |
+
+A, on the request: finds the active local call between the two radios. The
+moved radio's leg ends without signalling (it is on B now); a talker's
+permission ended at the break (clause 14.5.1.2.4), so a simplex floor it held
+is released as on U-TX CEASED and the peer hears D-TX CEASED. The peer's leg
+stays on its traffic channel, its downlink now from Brew. Voice from the
+peer's channel goes out under `uuid`.
+
+A duplex local call whose moved leg goes silent is held for 8 s (project
+value, the server's restore window) instead of being released at once, so the
+request can still find it. When the radio is heard on its leg again the hold
+ends; when no request comes, the call is released as before.
+
+Server, on the answer: only from the Basestation it asked, for an open
+request. With `uuid` it records a private call between A (the peer's side)
+and B (the moved radio's side), calling party from `calling`, and answers B's
+request with it as in 8.2. Without `uuid` it answers B "no call". No answer
+within 1.5 s (below B's 2 s, section 10): B gets "no call". A late answer
+with `uuid` gets `CALL_RELEASE` cause 19 back, so A ends the leg it bridged.
+
+**One radio comes to its peer's Basestation (the call runs between A and
+B, the radio on A registers on B where the peer is).** At the registration
+(8.1) the server sends A `CALL_RELEASE` cause 14 as usual and stops listening
+to A for the call, but sends B nothing: B announced `call-handoff` and joins
+the call itself. On the radio's U-CALL RESTORE, B finds its own network call
+with that radio and peer, gives the radio a channel of this call (duplex: a
+channel of its own, cross-connected with the peer's; simplex: the peer's
+channel) and answers D-CALL RESTORE (clause 14.5.1.2.4). It then ends the
+Brew call with `CALL_RELEASE` cause 14; the call is local again. B sends no
+`SERVICE_CALL_RESTORE`. When the radio does not restore within the window,
+or B reports `SERVICE_CALL_NOT_RESTORED`, the server sends B `CALL_RELEASE`
+cause 19 for the peer.
+
+Without `call-handoff` on either Basestation everything stays as in 8.1 to
+8.4: a local call is not found and B rejects the restore; a radio that comes
+to its peer's Basestation keeps its call on A until A releases it.
+
 ## 9. Late entry (required for group calls)
 
 Not a message, but a server rule the relay depends on: when a connection
@@ -727,6 +816,8 @@ over. Without late entry it would hear nothing until the next over.
 | Type 1 answer / grant | 1 s each | B / A | then type 2 |
 | Restore of a group call on B | 5 s | B | within T307, 2 s to 8 s (clause 14.6) |
 | Answer to `SERVICE_CALL_RESTORE` | 2 s | B | within T306, 4 s to 6 s (clause 14.6) |
+| Answer to `SERVICE_CALL_HANDOFF` | 1.5 s | server | below B's 2 s |
+| Hold of a local duplex call whose leg went silent | 8 s | A | the restore window |
 | Individual call restore window | 8 s | server | longer than T306 |
 | `ms-reselection` pairing | 10 s | server and A | project value |
 | Roaming kick guard after a handover | `kick_delay_ms + timeout_ms` | server | project value |
@@ -741,6 +832,7 @@ over. Without late entry it would hear nothing until the next over.
 | with extensions | A with, B without `handover-v1` | A's requests to B's cells get status 2 `not_capable`; A answers as without the extension; no over ended for a talker moving to B |
 | with extensions | A without `ms-moved` | no `SERVICE_MS_MOVED`; A ends overs on uplink inactivity |
 | with extensions | B without `call-restore` | individual calls stay on A and end there as before |
+| with extensions | A or B without `call-handoff` | local calls between two radios end when one leaves; a call over Brew stays on Brew |
 | without `cell-directory` | with | the Basestation gets no list; its neighbour list works as configured, only without names and checks |
 | with `cell-directory` | older Basestation | no capability, no list; the server lists its cells to the others without the optional fields |
 
@@ -762,6 +854,9 @@ Server:
       `SERVICE_MS_MOVED`, end the moved talker's overs (section 7), unless the
       handover was prepared.
 - [ ] Answer `SERVICE_CALL_RESTORE`; restore window; `SERVICE_CALL_NOT_RESTORED`.
+- [ ] Optional: `call-handoff`: ask the peer's Basestation for a local call
+      (1.5 s), record its answer as a private call; leave the join to the
+      peer's Basestation (section 8.5).
 - [ ] Optional: `SERVICE_MS_CELL`, `SERVICE_MS_RESELECTION` for display.
 - [ ] Optional: keep the optional cell fields of `SERVICE_BTS_INFO` (5.1.1)
       and send `SERVICE_CELL_DIRECTORY` (5.3) to capable Basestations.
@@ -779,6 +874,9 @@ Basestation:
 - [ ] On `SERVICE_MS_MOVED`: end the radio's over, drop it silently.
 - [ ] `call-restore`: release on cause 14 without a release back; ask for an
       unknown individual call on U-CALL RESTORE; report "roaming" updates.
+- [ ] Optional: `call-handoff`: answer `SERVICE_CALL_HANDOFF` with the local
+      call bridged under a new UUID; hold a duplex call whose leg went silent;
+      join a network call of two own radios on U-CALL RESTORE.
 - [ ] Optional: report what each cell broadcasts in `SERVICE_BTS_INFO`
       (5.1.1); take `SERVICE_CELL_DIRECTORY` to name and check neighbours.
 

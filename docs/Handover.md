@@ -162,6 +162,30 @@ the call, so the server moves it, between Basestations that announced the
 A Basestation without the capability keeps its calls as before: the old
 Basestation ends the call when the radio's uplink stays silent.
 
+### Calls between two radios
+
+Between Basestations that also announced `call-handoff`, a call between two
+radios survives a station change in both directions:
+
+- **Both on one Basestation, one leaves.** The server never saw this local
+  call. When the radio restores it on the new Basestation, the server asks
+  the Basestation of the other radio for it (`SERVICE_CALL_HANDOFF`, log line
+  `call restore: asking the peer's Basestation for its local call`). That
+  one hands it over under a new call UUID; the call then runs between the two
+  Basestations (log line `call handoff: a local call now runs between two
+  Basestations`). The radio that stayed notices nothing; a talker that left
+  loses its floor at the break, as ETSI says. No answer within 1.5 s: the
+  restore fails as before (log line `call restore: no handoff answer, no
+  call`). A duplex local call whose leg goes silent is held 8 s on that
+  Basestation so the request can still find it.
+- **On two Basestations, one comes to the other.** At the registration the
+  old Basestation lets its leg go as above; the new one, where the other
+  radio is, joins both legs into a local call when the radio restores, and
+  ends the Brew call. Not restored within 8 s: the other radio's call ends
+  as above.
+
+Multi-cell FlowStations do not announce `call-handoff` yet.
+
 ## What the dashboard shows
 
 - **Connections page, "Cells":** every cell of every Basestation, named
