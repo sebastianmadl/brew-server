@@ -356,6 +356,8 @@ pub struct AppState {
     pub locations: std::sync::RwLock<HashMap<String, crate::config::BtsLocationConfig>>,
     /// `[issi_names]` as it is right now (see `issi_names`).
     pub issi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
+    /// `[gssi_names]` as it is right now (see `issi_names`).
+    pub gssi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
 }
 
 /// Username -> password of one listener, shared with the dashboard.
@@ -404,6 +406,7 @@ impl AppState {
         if let Ok(u) = self.logins.control.read() { cfg.control.users = u.clone(); }
         if let Ok(l) = self.locations.read() { cfg.bts_locations = l.clone(); }
         if let Ok(n) = self.issi_names.read() { cfg.issi_names = n.clone(); }
+        if let Ok(n) = self.gssi_names.read() { cfg.gssi_names = n.clone(); }
         
         cfg
     }
@@ -457,6 +460,7 @@ impl AppState {
         let logins = Logins::from_config(&config);
         let locations = config.bts_locations.clone();
         let issi_names = config.issi_names.clone();
+        let gssi_names = config.gssi_names.clone();
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -477,6 +481,7 @@ impl AppState {
                 logins,
                 locations: std::sync::RwLock::new(locations),
                 issi_names: std::sync::RwLock::new(issi_names),
+                gssi_names: std::sync::RwLock::new(gssi_names),
             },
             aprs_rx,
         )

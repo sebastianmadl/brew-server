@@ -165,7 +165,7 @@ tr.off td{color:var(--text3)}
 .chip.w{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent);border-color:color-mix(in srgb,var(--warn) 30%,transparent)}
 .chip.d{color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
 .chip.i{color:var(--text3)}
-.tg{font:600 12px var(--mono);padding:2px 8px;border-radius:6px;background:var(--bg3);border:1px solid var(--border);display:inline-block;margin:1px 0}
+.tg{font:600 12px var(--mono);padding:2px 8px;border-radius:6px;background:var(--bg3);border:1px solid var(--border);display:inline-block;margin:1px 0;white-space:nowrap}
 .tg.src{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .st{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:13px;white-space:nowrap}
 .st i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
@@ -215,6 +215,7 @@ tr.exp td{background:var(--bg3);border-top:0}
 @media (prefers-reduced-motion:reduce){.tog::after{transition:none}}
 .pool .flow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
 .pool.offp .rt{color:var(--text3)} .pool.offp .flow{opacity:.6}
+@media (max-width:760px){.row.pool{flex-wrap:wrap;align-items:flex-start}.row.pool .rm{flex:1 1 calc(100% - 70px);min-width:0}.row.pool>.btn{margin-left:auto}.row.pool>.btn+.btn{margin-left:0}}
 .chk{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
 .selbar{display:flex;gap:10px;align-items:center;padding:12px 18px;border-top:1px solid var(--sep);background:color-mix(in srgb,var(--accent) 6%,transparent);flex-wrap:wrap}
 .msg{font-size:12.5px;padding:0 18px 12px}
@@ -300,7 +301,7 @@ td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-t
 .tabbar{display:none}
 @media (max-width:760px){
   #rochip{display:none}
-  #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow)}
+  #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow);z-index:35;padding-bottom:env(safe-area-inset-bottom)}
   body.sbopen #sb{transform:none}
   .top{padding:12px 16px}
   .top h1{font-size:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -310,7 +311,7 @@ td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-t
   .grid2{grid-template-columns:1fr}
   th,td{padding-left:12px;padding-right:12px}
   .search input{width:100%}
-  .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) - 1px);height:62px;border-radius:31px;z-index:30;
+  .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) - 13px);height:62px;border-radius:31px;z-index:30;
     background:color-mix(in srgb,var(--bg2) 76%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);border:1px solid var(--border);box-shadow:var(--shadow);justify-content:space-around;align-items:center}
   .tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;color:var(--text3);font-weight:600;min-width:56px;min-height:44px;justify-content:center;border:0;background:none;cursor:pointer}
   .tab svg{width:22px;height:22px}
@@ -432,7 +433,7 @@ const ic=(n,cls)=>`<svg class="i${cls?' '+cls:''}" viewBox="0 0 24 24" aria-hidd
 // Pages: [id, title, icon, group, embedded classic page or null, admin only]
 const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
- ['radios','Radios','radios','Monitor'],['issis','ISSI directory','book','Monitor'],['map','Map','map','Monitor','/map'],
+ ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],
  ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],['accounts','Accounts','key','Network',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
@@ -499,7 +500,7 @@ function setTheme(t){
 }
 document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},ctl:[],emg:[],ha:null,regs:[]};
+const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},gssi:{},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -562,6 +563,7 @@ async function refreshSlow(){
   if(UI.page==='accounts'&&D.who.admin)tasks.push(getJ('/api/accounts').then(v=>D.acc=v));
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
   tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
+  tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
@@ -610,10 +612,10 @@ const callRow=(c,now)=>{
   const pool=poolOf(c);
   const grp=c.kind==='group';
   const em=c.priority>=15;
-  const legs=pool?pool.live.legs.map(g=>`<span class="tg">${g}</span>`).join(' '):'';
+  const legs=pool?pool.live.legs.map(g=>tgChip(g)).join(' '):'';
   const wait=pool&&pool.live.waiting.length?` <span class="mut">waiting: ${pool.live.waiting.join(', ')}</span>`:'';
   return `<div class="row"><div class="ric${em?' e':grp?'':' p'}">${ic(grp?'radios':'call')}</div><div class="rm">
-   <div class="rt">${grp?'TG '+c.destination:issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}</div>
+   <div class="rt">${grp?'TG '+tgTxt(c.destination):issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}</div>
    <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
    <div class="rr"><b>${dur(now-c.started_at_ms)}</b><br>${c.voice_frames} frames · prio ${c.priority}</div></div>`;
 };
@@ -676,11 +678,11 @@ R.calls=()=>{
   const st=D.status,now=Date.now();if(!st)return '<div class="empty">Loading…</div>';
   const legs=legIds();const q=UI.filter.calls||'';const k=UI.filter.callk||'all';
   const act=st.active_calls.filter(x=>!legs.has(x.uuid));
-  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),nameOf(c.destination)));
+  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination)));
   return `<div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${act.length}</span></div>${act.length?act.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
   <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span></div>
   <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th><th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
-   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination}</span>`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
+   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 R.sds=()=>{
@@ -693,18 +695,21 @@ R.sds=()=>{
 R.radios=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const q=UI.filter.radios||'';
-  const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),m.cell&&m.cell.name));
+  const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),(m.groups||[]).map(gName).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
   <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span></div><div class="tw"><table><thead><tr><th>ISSI</th><th>Station / cell</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
-  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${m.cell?`<span class="chip">${esc(m.cell.name)}</span>`:`<span class="chip">${esc(m.basestation_name||'—')}</span>`}</td><td>${(m.groups||[]).map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
+  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${m.cell?`<span class="chip">${esc(m.cell.name)}</span>`:`<span class="chip">${esc(m.basestation_name||'—')}</span>`}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
   </tbody></table></div></div>
   <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th></tr></thead><tbody>
   ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}${r.cell?' <span class="chip">'+esc(r.cell)+'</span>':''}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
-// Name of an ISSI from the ISSI directory, if any.
+// Name of an ISSI from the directory, if any.
 const nameOf=issi=>(D.issi||{})[String(issi)]||'';
+const gName=g=>(D.gssi||{})[String(g)]||'';
+const tgTxt=g=>{const n=gName(g);return n?`${g} · ${esc(n)}`:String(g);};
+const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName(g))}"`:''}>${tgTxt(g)}</span>`;
 // "2320972 · OE4SXM" for running text, number and name stacked for tables.
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
 const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
@@ -786,21 +791,21 @@ async function ctl(id,s,cmd){const body=typeof cmd==='string'?{action:cmd}:cmd;s
 R.routing=()=>{
   const adm=D.who.admin;
   const pools=D.pools;
-  const poolRows=pools.map((p,i)=>{const l=p.live;const groups=p.groups.map((g,j)=>`<span class="tg${(!p.both_ways&&j===0)||(l&&l.gssi===g)?' src':''}">${g}</span>${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
-   const state=l?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(l.talker)} talking on ${l.gssi}</span> · heard on ${l.legs.length} group${l.legs.length===1?'':'s'}${l.waiting.length?` · ${l.waiting.join(', ')} join${l.waiting.length===1?'s':''} after ${l.waiting.length===1?'its':'their'} own over`:''}`:(p.enabled?'Idle':'Switched off');
+  const poolRows=pools.map((p,i)=>{const l=p.live;const groups=p.groups.map((g,j)=>`${tgChip(g,(!p.both_ways&&j===0)||(l&&l.gssi===g)?' src':'')}${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
+   const state=l?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(l.talker)} talking on ${tgTxt(l.gssi)}</span> · heard on ${l.legs.length} group${l.legs.length===1?'':'s'}${l.waiting.length?` · ${l.waiting.join(', ')} join${l.waiting.length===1?'s':''} after ${l.waiting.length===1?'its':'their'} own over`:''}`:(p.enabled?'Idle':'Switched off');
    return `<div class="row pool${p.enabled?'':' offp'}"><button class="tog" role="switch" aria-checked="${p.enabled}" aria-label="Pool ${esc(p.name)} on" ${adm?'':'disabled'} onclick="togglePool(${i})"></button>
     <div class="rm"><div class="rt">${esc(p.name)} <span class="chip ${p.enabled?'a':'i'}">${p.enabled?'on':'off'}</span><span class="chip">${p.both_ways?'⇄ both ways':'→ one way'}</span></div>
     <div class="flow">${p.both_ways?groups.replace(/<\/span> <span class="tg/,'</span> <span class="arrow">⇄</span> <span class="tg'):groups}</div><div class="rs" style="margin-top:6px">${state}</div></div>
     ${adm?`<button class="btn" onclick="editPool(${i})">Edit</button><button class="btn danger" onclick="delPool(${i})">Delete</button>`:''}</div>`;}).join('');
   const q=UI.filter.dg||'';
-  const radios=D.radios.filter(r=>match(q,r.issi,nameOf(r.issi),r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' ')));
+  const radios=D.radios.filter(r=>match(q,r.issi,nameOf(r.issi),r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' '),r.groups.map(gName).join(' ')));
   for(const id of [...UI.sel])if(!D.radios.some(r=>r.issi===id&&r.radio))UI.sel.delete(id);
   const sel=UI.sel.size;
   const allSel=radios.filter(r=>r.radio).length>0&&radios.filter(r=>r.radio).every(r=>UI.sel.has(r.issi));
   const dg=r=>{if(!r.dgna)return '<span class="mut">—</span>';const d=r.dgna;const age=r.dgna_at_ms?' · '+ago(r.dgna_at_ms)+' ago':'';
-    return `<span class="st${d.accepted?'':' w'}"><i></i>${d.accepted?(d.attach?'assigned ':'removed '):'rejected '}${d.gssi}</span><span class="mut" style="font-size:12px">${age}</span>${d.accepted||!d.detail?'':`<div class="mut" style="font-size:12px">${esc(d.detail.replace(/^Rejected:\s*/,''))}</div>`}`;};
+    return `<span class="st${d.accepted?'':' w'}"><i></i>${d.accepted?(d.attach?'assigned ':'removed '):'rejected '}${tgTxt(d.gssi)}</span><span class="mut" style="font-size:12px">${age}</span>${d.accepted||!d.detail?'':`<div class="mut" style="font-size:12px">${esc(d.detail.replace(/^Rejected:\s*/,''))}</div>`}`;};
   const groupsOf=r=>{const cat=new Map(r.catalog.map(g=>[g.gssi,g]));const all=[...new Set([...r.groups,...r.catalog.filter(g=>g.is_attached).map(g=>g.gssi)])].sort((a,b)=>a-b);
-    return all.map(g=>{const c=cat.get(g);return `<span class="tg" title="${c&&c.mnemonic?esc(c.mnemonic):''}${c&&c.is_dynamic?' (DGNA)':''}">${g}${c&&c.mnemonic?' · '+esc(c.mnemonic):''}${c&&c.is_dynamic?' ★':''}</span>`;}).join(' ')||'<span class="mut">—</span>';};
+    return all.map(g=>{const c=cat.get(g);const nm=c&&c.mnemonic?c.mnemonic:gName(g);return `<span class="tg" title="${esc(nm)}${c&&c.is_dynamic?' (DGNA)':''}">${g}${nm?' · '+esc(nm):''}${c&&c.is_dynamic?' ★':''}</span>`;}).join(' ')||'<span class="mut">—</span>';};
   const f=UI.dgf||(UI.dgf={gssi:'',name:'',assign:true,mode:0});
   return `<div class="card"><div class="ch"><h2>Talkgroup pools</h2><span class="cnt">${pools.length}</span>${helpBtn('pools')}<span class="sp"></span>${adm?`<button class="btn pri" onclick="editPool(-1)">${ic('plus')}New pool</button>`:''}</div>
    ${poolRows||'<div class="empty">No pools yet. A pool plays the calls of one group on other groups too.</div>'}
@@ -924,63 +929,75 @@ async function delAcc(i){
   render(true);
 }
 
-/* ---------- ISSI directory ---------- */
+/* ---------- directory: ISSI and GSSI names ---------- */
+const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relais Nord',file:'issi-directory.csv'},
+  gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'Bezirk Nord',ex2:'2322, Bezirk Süd',file:'gssi-directory.csv'}};
+const dirK=()=>UI.filter.dirk==='gssi'?'gssi':'issi';
+const dirNames=()=>D[dirK()]||{};
 R.issis=()=>{
-  const adm=D.who.admin;const q=UI.filter.issi||'';const f=UI.filter.issif||'all';
-  const names=D.issi||{};
-  const reg=new Map(((D.conn&&D.conn.mobile_stations)||[]).map(m=>[String(m.issi),m]));
-  const keys=[...new Set([...Object.keys(names),...reg.keys()])].sort((a,b)=>a-b);
+  const adm=D.who.admin;const K=dirK(),d=DIR[K];const q=UI.filter.issi||'';const f=UI.filter.issif||'all';
+  const names=dirNames();const ms=(D.conn&&D.conn.mobile_stations)||[];
+  let seen=new Map();
+  if(K==='issi')seen=new Map(ms.map(m=>[String(m.issi),m]));
+  else{for(const m of ms)for(const g of (m.groups||[])){const k=String(g);seen.set(k,(seen.get(k)||0)+1);}
+    for(const c of ((D.status&&D.status.active_calls)||[]))if(c.kind==='group'&&!seen.has(String(c.destination)))seen.set(String(c.destination),0);}
+  const keys=[...new Set([...Object.keys(names),...seen.keys()])].sort((a,b)=>a-b);
   const rows=keys.filter(k=>(f==='all'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k]))&&match(q,k,names[k]));
-  const where=m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>';
-  return `<div class="bar">${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']])}${searchBox('issi','ISSI or name…')}<span class="sp"></span>
+  const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
+    :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
+  const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
+    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>).';
+  return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']])}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}Add name</button>`:''}</div>
-  <div class="card"><div class="ch"><h2>ISSI directory</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('issi')}</div>
-   ${helpNote('issi','Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).')}
-   <div class="tw"><table><thead><tr><th>ISSI</th><th>Name</th><th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
-   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td><td class="hide-s">${where(reg.get(k))}</td>
+  <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
+   ${helpNote('dir'+K,help)}
+   <div class="tw"><table><thead><tr><th>${d.what}</th><th>Name</th><th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
+   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td><td class="hide-s">${where(seen.get(k))}</td>
      ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete">${ic('trash')}<span class="hide-s">Delete</span></button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}</td>`:''}</tr>`).join('')||`<tr><td colspan="4" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
    </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
 };
 function editName(k){
-  const n=(D.issi||{})[k]||'';
+  const d=DIR[dirK()];const n=dirNames()[k]||'';
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${k?(n?'Edit name':'Name for '+k):'Add name'}</h3></div><div class="sb">
-   <div><label class="l" for="in-issi">ISSI</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. 2320972"></div>
-   <div><label class="l" for="in-name">Name</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. OE4SXM Sebastian"></div>
+   <div><label class="l" for="in-issi">${d.what}</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. ${d.ex}"></div>
+   <div><label class="l" for="in-name">Name</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. ${esc(d.exn)}"></div>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveName()">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>(k?$('in-name'):$('in-issi')).focus(),30);
 }
 async function saveName(){
-  const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
+  const K=dirK();const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
   if(!name){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
   m.className='msg mut';m.textContent='Saving…';
-  try{D.issi=await postJ('/api/issi-names/set',{issi,name});closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}
+  try{D[K]=await postJ(DIR[K].api+'/set',{issi,name});closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}
 }
 async function delName(k){
-  if(!confirm(`Delete the name of ${k}?`))return;
-  try{D.issi=await postJ('/api/issi-names/set',{issi:k,name:''});setMsg('issi-msg','ok',`Name of ${k} deleted.`);}catch(e){setMsg('issi-msg','err',e.message);}
+  const K=dirK();if(!confirm(`Delete the name of ${k}?`))return;
+  try{D[K]=await postJ(DIR[K].api+'/set',{issi:k,name:''});setMsg('issi-msg','ok',`Name of ${k} deleted.`);}catch(e){setMsg('issi-msg','err',e.message);}
   render(true);
 }
 function importNames(){
+  const d=DIR[dirK()];
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Import list</h3></div><div class="sb">
-   <div><label class="l" for="in-list">One radio per line: ISSI, then the name (comma, semicolon, tab or space between). A CSV export from a spreadsheet works.</label>
-   <textarea class="f" id="in-list" rows="9" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, OE4SXM Sebastian&#10;2321100, Relais Nord"></textarea></div>
-   <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="in-replace" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">Replace the whole directory</b><br><span class="mut" style="font-size:12px">Off: adds the names and overwrites the ones listed</span></span></label>
+   <div><label class="l" for="in-list">One ${d.who} per line: ${d.what}, then the name (comma, semicolon, tab or space between). A CSV export from a spreadsheet works.</label>
+   <textarea class="f" id="in-list" rows="9" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="${d.ex}, ${esc(d.exn)}&#10;${esc(d.ex2)}"></textarea></div>
+   <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="in-replace" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">Replace the whole list</b><br><span class="mut" style="font-size:12px">Off: adds the names and overwrites the ones listed</span></span></label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="doImport()">Import</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>$('in-list').focus(),30);
 }
 async function doImport(){
-  const m=$('sheet-msg');const replace=$('in-replace').getAttribute('aria-checked')==='true';
-  if(replace&&!confirm('Replace the whole ISSI directory with this list?'))return;
+  const K=dirK();const m=$('sheet-msg');const replace=$('in-replace').getAttribute('aria-checked')==='true';
+  if(replace&&!confirm(`Replace all ${DIR[K].what} names with this list?`))return;
   m.className='msg mut';m.textContent='Importing…';
-  try{const before=Object.keys(D.issi||{}).length;D.issi=await postJ('/api/issi-names/import',{text:$('in-list').value,replace});closeSheet();
-    setMsg('issi-msg','ok',`Imported. The directory has ${Object.keys(D.issi).length} names (before ${before}).`);render(true);}
+  try{const before=Object.keys(D[K]||{}).length;D[K]=await postJ(DIR[K].api+'/import',{text:$('in-list').value,replace});closeSheet();
+    setMsg('issi-msg','ok',`Imported. The list has ${Object.keys(D[K]).length} names (before ${before}).`);render(true);}
   catch(e){m.className='msg err';m.textContent=e.message;}
 }
 function exportNames(){
-  const rows=Object.entries(D.issi||{}).sort((a,b)=>a[0]-b[0]).map(([k,v])=>k+','+(/[",]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v));
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['ISSI,Name\n'+rows.join('\n')+'\n'],{type:'text/csv'}));a.download='issi-directory.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  const K=dirK(),d=DIR[K];
+  const rows=Object.entries(D[K]||{}).sort((a,b)=>a[0]-b[0]).map(([k,v])=>k+','+(/[",]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([d.what+',Name\n'+rows.join('\n')+'\n'],{type:'text/csv'}));a.download=d.file;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 
 /* ---------- configuration ---------- */

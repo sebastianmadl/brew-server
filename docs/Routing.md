@@ -101,8 +101,9 @@ Two more pages of the new dashboard, both for admins:
   (sysop, relay callsign) and a position; both are the login's
   `[bts_locations]` entry, so the position is the map's static fallback.
   The Login / Info switch shows the info in place of the number.
-- **Monitor -> ISSI directory:** names for ISSIs, shown next to the number on
-  every page. Add one by one or import a pasted list, one ISSI and name per
+- **Monitor -> Directory:** names for radios (ISSI) and groups (GSSI), shown
+  next to the number on every page; Radios / Groups switches the list. A
+  name a radio reports for one of its groups comes before the directory's. Add one by one or import a pasted list, one ISSI and name per
   line (`2320972, OE4SXM Sebastian`; `;`, tab or space work too, `#` lines
   and a header line are skipped). A wrong line stops the import and nothing
   changes. Stored in the config file:
@@ -110,6 +111,9 @@ Two more pages of the new dashboard, both for admins:
   ```toml
   [issi_names]
   "2320972" = "OE4SXM Sebastian"
+
+  [gssi_names]
+  "2321" = "Bezirk Nord"
   ```
 - **System -> Configuration:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign

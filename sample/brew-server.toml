@@ -326,10 +326,12 @@ name = "Athens HQ"
 lat = 37.9917
 lon = 23.7640
 
-# Names for ISSIs, shown next to the number on the dashboard. Edited on the
-# dashboard's ISSI directory page without a restart.
+# Names for ISSIs and groups, shown next to the number on the dashboard.
+# Edited on the dashboard's Directory page without a restart.
 # [issi_names]
 # "2320972" = "OE4SXM Sebastian"
+# [gssi_names]
+# "2321" = "Bezirk Nord"
 
 # Talkgroup pools: a call on one group is played 1:1 on the other groups of
 # the pool. both_ways = false copies only calls on the first group. A group

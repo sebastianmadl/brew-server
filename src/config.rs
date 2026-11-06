@@ -58,8 +58,11 @@ pub struct Config {
     /// `pools`.
     pub talkgroup_pools: Vec<TalkgroupPoolConfig>,
     /// `[issi_names]`: ISSI -> name ("2320972" = "OE4SXM Sebastian"), shown
-    /// next to the ISSI on the dashboard. Edited live on its ISSI directory page.
+    /// next to the ISSI on the dashboard. Edited live on its Directory page.
     pub issi_names: std::collections::BTreeMap<String, String>,
+    /// `[gssi_names]`: GSSI -> name ("2321" = "Bezirk Nord"), shown next to the
+    /// group on the dashboard. Edited live on the same directory page.
+    pub gssi_names: std::collections::BTreeMap<String, String>,
 }
 
 /// `[[talkgroup_pools]]`: a named set of groups that are switched together
@@ -846,6 +849,7 @@ impl Default for Config {
             handover: HandoverConfig::default(),
             talkgroup_pools: Vec::new(),
             issi_names: std::collections::BTreeMap::new(),
+            gssi_names: std::collections::BTreeMap::new(),
         }
     }
 }

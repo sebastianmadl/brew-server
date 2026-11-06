@@ -35,8 +35,8 @@ sends DGNA to several radios at once and manages talkgroup pools, which
 connect talkgroups inside the server without a restart
 ([docs/Routing.md](docs/Routing.md)). **Accounts** adds the logins of
 Basestations and terminals (Brew, telemetry, control) without a restart, with
-an info text and position per login, the **ISSI directory** keeps names for
-ISSIs (`[issi_names]`), and **Configuration** edits the whole config file.
+an info text and position per login, the **Directory** keeps names for ISSIs
+and groups (`[issi_names]`, `[gssi_names]`), and **Configuration** edits the whole config file.
 Sign in with the Log in button top right; HTTP Basic auth keeps working too.
 To keep the classic dashboard at `/`:
 
