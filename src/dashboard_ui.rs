@@ -36,7 +36,7 @@ const PAGE_HTML: &str = r##"<!doctype html>
   --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;
 }
-@media (prefers-color-scheme:dark){:root{
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
   --bg:#090d14;--bg2:#111824;--bg3:#19212f;--bg4:#2b3850;
   --border:#232e40;--sep:rgba(255,255,255,0.07);
   --accent:#00d4a8;--accent2:#4da6ff;--warn:#ffb224;--danger:#ff4d6d;--ok:#2ec6a6;
@@ -46,6 +46,17 @@ const PAGE_HTML: &str = r##"<!doctype html>
   --hair:inset 0 1px 0 rgba(255,255,255,.05);
   --on-accent:#04120e;
 }}
+:root[data-theme=dark]{
+  --bg:#090d14;--bg2:#111824;--bg3:#19212f;--bg4:#2b3850;
+  --border:#232e40;--sep:rgba(255,255,255,0.07);
+  --accent:#00d4a8;--accent2:#4da6ff;--warn:#ffb224;--danger:#ff4d6d;--ok:#2ec6a6;
+  --text:#eef3fb;--text2:#94abc9;--text3:#7f93b5;
+  --sidebar:#070a10;--sidebar-border:#161d2c;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px -14px rgba(0,0,0,.65);
+  --hair:inset 0 1px 0 rgba(255,255,255,.05);
+  --on-accent:#04120e;
+}
+:root[data-theme=dark]{color-scheme:dark} :root[data-theme=light]{color-scheme:light}
 @media (prefers-contrast:more){:root{--text2:var(--text);--text3:var(--text2);--border:var(--text3)}}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -270,28 +281,57 @@ textarea.cfg{width:100%;min-height:62vh;resize:vertical;border:0;border-top:1px 
 textarea.cfg:focus{outline:none;box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 
 iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:transparent}
+/* The map sizes itself to the frame: a fixed frame, no growing with it. */
+iframe.embed.fixed{min-height:0;height:calc(100dvh - 120px)}
+.menu .mob{display:none}
+.menu .thm{padding:8px 8px 6px;border-top:1px solid var(--sep);margin-top:4px}
+.menu .thm .k{font-size:11px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:0 4px 6px}
+.menu .thm .seg{display:flex;width:100%}
+.menu .thm .seg button{flex:1;display:flex;justify-content:center;gap:5px;align-items:center;padding:6px 4px;font-size:12px;border-radius:7px;width:auto;margin:0}
+.menu .thm .seg button svg{width:14px;height:14px}
+.menu.anon .who,.menu.anon .acc-only{display:none}
+.menu.anon .thm{border-top:0;margin-top:0}
+.iconbtn{width:34px;height:34px;padding:0;justify-content:center;border-radius:50%;flex:none}
+.kv.tight{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 18px}
+td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-top:2px;white-space:normal}
+.yn{white-space:nowrap}
 
 /* Phone */
 .tabbar{display:none}
 @media (max-width:760px){
+  #rochip{display:none}
   #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow)}
   body.sbopen #sb{transform:none}
   .top{padding:12px 16px}
-  .top h1{font-size:26px}
+  .top h1{font-size:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .hide-s{display:none!important}
   .content{padding:14px 16px 100px;gap:14px}
   .tiles{grid-template-columns:1fr 1fr;gap:10px}
   .grid2{grid-template-columns:1fr}
   th,td{padding-left:12px;padding-right:12px}
   .search input{width:100%}
-  .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));height:62px;border-radius:31px;z-index:30;
+  .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) - 1px);height:62px;border-radius:31px;z-index:30;
     background:color-mix(in srgb,var(--bg2) 76%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);border:1px solid var(--border);box-shadow:var(--shadow);justify-content:space-around;align-items:center}
   .tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;color:var(--text3);font-weight:600;min-width:56px;min-height:44px;justify-content:center;border:0;background:none;cursor:pointer}
   .tab svg{width:22px;height:22px}
   .tab.on{color:var(--accent)}
+  .menu{right:16px}
+  .menu .mob{display:flex}
+  .sbfoot .classic{display:none}
+  iframe.embed.fixed{height:calc(100dvh - 150px)}
+  /* Telemetry and other detail lists: two columns, smaller type */
+  .kv.tight{grid-template-columns:1fr 1fr;gap:6px 14px;padding:4px 0 6px;font-size:13px}
+  .kv.tight span.l{font-size:10px}
+  .card .ch h2{font-size:14.5px}
+  .tlm .chips{padding:0 14px 10px!important;gap:4px!important}
+  .tlm .chips .chip{font-size:11px;padding:2px 7px}
+  .tlm .kv{padding:10px 14px!important}
+  .acc td,.acc th{padding-left:8px;padding-right:8px}
 }
 @media (max-width:760px) and (prefers-reduced-transparency:reduce){.tabbar{background:var(--bg2)}}
-</style></head>
+</style>
+<script>try{const t=localStorage.getItem('brew-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}</script>
+</head>
 <body>
 <aside id="sb" aria-label="Navigation">
   <div class="brand">
@@ -306,7 +346,7 @@ iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:trans
   </div>
   <nav id="nav"></nav>
   <div class="sbfoot">
-    <a href="/classic">Classic dashboard</a><br>
+    <span class="classic"><a href="/classic">Classic dashboard</a><br></span>
     brew-server by ysamouhos<br>
     Redesign + extra features: <a href="https://github.com/sebastianmadl" target="_blank" rel="noopener">OE4SXM</a>
   </div>
@@ -319,12 +359,15 @@ iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:trans
     <span class="pill" id="live"><i></i><span>Live</span></span>
     <span class="sp"></span>
     <span class="pill" id="rochip" hidden title="You can look at everything; changes need an admin login">Read only</span>
+    <button class="btn iconbtn" id="themebtn" hidden aria-haspopup="menu" aria-expanded="false" title="Appearance" onclick="toggleMenu(event,true)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span class="sr">Appearance</span></button>
     <button class="btn loginbtn" id="loginbtn" hidden onclick="openLogin(false)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M14 17l5-5-5-5M19 12H8"/></svg><span>Log in</span></button>
     <button class="acctbtn" id="acctbtn" hidden aria-haspopup="menu" aria-expanded="false" onclick="toggleMenu(event)"><span class="av" id="acct-av"></span><span id="acct-name"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
   </div>
   <div class="menu" id="menu" role="menu"><div class="who"><b id="menu-name"></b><span id="menu-role"></span></div>
-    <button role="menuitem" onclick="go('accounts');closeMenu()" id="menu-acc"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg>Accounts</button>
-    <button role="menuitem" onclick="doLogout()"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>Log out</button>
+    <button role="menuitem" class="acc-only" onclick="go('accounts');closeMenu()" id="menu-acc"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg>Accounts</button>
+    <button role="menuitem" class="mob acc-only" onclick="location.href='/classic'"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>Classic dashboard</button>
+    <button role="menuitem" class="acc-only" onclick="doLogout()"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>Log out</button>
+    <div class="thm"><div class="k">Appearance</div><div class="seg" role="radiogroup" aria-label="Appearance" id="thm"></div></div>
   </div>
   <div class="content" id="content"></div>
 </main>
@@ -375,6 +418,9 @@ const I={
  set:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
  key:'<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+ book:'<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17H6.5A2.5 2.5 0 0 0 4 21.5zM4 21.5A2.5 2.5 0 0 1 6.5 19H20v3H6.5"/><path d="M9 7h7M9 11h5"/>',
+ trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+ pin:'<path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/>',
  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
  more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
@@ -386,7 +432,7 @@ const ic=(n,cls)=>`<svg class="i${cls?' '+cls:''}" viewBox="0 0 24 24" aria-hidd
 // Pages: [id, title, icon, group, embedded classic page or null, admin only]
 const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
- ['radios','Radios','radios','Monitor'],['map','Map','map','Monitor','/map'],
+ ['radios','Radios','radios','Monitor'],['issis','ISSI directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],
  ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],['accounts','Accounts','key','Network',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
@@ -427,7 +473,7 @@ async function submitLogin(e){
   try{const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:$('lu').value.trim(),password:$('lp').value})});
     if(!r.ok)throw new Error(r.status===401?'Wrong username or password.':(await r.text())||'Could not sign in.');
     $('lp').value='';$('login').classList.remove('on');document.body.classList.remove('locked');
-    await refreshSlow();await refreshFast();render(true);
+    await refreshSlow();await refreshFast();if(PG[UI.page][4])show(UI.page);else render(true);
   }catch(err){$('lerr').innerHTML=ic('alert')+esc(err.message);const c=$('lcard');c.classList.remove('bad');void c.offsetWidth;c.classList.add('bad');$('lp').select();}
   finally{b.disabled=false;b.textContent='Sign in';}
 }
@@ -438,11 +484,22 @@ async function doLogout(){
   if(w.username){location.href=location.protocol+'//logout:'+Date.now()+'@'+location.host+location.pathname;return;}
   location.reload();
 }
-function toggleMenu(e){e.stopPropagation();const m=$('menu'),on=!m.classList.contains('on');m.classList.toggle('on',on);$('acctbtn').setAttribute('aria-expanded',on);}
-function closeMenu(){$('menu').classList.remove('on');$('acctbtn').setAttribute('aria-expanded','false');}
+function toggleMenu(e,anon){e.stopPropagation();const m=$('menu'),on=!m.classList.contains('on');m.classList.toggle('anon',!!anon);m.classList.toggle('on',on);
+  (anon?$('themebtn'):$('acctbtn')).setAttribute('aria-expanded',on);drawTheme();}
+function closeMenu(){$('menu').classList.remove('on');$('acctbtn').setAttribute('aria-expanded','false');$('themebtn').setAttribute('aria-expanded','false');}
+// Appearance: follows the system unless the viewer picks light or dark (kept in this browser).
+function curTheme(){return document.documentElement.dataset.theme||'system';}
+function drawTheme(){const t=curTheme();const sun='<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon='<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg>',auto='<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>';
+  $('thm').innerHTML=[['system','System',auto],['light','Light',sun],['dark','Dark',moon]].map(([k,l,i])=>`<button role="radio" aria-checked="${t===k}" aria-pressed="${t===k}" onclick="event.stopPropagation();setTheme('${k}')">${i}${l}</button>`).join('');}
+function setTheme(t){
+  if(t==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=t;
+  try{if(t==='system')localStorage.removeItem('brew-theme');else localStorage.setItem('brew-theme',t);}catch(e){}
+  drawTheme();if(PG[UI.page][4])show(UI.page);
+}
 document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},ctl:[],emg:[],ha:null,regs:[]};
+const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -472,7 +529,11 @@ function show(p){
   $('title').textContent=PG[p][1];
   document.title=PG[p][1]+' · '+document.querySelector('.bname').textContent;
   const emb=PG[p][4];
-  if(emb){$('content').innerHTML=`<iframe class="embed" title="${esc(PG[p][1])}" src="${emb}?embed=1"></iframe>`;fitFrame();}
+  // Admin pages of the classic dashboard: without an admin login the frame
+  // would make the browser pop its own dialog, so open the login window.
+  if(PG[p][5]&&!D.who.admin&&D.whoLoaded&&!D.who.need_login)openLogin(false);
+  if(emb&&PG[p][5]&&!D.who.admin){$('content').innerHTML=`<div class="card"><div class="empty">${esc(PG[p][1])} is for admins. <button class="btn pri" onclick="openLogin(false)">Log in</button></div></div>`;return;}
+  if(emb){const fixed=emb==='/map';$('content').innerHTML=`<iframe class="embed${fixed?' fixed':''}" title="${esc(PG[p][1])}" src="${emb}?embed=1${document.documentElement.dataset.theme?'&theme='+document.documentElement.dataset.theme:''}"></iframe>`;if(!fixed)fitFrame();}
   else render(true);
   $('content').parentElement.scrollTop=0;
 }
@@ -495,9 +556,12 @@ async function refreshFast(){
 async function refreshSlow(){
   if(document.body.classList.contains('locked'))return;
   const tasks=[getJ('/api/connections').then(v=>D.conn=v),getJ('/api/telemetry').then(v=>D.tele=v),getJ('/api/radios').then(v=>D.radios=v),
-    getJ('/api/ha').then(v=>D.ha=v),getJ('/api/whoami').then(v=>D.who=v)];
+    getJ('/api/ha').then(v=>D.ha=v),getJ('/api/whoami').then(v=>{const was=D.who.admin,first=!D.whoLoaded;D.who=v;D.whoLoaded=true;
+      if(was!==v.admin&&PG[UI.page][4])show(UI.page);else if(first&&PG[UI.page][5]&&!v.admin&&!v.need_login)openLogin(false);})];
   if(UI.page==='radios')tasks.push(getJ('/api/registrations').then(v=>D.regs=v));
   if(UI.page==='accounts'&&D.who.admin)tasks.push(getJ('/api/accounts').then(v=>D.acc=v));
+  tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
+  tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
@@ -512,7 +576,7 @@ function chrome(){
   const w=D.who;
   document.body.classList.toggle('ro',!w.admin);
   if(w.need_login&&!$('login').classList.contains('on'))openLogin(true);
-  $('loginbtn').hidden=!(w.can_login&&!w.username);$('acctbtn').hidden=!w.username;$('rochip').hidden=w.admin||!!w.need_login;
+  $('loginbtn').hidden=!(w.can_login&&!w.username);$('acctbtn').hidden=!w.username;$('themebtn').hidden=!!w.username;$('rochip').hidden=w.admin||!!w.need_login;
   if(w.username){$('acct-av').textContent=w.username[0];$('acct-name').textContent=w.username;$('menu-name').textContent=w.username;
     $('menu-role').textContent=w.admin?'Admin':'Viewer (read only)';$('menu-acc').hidden=!w.admin;}
   if(st){$('b-calls').textContent=st.active_calls.filter(x=>!legIds().has(x.uuid)).length||'';}
@@ -549,8 +613,8 @@ const callRow=(c,now)=>{
   const legs=pool?pool.live.legs.map(g=>`<span class="tg">${g}</span>`).join(' '):'';
   const wait=pool&&pool.live.waiting.length?` <span class="mut">waiting: ${pool.live.waiting.join(', ')}</span>`:'';
   return `<div class="row"><div class="ric${em?' e':grp?'':' p'}">${ic(grp?'radios':'call')}</div><div class="rm">
-   <div class="rt">${grp?'TG '+c.destination:c.source+' → '+c.destination} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}</div>
-   <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${c.source} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
+   <div class="rt">${grp?'TG '+c.destination:issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}</div>
+   <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
    <div class="rr"><b>${dur(now-c.started_at_ms)}</b><br>${c.voice_frames} frames · prio ${c.priority}</div></div>`;
 };
 function stationsList(){
@@ -592,9 +656,9 @@ R.overview=()=>{
   </div>
   <div class="grid2">
    <div class="card"><div class="ch"><h2>Recent cell changes</h2><span class="sp"></span><a data-go="roaming" href="#roaming">Roaming log ›</a></div>
-    ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${r.issi}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
+    ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${issiTxt(r.issi)}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
    <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="sp"></span><a data-go="sds" href="#sds">All SDS ›</a></div>
-    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${s.source}</b><span class="arrow">→</span><b class="m">${s.destination}</b><span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
+    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiTxt(s.source)}</b><span class="arrow">→</span><b class="m">${issiTxt(s.destination)}</b><span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
   </div>`;
 };
 const RESEL={undeclared:['i','undeclared'],unannounced:['w','unannounced'],announced_type_1:['a','announced · type 1'],announced_type_2:['a','announced · type 2'],announced_type_3:['a','announced · type 3']};
@@ -612,33 +676,42 @@ R.calls=()=>{
   const st=D.status,now=Date.now();if(!st)return '<div class="empty">Loading…</div>';
   const legs=legIds();const q=UI.filter.calls||'';const k=UI.filter.callk||'all';
   const act=st.active_calls.filter(x=>!legs.has(x.uuid));
-  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination));
+  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),nameOf(c.destination)));
   return `<div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${act.length}</span></div>${act.length?act.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
   <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span></div>
   <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th><th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
-   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td class="m">${c.source}</td><td class="m">${c.destination}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
+   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination}</span>`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 R.sds=()=>{
   const st=D.status;if(!st)return '<div class="empty">Loading…</div>';
-  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination));
+  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination)));
   return `<div class="bar">${searchBox('sds','ISSI…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span></div>
   <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Reports</th></tr></thead><tbody>
-  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td class="m">${s.source}</td><td class="m">${s.destination}</td><td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
+  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td><td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
 };
 R.radios=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const q=UI.filter.radios||'';
-  const ms=c.mobile_stations.filter(m=>match(q,m.issi,m.basestation_name,(m.groups||[]).join(' '),m.cell&&m.cell.name));
+  const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
   <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span></div><div class="tw"><table><thead><tr><th>ISSI</th><th>Station / cell</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
-  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td><b class="m">${m.issi}</b></td><td>${m.cell?`<span class="chip">${esc(m.cell.name)}</span>`:`<span class="chip">${esc(m.basestation_name||'—')}</span>`}</td><td>${(m.groups||[]).map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
+  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${m.cell?`<span class="chip">${esc(m.cell.name)}</span>`:`<span class="chip">${esc(m.basestation_name||'—')}</span>`}</td><td>${(m.groups||[]).map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
   </tbody></table></div></div>
   <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th></tr></thead><tbody>
-  ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td class="m">${r.issi}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}${r.cell?' <span class="chip">'+esc(r.cell)+'</span>':''}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No registrations yet</td></tr>'}
+  ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}${r.cell?' <span class="chip">'+esc(r.cell)+'</span>':''}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
+// Name of an ISSI from the ISSI directory, if any.
+const nameOf=issi=>(D.issi||{})[String(issi)]||'';
+// "2320972 · OE4SXM" for running text, number and name stacked for tables.
+const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
+const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
+// Info text of a login (Accounts page), if any.
+const infoOf=login=>(D.names||{})[login]||'';
+// "Bost FlowStation/v0.5.6-55a08812" -> "Bost FlowStation v0.5.6-55a08812".
+function software(a){if(!a)return '<span class="mut">—</span>';const m=/^(.+?)\/(\S+)(.*)$/.exec(a);return m?`${esc(m[1])} <span class="m">${esc(m[2])}</span>${esc(m[3])}`:esc(a);}
 R.stations=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const f=UI.filter.cellf||'all';
@@ -649,14 +722,15 @@ R.stations=()=>{
   ${dups.length?`<div class="card"><div class="note">${ic('alert')}<div><b>Duplicate carriers:</b> ${dups.map(d=>esc(JSON.stringify(d))).join(', ')}. The newest announcement serves.</div></div></div>`:''}
   <div class="card"><div class="ch"><h2>Cells</h2><span class="cnt">${cells.length}</span>${helpBtn('cells')}</div><div class="tw"><table><thead><tr><th>Cell</th><th>Status</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Neighbours</th><th>Radios</th></tr></thead><tbody>
   ${cells.map(x=>{const key='c'+x.name;const open=UI.open[key];const offc=x.online===false;
-   return `<tr class="click${offc?' off':''}" onclick="UI.open['${esc(key)}']=!UI.open['${esc(key)}'];render(true)" aria-expanded="${!!open}"><td><b>${esc(x.name)}</b> ${x.cell===0&&!offc?'<span class="chip i">primary</span>':''}${x.duplicate?' <span class="chip w">duplicate</span>':''}</td>
+   const ci=infoOf(String(x.name).split('/')[0]);
+   return `<tr class="click${offc?' off':''}" onclick="UI.open['${esc(key)}']=!UI.open['${esc(key)}'];render(true)" aria-expanded="${!!open}"><td><b>${esc(x.name)}</b> ${x.cell===0&&!offc?'<span class="chip i">primary</span>':''}${x.duplicate?' <span class="chip w">duplicate</span>':''}${ci?`<span class="sub">${esc(ci)}</span>`:''}</td>
    <td>${offc?'<span class="st i"><i></i>Offline</span>':'<span class="st"><i></i>Online</span>'}</td><td class="m">${x.carrier}</td><td class="num">${mhz(x.downlink_hz)}</td><td>${x.location_area}</td><td class="num">${x.mcc} / ${x.mnc}</td>
    <td>${x.neighbours?(x.neighbours.map(n=>`<span class="chip">${esc(n)}</span>`).join(' ')||'<span class="mut">none</span>'):'<span class="mut">—</span>'}</td><td class="num">${offc?'—':x.registered_issis}</td></tr>
    ${open?`<tr class="exp"><td colspan="8"><div class="kv"><div><span class="l">Station address</span>${offc?'—':`<span class="m">${esc(x.remote_addr||'—')}</span>`}</div><div><span class="l">${offc?'Gone':'Connected'}</span>${offc?(x.last_seen_ms?ago(x.last_seen_ms)+' ago':'—'):ago(x.connected_at_ms)}</div>
     <div><span class="l">Extensions</span>${caps(x)}</div><div><span class="l">Access level / MS power</span>${x.rxlev_access_min_dbm!=null?x.rxlev_access_min_dbm+' dBm':'—'} · ${x.ms_txpwr_max_dbm!=null?x.ms_txpwr_max_dbm+' dBm':'—'}</div></div></td></tr>`:''}`;}).join('')||'<tr><td colspan="8" class="mut">No cells announced</td></tr>'}
   </tbody></table></div>${helpNote('cells','Cells the stations announce (FlowStation with the <code>bts-info</code> extension), named <i>login/cell</i>: the Brew login of the station and the cell number in it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan. Click a row for details. A station that went away stays listed as offline until it connects again (stations with a login only).')}</div>
-  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${c.brew_clients.length}</span></div><div class="tw"><table><thead><tr><th>Station</th><th>Mode</th><th>Version</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells</th></tr></thead><tbody>
-  ${c.brew_clients.map(b=>`<tr><td><b>${esc(b.station)}</b></td><td>${esc(b.mode)}</td><td class="num">v${b.version}</td><td class="m">${esc(b.remote_addr||'—')}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${(b.cells||[]).map(x=>`<span class="chip">${x.carrier}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
+  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${c.brew_clients.length}</span></div><div class="tw"><table><thead><tr><th>Station</th><th>Mode</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells</th></tr></thead><tbody>
+  ${c.brew_clients.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}</td><td>${esc(b.mode)}</td><td>${software(b.agent)}<span class="sub">Brew v${b.version}</span></td><td class="m">${esc(b.remote_addr||'—')}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${(b.cells||[]).map(x=>`<span class="chip">${x.carrier}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
   </tbody></table></div></div>
   ${c.sip&&c.sip.enabled?'':''}`;
 };
@@ -664,7 +738,7 @@ R.roaming=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const all=c.roaming_log||[];const f=UI.filter.roamf||'all';const q=UI.filter.roam||'';
   const ann=r=>r.kind==='handover'||String(r.reselection||'').startsWith('announced');
-  const list=all.filter(r=>(f==='all'||(f==='ann'&&ann(r))||(f==='unann'&&!ann(r)&&r.kind!=='within_station')||(f==='within'&&r.kind==='within_station'))&&match(q,r.issi));
+  const list=all.filter(r=>(f==='all'||(f==='ann'&&ann(r))||(f==='unann'&&!ann(r)&&r.kind!=='within_station')||(f==='within'&&r.kind==='within_station'))&&match(q,r.issi,nameOf(r.issi)));
   const today=all.filter(r=>isToday(r.at_ms));
   const t=n=>today.filter(r=>r.reselection==='announced_type_'+n).length;
   return `<div class="bar">${seg('roamf',[['all','All'],['ann','Announced'],['unann','Unannounced'],['within','Within station']])}${searchBox('roam','Filter ISSI…')}<span class="sp"></span><span class="mut hide-s" style="font-size:12.5px">Last ${all.length} of at most 200 changes, in memory</span></div>
@@ -675,17 +749,18 @@ R.roaming=()=>{
    <div class="tile"><div class="k">Within station</div><div class="v">${today.filter(r=>r.kind==='within_station').length}</div><div class="s">multi-cell stations</div></div>
   </div>
   <div class="card"><div class="ch"><h2>Cell change log</h2><span class="cnt">${list.length}</span>${helpBtn('roam')}</div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>From</th><th></th><th>To</th><th>How</th></tr></thead><tbody>
-  ${list.map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td><b class="m">${r.issi}</b></td><td>${place(r.from)}</td><td class="arrow">→</td><td>${place(r.to)}</td><td>${howOf(r)}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No cell changes yet</td></tr>'}
+  ${list.map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi,true)}</td><td>${place(r.from)}</td><td class="arrow">→</td><td>${place(r.to)}</td><td>${howOf(r)}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No cell changes yet</td></tr>'}
   </tbody></table></div>${helpNote('roam','The last cell changes of the radios (cell reselection, TS 100 392-2 clause 18.3.4.7). When the station the radio left reports it (FlowStation with the <code>ms-reselection</code> extension), the category is shown: <i>undeclared</i> = no call running, <i>unannounced</i> = left a call without telling the cell, <i>announced type 1/2/3</i> = told the cell first (U-PREPARE) and got D-NEW-CELL; <i>prepared here</i> = the target was prepared through this server; <i>within station</i> = another cell of a multi-cell station. A radio only registers when it enters another location area, so moves within one location area show only once the station reports the cell.')}</div>`;
 };
 R.telemetry=()=>{
   const t=D.tele||[];
   const lvl=l=>l==='ok'?'':l==='degraded'?' w':' d';
   return t.length?`<div class="grid2" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))">${t.map(s=>{const h=s.health||{};
-  return `<div class="card"><div class="ch"><h2>${esc(s.site_name||s.id)}</h2><span class="cnt">${esc(s.id)}</span><span class="sp"></span><span class="st${lvl(h.overall)}"><i></i>${esc(h.overall||'unknown')}</span></div>
-   <div class="kv" style="padding:12px 18px"><div><span class="l">Version</span>${esc(s.build||s.version||'—')}</div><div><span class="l">Address</span><span class="m">${esc(s.ip||'—')}</span></div><div><span class="l">Connected</span>${ago(s.connected_at_ms)}</div><div><span class="l">Backhaul</span>${s.backhaul_connected==null?'—':s.backhaul_connected?'connected':'down'}</div>
+  const nm=infoOf(s.id)||(s.site_name&&s.site_name!==s.id?s.site_name:'');
+  return `<div class="card tlm"><div class="ch"><h2>${esc(s.id)}</h2>${nm?`<span class="mut" style="font-size:13px">${esc(nm)}</span>`:''}<span class="sp"></span><span class="st${lvl(h.overall)}"><i></i>${esc(h.overall||'unknown')}</span></div>
+   <div class="kv tight" style="padding:12px 18px"><div><span class="l">Version</span>${esc(s.build||s.version||'—')}</div><div><span class="l">Address</span><span class="m">${esc(s.ip||'—')}</span></div><div><span class="l">Connected</span>${ago(s.connected_at_ms)}</div><div><span class="l">Backhaul</span>${s.backhaul_connected==null?'—':s.backhaul_connected?'connected':'down'}</div>
     <div><span class="l">Radios</span>${s.registration_count}</div><div><span class="l">Calls</span>${Object.keys(s.active_calls||{}).length}</div><div><span class="l">TX EVM</span>${s.evm_pct!=null?s.evm_pct.toFixed(1)+' %':'—'}</div><div><span class="l">Emergencies</span>${(s.emergencies||[]).length||'none'}</div></div>
-   ${(h.domains||[]).length?`<div style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${h.domains.map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
+   ${(h.domains||[]).length?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${h.domains.map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
    <div class="tw"><table><thead><tr><th>Cell</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div></div>`;}).join('')}</div>`
   :'<div class="card"><div class="empty">No station telemetry connections. Stations report here with FlowStation <code>[telemetry]</code>.</div></div>';
 };
@@ -712,13 +787,13 @@ R.routing=()=>{
   const adm=D.who.admin;
   const pools=D.pools;
   const poolRows=pools.map((p,i)=>{const l=p.live;const groups=p.groups.map((g,j)=>`<span class="tg${(!p.both_ways&&j===0)||(l&&l.gssi===g)?' src':''}">${g}</span>${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
-   const state=l?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${l.talker} talking on ${l.gssi}</span> · heard on ${l.legs.length} group${l.legs.length===1?'':'s'}${l.waiting.length?` · ${l.waiting.join(', ')} join${l.waiting.length===1?'s':''} after ${l.waiting.length===1?'its':'their'} own over`:''}`:(p.enabled?'Idle':'Switched off');
+   const state=l?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(l.talker)} talking on ${l.gssi}</span> · heard on ${l.legs.length} group${l.legs.length===1?'':'s'}${l.waiting.length?` · ${l.waiting.join(', ')} join${l.waiting.length===1?'s':''} after ${l.waiting.length===1?'its':'their'} own over`:''}`:(p.enabled?'Idle':'Switched off');
    return `<div class="row pool${p.enabled?'':' offp'}"><button class="tog" role="switch" aria-checked="${p.enabled}" aria-label="Pool ${esc(p.name)} on" ${adm?'':'disabled'} onclick="togglePool(${i})"></button>
     <div class="rm"><div class="rt">${esc(p.name)} <span class="chip ${p.enabled?'a':'i'}">${p.enabled?'on':'off'}</span><span class="chip">${p.both_ways?'⇄ both ways':'→ one way'}</span></div>
     <div class="flow">${p.both_ways?groups.replace(/<\/span> <span class="tg/,'</span> <span class="arrow">⇄</span> <span class="tg'):groups}</div><div class="rs" style="margin-top:6px">${state}</div></div>
     ${adm?`<button class="btn" onclick="editPool(${i})">Edit</button><button class="btn danger" onclick="delPool(${i})">Delete</button>`:''}</div>`;}).join('');
   const q=UI.filter.dg||'';
-  const radios=D.radios.filter(r=>match(q,r.issi,r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' ')));
+  const radios=D.radios.filter(r=>match(q,r.issi,nameOf(r.issi),r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' ')));
   for(const id of [...UI.sel])if(!D.radios.some(r=>r.issi===id&&r.radio))UI.sel.delete(id);
   const sel=UI.sel.size;
   const allSel=radios.filter(r=>r.radio).length>0&&radios.filter(r=>r.radio).every(r=>UI.sel.has(r.issi));
@@ -734,7 +809,7 @@ R.routing=()=>{
   <div class="card"><div class="ch"><h2>Assign radios to a group (DGNA)</h2>${helpBtn('dgna')}<span class="sp"></span>${searchBox('dg','ISSI, group or station…')}</div>
    ${helpNote('dgna','Dynamic group number assignment (SS-DGNA, ETSI EN 300 392-12-22): the station tells the selected radios to add or remove a group, with an optional name the radio shows. Each command goes to the station the radio is registered on, over its control connection (FlowStation <code>[command]</code>). The answer of each radio shows under <i>Last DGNA</i>. ★ = group assigned by DGNA. Apps and other terminals cannot be reached.')}
    <div class="tw"><table><thead><tr><th style="width:44px"><input type="checkbox" class="chk" aria-label="Select all" ${allSel?'checked':''} ${adm?'':'disabled'} onchange="selAll(this.checked)"></th><th>ISSI</th><th>Station / cell</th><th>Groups now</th><th>Last DGNA</th></tr></thead><tbody>
-   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td><b class="m">${r.issi}</b></td><td><span class="chip">${esc(r.cell||r.station)}</span></td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
+   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><span class="chip">${esc(r.cell||r.station)}</span></td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
    </tbody></table></div>
    ${adm?`<div class="selbar"><b>${sel} selected</b><span class="arrow">→</span>
     <input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
@@ -768,7 +843,7 @@ function editPool(i){
   const p=i>=0?plain(D.pools[i]):{name:'',enabled:true,both_ways:true,groups:[]};
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit pool':'New pool'}</h3></div><div class="sb">
    <div><label class="l" for="pe-name">Name</label><input class="f" id="pe-name" maxlength="40" value="${esc(p.name)}" placeholder="e.g. Bezirk Nord"></div>
-   <div><label class="l" for="pe-groups">Groups (GSSI), separated by commas or spaces</label><input class="f" id="pe-groups" value="${p.groups.join(', ')}" placeholder="2321, 2323, 2324, 264" inputmode="numeric"></div>
+   <div><label class="l" for="pe-groups">Groups (GSSI), separated by commas or spaces</label><input class="f" id="pe-groups" value="${p.groups.join(', ')}" placeholder="2321, 2323, 2324, 264" autocomplete="off"></div>
    <div><span class="l" style="font-size:12px;font-weight:600;color:var(--text2)">Direction</span><div class="seg" role="radiogroup" id="pe-dir" style="margin-top:5px"><button role="radio" aria-pressed="${p.both_ways}" aria-checked="${p.both_ways}" onclick="setDir(true)">⇄ Both ways</button><button role="radio" aria-pressed="${!p.both_ways}" aria-checked="${!p.both_ways}" onclick="setDir(false)">→ One way, from the first group</button></div></div>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="pe-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
@@ -790,42 +865,56 @@ async function savePool(i){
 
 /* ---------- accounts ---------- */
 const svcChip=(name,s)=>!s?'':`<span class="chip ${!s.enabled?'':s.open?'w':'a'}">${name}: ${!s.enabled?'switched off':s.open?'open, no login needed':'login required'}</span>`;
-const yn=b=>b?'<span class="yes">✓ yes</span>':'<span class="no">— no</span>';
+const yn=b=>b?'<span class="yes yn" title="yes">✓<span class="hide-s"> yes</span><span class="sr">yes</span></span>':'<span class="no yn" title="no">—<span class="hide-s"> no</span><span class="sr">no</span></span>';
 R.accounts=()=>{
   if(!D.who.admin)return `<div class="card"><div class="empty">Accounts are for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
   const a=D.acc;
   if(!a)return '<div class="card"><div class="empty">Loading…</div></div>';
   const q=UI.filter.acc||'';
-  const rows=a.accounts.filter(x=>!q||x.username.includes(q));
+  const byInfo=(UI.filter.accv||'login')==='info';
+  const rows=a.accounts.filter(x=>match(q,x.username,x.info));
   return `<div class="card"><div class="ch"><h2>Station and terminal logins</h2><span class="mut">${a.accounts.length}</span>${helpBtn('acc')}<span class="sp"></span>
-    <div class="search">${ic('search')}<input class="f" placeholder="Username…" value="${esc(q)}" oninput="UI.filter.acc=this.value;render(true);const i=document.querySelector('.search input');i.focus();i.setSelectionRange(i.value.length,i.value.length)" aria-label="Filter logins"></div>
+    ${seg('accv',[['login','Login'],['info','Info']])}
+    <div class="search">${ic('search')}<input class="f" placeholder="Login or info…" value="${esc(q)}" oninput="UI.filter.acc=this.value;render(true);const i=document.querySelector('.search input');i.focus();i.setSelectionRange(i.value.length,i.value.length)" aria-label="Filter logins"></div>
     <button class="btn pri" onclick="editAcc(-1)">${ic('plus')}New login</button></div>
    ${helpNote('acc','The logins Basestations and terminals (apps, consoles) use to connect to this server. <b>Brew</b> carries calls and SDS; the login is the station\'s or terminal\'s number (1 to 7 digits). <b>Telemetry</b> and <b>control</b> are the FlowStation links for status reports and commands (DGNA, kick, restart). One login can be on all three. Changes apply to the next connection at once, without a restart, and are written to the config file. Connections that are already up stay until they reconnect. Careful: while the telemetry or control list is empty, that link needs no login; the first login you add there turns the login on, and stations without one are refused from then on.')}
    <div class="svc">${svcChip('Brew',a.brew)}${svcChip('Telemetry',a.telemetry)}${svcChip('Control',a.control)}</div>
-   <div class="tw"><table><thead><tr><th>Username</th><th>Brew</th><th>Telemetry</th><th>Control</th><th></th></tr></thead><tbody>
-   ${rows.map(x=>{const i=a.accounts.indexOf(x);return `<tr><td><b class="m">${esc(x.username)}</b></td><td>${yn(x.brew)}</td><td>${yn(x.telemetry)}</td><td>${yn(x.control)}</td>
-     <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="editAcc(${i})">Edit</button> <button class="btn danger" onclick="delAcc(${i})">Delete</button></td></tr>`;}).join('')||'<tr><td colspan="5" class="mut">No logins</td></tr>'}
+   <div class="tw acc"><table><thead><tr><th>${byInfo?'Info':'Login'}</th><th>Brew</th><th>Telemetry</th><th>Control</th><th class="hide-s">Position</th><th></th></tr></thead><tbody>
+   ${rows.map(x=>{const i=a.accounts.indexOf(x);const first=byInfo&&x.info?`<b>${esc(x.info)}</b>`:`<b class="m">${esc(x.username)}</b>`;
+     return `<tr><td>${first}${byInfo?(x.info?`<span class="sub m">${esc(x.username)}</span>`:'<span class="sub">no info</span>'):''}</td><td>${yn(x.brew)}</td><td>${yn(x.telemetry)}</td><td>${yn(x.control)}</td><td class="hide-s">${x.lat!=null?`<span class="m" style="font-size:12px">${x.lat.toFixed(4)}, ${x.lon.toFixed(4)}</span>`:'<span class="no">—</span>'}</td>
+     <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="editAcc(${i})">Edit</button> <button class="btn danger hide-s" onclick="delAcc(${i})">Delete</button></td></tr>`;}).join('')||'<tr><td colspan="6" class="mut">No logins</td></tr>'}
    </tbody></table></div>${msgDiv('acc-msg','padding:12px 18px')}</div>`;
 };
 function editAcc(i){
-  const x=i>=0?D.acc.accounts[i]:{username:'',brew:true,telemetry:true,control:true};
+  const x=i>=0?D.acc.accounts[i]:{username:'',brew:true,telemetry:true,control:true,info:'',lat:null,lon:null};
   const sw=(id,on,label,hint)=>`<label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="${id}" aria-checked="${on}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">${label}</b><br><span class="mut" style="font-size:12px">${hint}</span></span></label>`;
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit login '+esc(x.username):'New login'}</h3></div><div class="sb">
    <div><label class="l" for="ac-user">Username</label><input class="f" id="ac-user" value="${esc(x.username)}" ${i>=0?'disabled':''} placeholder="e.g. 1000003" autocomplete="off" spellcheck="false"></div>
    <div><label class="l" for="ac-pw">Password</label><div style="display:flex;gap:8px"><input class="f" id="ac-pw" type="text" autocomplete="new-password" spellcheck="false" placeholder="${i>=0?'unchanged':'password'}" style="flex:1"><button type="button" class="btn" onclick="$('ac-pw').value=genPw()">Generate</button></div></div>
+   <div><label class="l" for="ac-info">Info (optional)</label><input class="f" id="ac-info" maxlength="60" value="${esc(x.info||'')}" placeholder="e.g. Relais Hauptplatz · Sysop OE4XYZ"></div>
+   <div><label class="l" for="ac-pos">Position (optional): latitude, longitude</label><div style="display:flex;gap:8px"><input class="f" id="ac-pos" value="${x.lat!=null?x.lat+', '+x.lon:''}" placeholder="48.2082, 16.3738" autocomplete="off" spellcheck="false" style="flex:1"><button type="button" class="btn" onclick="hereFix()" title="Use the position of this device">${ic('pin')}Here</button></div><div class="mut" style="font-size:12px;margin-top:4px">Shown on the map. Paste it from a map app, or take this device's position.</div></div>
    ${sw('ac-b',x.brew,'Brew','Calls and SDS. Username = number, 1 to 7 digits')}
    ${sw('ac-t',x.telemetry,'Telemetry','FlowStation status reports')}
    ${sw('ac-c',x.control,'Control','Commands to the station: DGNA, kick, restart')}
    <div class="mut" style="font-size:12px">Applies to the next connection at once, no restart.</div>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
-   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveAcc(${i})">Save</button></div>`;
+   <div class="acts">${i>=0?`<button class="btn danger" style="margin-right:auto" onclick="closeSheet();delAcc(${i})">${ic('trash')}Delete</button>`:''}<button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveAcc(${i})">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>(i>=0?$('ac-pw'):$('ac-user')).focus(),30);
+}
+function hereFix(){
+  const m=$('sheet-msg');
+  if(!navigator.geolocation){m.className='msg err';m.textContent='This browser cannot give a position (it needs HTTPS).';return;}
+  m.className='msg mut';m.textContent='Getting the position…';
+  navigator.geolocation.getCurrentPosition(p=>{$('ac-pos').value=p.coords.latitude.toFixed(5)+', '+p.coords.longitude.toFixed(5);m.textContent='';},
+    e=>{m.className='msg err';m.textContent='No position: '+(e.code===1?'permission denied':e.message)+'. Over plain HTTP browsers refuse; paste it instead.';},{enableHighAccuracy:true,timeout:15000});
 }
 function genPw(){const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';const a=new Uint32Array(16);crypto.getRandomValues(a);return [...a].map(n=>c[n%c.length]).join('');}
 const on=id=>$(id).getAttribute('aria-checked')==='true';
 async function saveAcc(i){
-  const body={username:$('ac-user').value.trim(),password:$('ac-pw').value,brew:on('ac-b'),telemetry:on('ac-t'),control:on('ac-c')};
-  const m=$('sheet-msg');m.className='msg mut';m.textContent='Saving…';
+  const m=$('sheet-msg');
+  const pos=$('ac-pos').value.trim();let lat=null,lon=null;
+  if(pos){const n=pos.split(/[\s,;]+/).filter(Boolean).map(Number);if(n.length!==2||n.some(v=>!isFinite(v))){m.className='msg err';m.textContent='Position: two numbers, latitude and longitude, e.g. 48.2082, 16.3738.';return;}[lat,lon]=n;}
+  const body={username:$('ac-user').value.trim(),password:$('ac-pw').value,brew:on('ac-b'),telemetry:on('ac-t'),control:on('ac-c'),info:$('ac-info').value.trim(),lat,lon};m.className='msg mut';m.textContent='Saving…';
   try{D.acc=await postJ('/api/accounts',body);closeSheet();setMsg('acc-msg','ok',`${body.username} saved. It works for the next connection.`);render(true);}
   catch(e){m.className='msg err';m.textContent=e.message;}
 }
@@ -833,6 +922,65 @@ async function delAcc(i){
   const x=D.acc.accounts[i];if(!confirm(`Delete login "${x.username}" from Brew, telemetry and control?`))return;
   try{D.acc=await api('/api/accounts/'+encodeURIComponent(x.username),{method:'DELETE'});setMsg('acc-msg','ok',`${x.username} deleted.`);}catch(e){setMsg('acc-msg','err',e.message);}
   render(true);
+}
+
+/* ---------- ISSI directory ---------- */
+R.issis=()=>{
+  const adm=D.who.admin;const q=UI.filter.issi||'';const f=UI.filter.issif||'all';
+  const names=D.issi||{};
+  const reg=new Map(((D.conn&&D.conn.mobile_stations)||[]).map(m=>[String(m.issi),m]));
+  const keys=[...new Set([...Object.keys(names),...reg.keys()])].sort((a,b)=>a-b);
+  const rows=keys.filter(k=>(f==='all'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k]))&&match(q,k,names[k]));
+  const where=m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>';
+  return `<div class="bar">${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']])}${searchBox('issi','ISSI or name…')}<span class="sp"></span>
+    ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}Add name</button>`:''}</div>
+  <div class="card"><div class="ch"><h2>ISSI directory</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('issi')}</div>
+   ${helpNote('issi','Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).')}
+   <div class="tw"><table><thead><tr><th>ISSI</th><th>Name</th><th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
+   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td><td class="hide-s">${where(reg.get(k))}</td>
+     ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete">${ic('trash')}<span class="hide-s">Delete</span></button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}</td>`:''}</tr>`).join('')||`<tr><td colspan="4" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
+   </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
+};
+function editName(k){
+  const n=(D.issi||{})[k]||'';
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${k?(n?'Edit name':'Name for '+k):'Add name'}</h3></div><div class="sb">
+   <div><label class="l" for="in-issi">ISSI</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. 2320972"></div>
+   <div><label class="l" for="in-name">Name</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. OE4SXM Sebastian"></div>
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveName()">Save</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>(k?$('in-name'):$('in-issi')).focus(),30);
+}
+async function saveName(){
+  const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
+  if(!name){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
+  m.className='msg mut';m.textContent='Saving…';
+  try{D.issi=await postJ('/api/issi-names/set',{issi,name});closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}
+}
+async function delName(k){
+  if(!confirm(`Delete the name of ${k}?`))return;
+  try{D.issi=await postJ('/api/issi-names/set',{issi:k,name:''});setMsg('issi-msg','ok',`Name of ${k} deleted.`);}catch(e){setMsg('issi-msg','err',e.message);}
+  render(true);
+}
+function importNames(){
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Import list</h3></div><div class="sb">
+   <div><label class="l" for="in-list">One radio per line: ISSI, then the name (comma, semicolon, tab or space between). A CSV export from a spreadsheet works.</label>
+   <textarea class="f" id="in-list" rows="9" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, OE4SXM Sebastian&#10;2321100, Relais Nord"></textarea></div>
+   <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="in-replace" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">Replace the whole directory</b><br><span class="mut" style="font-size:12px">Off: adds the names and overwrites the ones listed</span></span></label>
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="doImport()">Import</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>$('in-list').focus(),30);
+}
+async function doImport(){
+  const m=$('sheet-msg');const replace=$('in-replace').getAttribute('aria-checked')==='true';
+  if(replace&&!confirm('Replace the whole ISSI directory with this list?'))return;
+  m.className='msg mut';m.textContent='Importing…';
+  try{const before=Object.keys(D.issi||{}).length;D.issi=await postJ('/api/issi-names/import',{text:$('in-list').value,replace});closeSheet();
+    setMsg('issi-msg','ok',`Imported. The directory has ${Object.keys(D.issi).length} names (before ${before}).`);render(true);}
+  catch(e){m.className='msg err';m.textContent=e.message;}
+}
+function exportNames(){
+  const rows=Object.entries(D.issi||{}).sort((a,b)=>a[0]-b[0]).map(([k,v])=>k+','+(/[",]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['ISSI,Name\n'+rows.join('\n')+'\n'],{type:'text/csv'}));a.download='issi-directory.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 
 /* ---------- configuration ---------- */

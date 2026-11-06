@@ -118,7 +118,29 @@ Version 1.20.0 adds:
 - **Configuration page.** The whole config file in an editor with a section
   jump. Save checks the file (a mistake is shown with its line and nothing is
   saved) and applies it with the usual restart.
-- **HA page.** Changes applied live (blacklist, pools, logins) no longer show
+- **Info and position per login.** The Accounts page keeps an info text per
+  login (sysop, relay callsign, site) and an optional position, stored as the
+  login's `[bts_locations]` entry (`name`, `lat`, `lon`; an entry without a
+  position keeps `0` / `0` and is not plotted). A Login / Info switch shows
+  the info in place of the number; Telemetry and Stations show it next to
+  the login (`GET /api/names`).
+- **ISSI directory.** Names for ISSIs (`[issi_names]`, ISSI = name), shown
+  next to the number on the dashboard pages. The new ISSI directory page adds,
+  changes and removes names, imports a pasted list (`ISSI,name` per line,
+  `;`, tab or space work too) and exports CSV. Applied without a restart and
+  written to the config file (`GET /api/issi-names`, admins:
+  `POST /api/issi-names/set`, `POST /api/issi-names/import`).
+- **Software version.** The Stations page shows the version a Basestation or
+  terminal sends in its User-Agent (FlowStation sends its release).
+- **Appearance.** System, Light or Dark in the account menu (the sun button
+  when signed out); the classic pages shown inside the dashboard follow it.
+- **Admin pages open the login window.** Settings, Configuration and the
+  other admin pages open the new login window instead of the browser's login
+  prompt.
+- **Phone layout.** The map no longer scrolls by itself, Telemetry and other
+  pages are more compact, the pool groups field opens the full keyboard, the
+  tab bar sits lower and the classic dashboard link is in the account menu.
+- **HA page.** Changes applied live (blacklist, pools, logins, ISSI names) no longer show
   as pending changes.
 - **Backward compatible.** Without `[[talkgroup_pools]]` call routing is
   unchanged. All new messages are sent only to Basestations

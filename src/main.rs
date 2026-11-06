@@ -8,6 +8,7 @@ mod accounts;
 mod dashboard;
 mod dashboard_auth;
 mod dashboard_ui;
+mod issi_names;
 mod emergency;
 mod federation;
 mod fedroute;

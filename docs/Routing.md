@@ -97,7 +97,20 @@ Two more pages of the new dashboard, both for admins:
   connection without a restart and are written to the config file;
   connections already up stay until they reconnect. Adding the first
   telemetry or control login turns the login on for that listener: stations
-  without one are refused from then on.
+  without one are refused from then on. Each login can have an info text
+  (sysop, relay callsign) and a position; both are the login's
+  `[bts_locations]` entry, so the position is the map's static fallback.
+  The Login / Info switch shows the info in place of the number.
+- **Monitor -> ISSI directory:** names for ISSIs, shown next to the number on
+  every page. Add one by one or import a pasted list, one ISSI and name per
+  line (`2320972, OE4SXM Sebastian`; `;`, tab or space work too, `#` lines
+  and a header line are skipped). A wrong line stops the import and nothing
+  changes. Stored in the config file:
+
+  ```toml
+  [issi_names]
+  "2320972" = "OE4SXM Sebastian"
+  ```
 - **System -> Configuration:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign
   in again).

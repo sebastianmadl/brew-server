@@ -300,13 +300,16 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
         }
     };
     let console = parts.headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).is_some_and(is_dispatch_console);
+    // What the client says it is (FlowStation: "Bost FlowStation/v0.5.6-<hash>"),
+    // shown on the dashboard.
+    let agent = user_agent(&parts.headers).map(|a| a.chars().take(120).collect::<String>());
     match WebSocketUpgrade::from_request_parts(parts, &state).await {
         Ok(ws) => {
             let requested = parts.headers.get(header::SEC_WEBSOCKET_PROTOCOL).and_then(|v| v.to_str().ok()).unwrap_or_default();
             debug!(requested_subprotocol=requested, mode=mode.as_str(), seed_version=?seed_version.map(ConnVersion::as_u8), loop_safe=fed_neighbour.is_some(), "WebSocket upgrade request");
             let protocol = state.config.websocket_subprotocol.clone();
             let mut response = ws.protocols([protocol])
-                .on_upgrade(move |socket| client_session(state, socket, mode, seed_version, remote_addr, username, fed_neighbour, console))
+                .on_upgrade(move |socket| client_session(state, socket, mode, seed_version, remote_addr, username, fed_neighbour, console, agent))
                 .into_response();
             if mode == ClientMode::Basestation {
                 // Tells a Basestation which Brew extensions it may use here;
@@ -402,7 +405,7 @@ async fn verify_digest(state: &Arc<AppState>, headers: &HeaderMap, method: &str,
     Some(username.clone())
 }
 
-async fn client_session(state: Arc<AppState>, socket: WebSocket, mode: ClientMode, seed_version: Option<ConnVersion>, remote_addr: SocketAddr, username: Option<String>, fed_neighbour: Option<u64>, console: bool) {
+async fn client_session(state: Arc<AppState>, socket: WebSocket, mode: ClientMode, seed_version: Option<ConnVersion>, remote_addr: SocketAddr, username: Option<String>, fed_neighbour: Option<u64>, console: bool, agent: Option<String>) {
     let id = Uuid::new_v4();
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -417,6 +420,9 @@ async fn client_session(state: Arc<AppState>, socket: WebSocket, mode: ClientMod
     crate::federation::attach_client(&state, id, client, fed_neighbour).await;
     if console {
         state.inner.write().await.consoles.insert(id);
+    }
+    if let Some(agent) = agent {
+        state.inner.write().await.client_agents.insert(id, agent);
     }
     info!(%id, console, mode=mode.as_str(), version=version.as_u8(), version_announced=seed_version.is_some(), %remote_addr, username=username.as_deref().unwrap_or(""),
         loop_safe_neighbour=fed_neighbour.map(fedroute::format_server_id).unwrap_or_default(), "Basestation connected");
@@ -724,10 +730,15 @@ mod tests {
                     if !clients.is_empty() || tokio::time::Instant::now() >= deadline { break clients; }
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 };
+                // The software it named itself with is kept for the dashboard...
+                let agents: Vec<String> = state.inner.read().await.client_agents.values().cloned().collect();
+                assert_eq!(agents, agent.map(|a| vec![a.to_string()]).unwrap_or_default());
                 drop(ws);
                 tokio::time::timeout(Duration::from_secs(5), async {
                     while !state.inner.read().await.clients.is_empty() { tokio::time::sleep(Duration::from_millis(20)).await; }
                 }).await.expect("closed connection cleaned up");
+                // ...and goes with the connection.
+                assert!(state.inner.read().await.client_agents.is_empty());
                 registered
             }
         };

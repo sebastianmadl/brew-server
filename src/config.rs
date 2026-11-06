@@ -57,6 +57,9 @@ pub struct Config {
     /// the pool as well. Edited live from the dashboard (no restart). See
     /// `pools`.
     pub talkgroup_pools: Vec<TalkgroupPoolConfig>,
+    /// `[issi_names]`: ISSI -> name ("2320972" = "OE4SXM Sebastian"), shown
+    /// next to the ISSI on the dashboard. Edited live on its ISSI directory page.
+    pub issi_names: std::collections::BTreeMap<String, String>,
 }
 
 /// `[[talkgroup_pools]]`: a named set of groups that are switched together
@@ -842,6 +845,7 @@ impl Default for Config {
             roaming: RoamingConfig::default(),
             handover: HandoverConfig::default(),
             talkgroup_pools: Vec::new(),
+            issi_names: std::collections::BTreeMap::new(),
         }
     }
 }

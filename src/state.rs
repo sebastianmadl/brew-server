@@ -175,6 +175,9 @@ pub struct Inner {
     /// carry them over. One per address; only an upgrade with the same
     /// `User-Agent` takes it, so another client behind the same NAT does not.
     pub discovery_hints: HashMap<std::net::IpAddr, (Instant, String, ClientMode, Option<ConnVersion>)>,
+    /// The `User-Agent` each Brew connection upgraded with (software and
+    /// version, e.g. "Bost FlowStation/v0.5.6-55a08812"), for the dashboard.
+    pub client_agents: HashMap<ClientId, String>,
     /// (call/SDS uuid, source ISSI) -> (link it was accepted from, when): drops
     /// a copy of a call or SDS that reaches this server again over another
     /// peer link (see `fedroute::is_duplicate`).
@@ -348,6 +351,11 @@ pub struct AppState {
     /// `[telemetry.users]` and `[control.users]`, edited live from the
     /// dashboard (see `logins`).
     pub logins: Logins,
+    /// `[bts_locations]` as it is right now (name = the login's info, and its
+    /// position), edited live from the Accounts page.
+    pub locations: std::sync::RwLock<HashMap<String, crate::config::BtsLocationConfig>>,
+    /// `[issi_names]` as it is right now (see `issi_names`).
+    pub issi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
 }
 
 /// Username -> password of one listener, shared with the dashboard.
@@ -394,6 +402,8 @@ impl AppState {
         if let Ok(u) = self.logins.brew.read() { cfg.auth.users = u.clone(); }
         if let Ok(u) = self.logins.telemetry.read() { cfg.telemetry.users = u.clone(); }
         if let Ok(u) = self.logins.control.read() { cfg.control.users = u.clone(); }
+        if let Ok(l) = self.locations.read() { cfg.bts_locations = l.clone(); }
+        if let Ok(n) = self.issi_names.read() { cfg.issi_names = n.clone(); }
         
         cfg
     }
@@ -445,6 +455,8 @@ impl AppState {
         let blocked: HashSet<u32> = config.blacklist.issis.iter().copied().collect();
         let pools = config.talkgroup_pools.clone();
         let logins = Logins::from_config(&config);
+        let locations = config.bts_locations.clone();
+        let issi_names = config.issi_names.clone();
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -463,6 +475,8 @@ impl AppState {
                 blocked: std::sync::RwLock::new(blocked),
                 pools: std::sync::RwLock::new(pools),
                 logins,
+                locations: std::sync::RwLock::new(locations),
+                issi_names: std::sync::RwLock::new(issi_names),
             },
             aprs_rx,
         )
@@ -554,6 +568,7 @@ impl AppState {
     pub async fn cleanup_client(&self, id: ClientId) {
         let mut inner = self.inner.write().await;
         inner.clients.remove(&id);
+        inner.client_agents.remove(&id);
         let negotiated = inner.fed.links.remove(&id).is_some();
         inner.fed.bts_links.remove(&id);
         inner.consoles.remove(&id);

@@ -102,6 +102,8 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
         .route("/api/pools/save", axum::routing::post(crate::routing_api::pools_put))
         .route("/api/accounts", get(crate::accounts::list).post(crate::accounts::upsert))
+        .route("/api/issi-names/set", axum::routing::post(crate::issi_names::set))
+        .route("/api/issi-names/import", axum::routing::post(crate::issi_names::import))
         .route("/api/accounts/{username}", axum::routing::delete(crate::accounts::remove))
         .route("/api/ha/active", axum::routing::post(ha_make_active))
         .route("/api/ha/standby", axum::routing::post(ha_make_standby))
@@ -115,6 +117,8 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/classic", get(classic_index))
         .route("/ui", get(crate::dashboard_ui::page))
         .route("/api/radios", get(crate::routing_api::radios))
+        .route("/api/names", get(crate::accounts::names))
+        .route("/api/issi-names", get(crate::issi_names::list))
         .route("/api/pools", get(crate::routing_api::pools_get))
         .route("/calls", get(calls_page))
         .route("/sds", get(sds_page))
@@ -859,7 +863,8 @@ pub async fn bts_locations_snapshot(
         });
     }
 
-    for (username, loc) in &state.config.bts_locations {
+    let locations = state.locations.read().map(|l| l.clone()).unwrap_or_default();
+    for (username, loc) in &locations {
         if covered.contains(username) || !crate::fedroute::valid_position(loc.lat, loc.lon) { continue; }
         let live = inner.clients.values().find(|c| c.username.as_deref() == Some(username.as_str()));
         out.push(BtsLocation {
@@ -922,6 +927,7 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                 "station": station(*id),
                 "mode": c.mode.as_str(),
                 "version": c.version.as_u8(),
+                "agent": inner.client_agents.get(id),
                 "remote_addr": c.remote_addr.map(|a| a.to_string()),
                 "connected_at_ms": c.connected_at_ms,
                 "registered_issis": issi_count,
@@ -1287,7 +1293,9 @@ h2 .backlink{text-transform:none;letter-spacing:normal;margin-left:8px}
 .ha-active{background:#173822;color:#52d273;border:1px solid #245c37}.ha-standby{background:#123047;color:#5cc0f2;border:1px solid #1d4a66}.ha-init{background:#203047;color:#8fa2b8}.ha-fault,.ha-down{background:#3a1414;color:#f2545b;border:1px solid #5c1d1d}a.ha-hdr{text-decoration:none;font-size:11px}
 /* Embedded in the new dashboard (?embed=1): no header, its colours. */
 html.embed{--e-bg:#eceff4;--e-bg2:#ffffff;--e-bg3:#f3f5f9;--e-border:#dde3ec;--e-sep:rgba(20,30,50,.09);--e-text:#16202e;--e-text2:#3d4f66;--e-text3:#5f7188;--e-accent:#00876a;--e-link:#1565c0}
-@media (prefers-color-scheme:dark){html.embed{--e-bg:#090d14;--e-bg2:#111824;--e-bg3:#19212f;--e-border:#232e40;--e-sep:rgba(255,255,255,.07);--e-text:#eef3fb;--e-text2:#94abc9;--e-text3:#7f93b5;--e-accent:#00d4a8;--e-link:#4da6ff}}
+@media (prefers-color-scheme:dark){html.embed:not([data-theme=light]){--e-bg:#090d14;--e-bg2:#111824;--e-bg3:#19212f;--e-border:#232e40;--e-sep:rgba(255,255,255,.07);--e-text:#eef3fb;--e-text2:#94abc9;--e-text3:#7f93b5;--e-accent:#00d4a8;--e-link:#4da6ff}}
+html.embed[data-theme=dark]{--e-bg:#090d14;--e-bg2:#111824;--e-bg3:#19212f;--e-border:#232e40;--e-sep:rgba(255,255,255,.07);--e-text:#eef3fb;--e-text2:#94abc9;--e-text3:#7f93b5;--e-accent:#00d4a8;--e-link:#4da6ff}
+html.embed #map{height:calc(100vh - 80px)!important}
 html.embed,html.embed body{background:var(--e-bg)!important;color:var(--e-text)!important;font-family:-apple-system,BlinkMacSystemFont,Inter,'Segoe UI',system-ui,sans-serif}
 html.embed header,html.embed .backlink,html.embed p:has(> .backlink),html.embed .emg-ribbon{display:none!important}
 html.embed .wrap{padding:0 2px 24px;max-width:none}
@@ -1302,7 +1310,7 @@ html.embed input,html.embed select,html.embed textarea{background:var(--e-bg3)!i
 html.embed button,html.embed .pager button,html.embed .ctl-row button{background:var(--e-bg2)!important;color:var(--e-text)!important;border:1px solid var(--e-border)!important;border-radius:8px;padding:6px 12px;font-weight:600;cursor:pointer}
 html.embed .pill,html.embed .reg-issi,html.embed .cell-carrier{background:var(--e-bg3)!important;color:var(--e-text2)!important;border-color:var(--e-border)!important}
 </style><script>
-if(new URLSearchParams(location.search).has('embed'))document.documentElement.classList.add('embed');
+if(new URLSearchParams(location.search).has('embed')){document.documentElement.classList.add('embed');const t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}
 // Admin login/logout, shared by every page header. The dashboard can be
 // read-only to anonymous visitors (open mode); logging in only unlocks
 // config editing and Basestation control. doLogin() navigates to the
