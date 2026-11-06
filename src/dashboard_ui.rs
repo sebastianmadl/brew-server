@@ -885,27 +885,28 @@ R.multinet=()=>{
   if(!D.who.admin)return `<div class="card"><div class="empty">Multi Network is for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
   const M=D.nets;if(!M)return `<div class="card"><div class="empty">Loading…</div></div>`;
   const mni=(a,b)=>a||b?`${a}/${b}`:'<span class="mut">not set</span>';
-  const rows=M.networks.map((n,i)=>{const st=!n.enabled?'<span class="st i"><i></i>switched off</span>':n.connected?`<span class="st"><i></i>connected · ${ago(n.since_ms)}</span>`:`<span class="st w"><i></i>not connected</span>${n.last_error?`<div class="mut" style="font-size:12px">${esc(n.last_error)}</div>`:''}`;
+  const rows=M.networks.map((n,i)=>{const st=!M.enabled?'<span class="st i"><i></i>Multi Network off</span>':!n.enabled?'<span class="st i"><i></i>switched off</span>':n.connected?`<span class="st"><i></i>connected · ${ago(n.since_ms)}</span>`:`<span class="st w"><i></i>not connected</span>${n.last_error?`<div class="mut" style="font-size:12px">${esc(n.last_error)}</div>`:''}`;
     return `<tr${n.enabled?'':' class="off"'}><td><button class="tog" role="switch" aria-checked="${n.enabled}" aria-label="Network ${esc(n.name)} on" onclick="toggleNet(${i})"></button></td>
      <td><b>${esc(n.name)}</b><div class="mut" style="font-size:12px">MNI ${mni(n.mcc,n.mnc)}</div></td><td>${st}</td>
      <td><code>${esc(n.remote_host)}${esc(n.path)}</code>${n.tls?' <span class="chip">TLS</span>':''}<div class="mut" style="font-size:12px">login ${esc(n.username)||'—'} · as “${esc(n.user_agent||M.default_user_agent)}”</div></td>
      <td>${n.bridge_issi||'<span class="mut">—</span>'}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
      <td style="white-space:nowrap"><button class="btn" onclick="editNet(${i})">Edit</button><button class="btn danger" onclick="delNet(${i})">Delete</button></td></tr>`;}).join('');
-  return `<div class="card"><div class="ch"><h2>This server</h2>${helpBtn('mnself')}<span class="sp"></span><button class="btn" onclick="editSelf()">Edit</button></div>
+  return `<div class="card"><div class="ch"><h2>This server</h2>${helpBtn('mnself')}<span class="sp"></span><label style="display:flex;gap:8px;align-items:center;font-size:13px"><button class="tog" role="switch" aria-checked="${M.enabled}" aria-label="Multi Network on" onclick="toggleMn()"></button>Multi Network ${M.enabled?'on':'off'}</label><button class="btn" onclick="editSelf()">Edit</button></div>
    <div class="row"><div class="rm"><div class="rt">${esc(M.name)||'<span class="mut">no name</span>'}</div><div class="rs">MNI (MCC/MNC) ${mni(M.mcc,M.mnc)}</div></div></div>
-   ${helpNote('mnself','The network of this server: the stations connected here belong to it. The MNI is for the overview and for the next steps of Multi Network (radios of other networks on a station).')}</div>
+   ${helpNote('mnself','The switch closes (off) or opens (on) all links to other networks at once; their settings and the pools stay. The network of this server: the stations connected here belong to it. The MNI is for the overview and for the next steps of Multi Network (radios of other networks on a station).')}</div>
   <div class="card"><div class="ch"><h2>Other networks</h2><span class="cnt">${M.networks.length}</span>${helpBtn('mnnets')}<span class="sp"></span><button class="btn pri" onclick="editNet(-1)">${ic('plus')}New network</button></div>
    ${helpNote('mnnets','This server connects to each network itself, as one Basestation with the login that network gave you, and introduces itself with the connection name you choose (empty: brew-server and its version). The login stays on this server; stations never get it. What crosses is set by the talkgroup pools on the <a data-go="routing" href="#routing">Routing</a> page: put a group of a network into a pool as <code>network:GSSI</code> (e.g. TG 9 here and TetraPack:909 there) and the pool becomes a bridge; the talker\'s ISSI is passed on 1:1. The bridge ISSI is registered in that network and listens to the bridged groups so its server sends their calls here. Changes apply at once, only a changed network reconnects, no restart.')}
    ${M.networks.length?`<div class="tw"><table><thead><tr><th style="width:52px">On</th><th>Network</th><th>Link</th><th>Server</th><th>Bridge ISSI</th><th>Bridged groups</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No other networks yet.</div>'}
    ${msgDiv('net-msg')}</div>`;
 };
 const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
-const mnPlain=()=>({name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
+const mnPlain=()=>({enabled:D.nets.enabled,name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
 async function saveNets(cfg,okText,sheet){
   const m=sheet?$('sheet-msg'):null;if(m){m.className='msg mut';m.textContent='Saving…';}
   try{await postJ('/api/networks/save',cfg);if(sheet)closeSheet();D.nets=await getJ('/api/networks');setMsg('net-msg','ok',okText);render(true);return true;}
   catch(e){if(m){m.className='msg err';m.textContent=e.message;}else{setMsg('net-msg','err',e.message);render(true);}return false;}
 }
+function toggleMn(){const c=mnPlain();c.enabled=!c.enabled;if(!c.enabled&&!confirm('Switch Multi Network off? All links to other networks close; settings and pools stay.'))return;saveNets(c,`Multi Network switched ${c.enabled?'on':'off'}.`);}
 function toggleNet(i){const c=mnPlain();c.networks[i].enabled=!c.networks[i].enabled;saveNets(c,`${c.networks[i].name} switched ${c.networks[i].enabled?'on':'off'}.`);}
 function delNet(i){const c=mnPlain();const n=c.networks[i];if(!confirm(`Delete network "${n.name}"? Remove its groups from the pools first.`))return;c.networks.splice(i,1);saveNets(c,`${n.name} deleted.`);}
 const fld=(id,label,val,extra)=>`<div><label class="l" for="${id}">${label}</label><input class="f" id="${id}" value="${esc(val)}" ${extra||''}></div>`;

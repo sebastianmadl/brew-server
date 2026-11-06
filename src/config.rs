@@ -177,9 +177,12 @@ pub struct RemotePoolGroup {
 /// Basestation mode, so the far server needs nothing new: to it this server is
 /// one more Basestation. Credentials stay here; nothing is passed on to the
 /// stations.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MultiNetworkConfig {
+    /// Main switch: `false` stops every link to other networks (their
+    /// settings and the pools stay). Default on.
+    pub enabled: bool,
     /// Name of this server's own network ("this server"), for the dashboard.
     pub name: String,
     /// MCC/MNC of this server's own network (the MNI of the stations that
@@ -187,6 +190,12 @@ pub struct MultiNetworkConfig {
     pub mcc: u16,
     pub mnc: u16,
     pub networks: Vec<NetworkConfig>,
+}
+
+impl Default for MultiNetworkConfig {
+    fn default() -> Self {
+        Self { enabled: true, name: String::new(), mcc: 0, mnc: 0, networks: Vec::new() }
+    }
 }
 
 impl MultiNetworkConfig {

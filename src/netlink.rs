@@ -142,14 +142,14 @@ pub fn reconcile(state: &Arc<AppState>) {
     reg.status.retain(|name, _| cfg.networks.iter().any(|n| &n.name == name));
     if !reg.started { return; }
     let stale: Vec<String> = reg.tasks.iter()
-        .filter(|(name, task)| !cfg.networks.iter().any(|n| n.enabled && &n.name == *name && *n == task.cfg))
+        .filter(|(name, task)| !cfg.enabled || !cfg.networks.iter().any(|n| n.enabled && &n.name == *name && *n == task.cfg))
         .map(|(name, _)| name.clone()).collect();
     for name in stale {
         info!(network = %name, "multi network: stopping link");
         if let Some(task) = reg.tasks.remove(&name) { let _ = task.stop.send(true); }
         reg.status.remove(&name);
     }
-    for net in cfg.networks.iter().filter(|n| n.enabled) {
+    for net in cfg.networks.iter().filter(|n| cfg.enabled && n.enabled) {
         if reg.tasks.contains_key(&net.name) { continue; }
         let Some(&slot) = slots.get(&net.name) else { continue };
         let (stop, stop_rx) = watch::channel(false);
@@ -534,7 +534,7 @@ pub async fn apply(state: &Arc<AppState>, mut cfg: MultiNetworkConfig, by: &str)
     }
     validate(&cfg, &pools_now(state))?;
     if let Ok(mut live) = state.networks.write() { *live = cfg.clone(); }
-    warn!(count = cfg.networks.len(), by, "multi network: networks changed");
+    warn!(count = cfg.networks.len(), enabled = cfg.enabled, by, "multi network: networks changed");
     reconcile(state);
     let snapshot = state.config_snapshot();
     crate::CONFIG_WRITE_APPLIED_LIVE.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -575,6 +575,7 @@ pub struct NetworkView {
 
 #[derive(Debug, Serialize)]
 pub struct MultiNetworkView {
+    pub enabled: bool,
     pub name: String,
     pub mcc: u16,
     pub mnc: u16,
@@ -603,7 +604,7 @@ pub fn snapshot(state: &AppState) -> MultiNetworkView {
             affiliated: s.affiliated.into_iter().collect(),
         }
     }).collect();
-    MultiNetworkView { name: cfg.name, mcc: cfg.mcc, mnc: cfg.mnc, default_user_agent: federation::USER_AGENT, networks }
+    MultiNetworkView { enabled: cfg.enabled, name: cfg.name, mcc: cfg.mcc, mnc: cfg.mnc, default_user_agent: federation::USER_AGENT, networks }
 }
 
 #[cfg(test)]
@@ -916,6 +917,19 @@ mod e2e {
         }).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(snapshot(&main).networks[0].connected, "the new link shows as connected");
+
+        // The main switch off ends every link, on brings them back.
+        let mut main_off = main.networks.read().unwrap().clone();
+        main_off.enabled = false;
+        if let Ok(mut live) = main.networks.write() { *live = main_off; }
+        reconcile(&main);
+        wait_until("main switch off: link gone", async || main.inner.read().await.netlinks.is_empty()).await;
+        wait_until("main switch off: bridge gone there", async || !tp.inner.read().await.subscribers.contains_key(&9_000_001)).await;
+        assert!(!snapshot(&main).networks[0].connected);
+        if let Ok(mut live) = main.networks.write() { live.enabled = true; }
+        reconcile(&main);
+        wait_until("main switch on: link back", async || !main.inner.read().await.netlinks.is_empty()).await;
+        wait_until("main switch on: bridge back there", async || tp.inner.read().await.subscribers.contains_key(&9_000_001)).await;
 
         // Switching the network off ends the link and deregisters the bridge.
         let mut off = main.networks.read().unwrap().clone();

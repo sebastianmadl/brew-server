@@ -13,7 +13,7 @@ Unreleased (Multi Network, part 1) adds:
   heard across networks with the GSSI translated (TG 9 here, TG 909 there) and
   the talker ISSI passed on 1:1. A bridge ISSI is registered there and
   affiliated to the bridged groups. Nothing else crosses. New dashboard page
-  **Multi Network** (admins): this server's network and MNI, the other
+  **Multi Network** (admins): main switch, this server's network and MNI, the other
   networks with link state, edited live without a restart. See
   [docs/Multi-Network.md](docs/Multi-Network.md).
 

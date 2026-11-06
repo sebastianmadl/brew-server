@@ -26,6 +26,8 @@ station (migration) and individual calls or SDS across networks come later.
 - **Nothing else crosses**, in either direction: no registrations, no
   services, no calls on groups that are not bridged. A station cannot send
   into another network by itself.
+- A **main switch** (`enabled`, on the Multi Network page next to "This
+  server") closes all links at once; settings and pools stay.
 - Networks are edited live (dashboard page **Multi Network**, admins only).
   Only a network whose settings changed reconnects; no restart. An empty
   password on save keeps the saved one.
@@ -34,6 +36,7 @@ station (migration) and individual calls or SDS across networks come later.
 
 ```toml
 [multi_network]
+enabled = true            # main switch: false closes every link (default on)
 name = "TMO-Austria"      # this server's network, for the dashboard
 mcc = 901                 # its MNI (MCC 0..1023, MNC 0..16383), 0 = not set
 mnc = 9999
