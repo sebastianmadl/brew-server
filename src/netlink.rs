@@ -483,6 +483,9 @@ pub fn validate(cfg: &MultiNetworkConfig, pools: &[TalkgroupPoolConfig]) -> Resu
         if name.chars().count() > MAX_NAME { return Err(format!("network name '{name}' is longer than {MAX_NAME} characters")); }
         if !names.insert(name.to_lowercase()) { return Err(format!("two networks are named '{name}'")); }
         if n.enabled && n.remote_host.trim().is_empty() { return Err(format!("network '{name}' needs a server (host:port)")); }
+        if !n.remote_host.trim().is_empty() && !has_port(&n.remote_host) {
+            return Err(format!("network '{name}': the server needs a port (host:port, e.g. {}:443)", n.remote_host.trim()));
+        }
         if n.bridge_issi > GSSI_MASK { return Err(format!("network '{name}': {} is not a valid ISSI (0 to 16777215)", n.bridge_issi)); }
         if !valid_user_agent(n.user_agent.trim()) {
             return Err(format!("network '{name}': the connection name may only use plain characters (no umlauts), up to {MAX_USER_AGENT}"));
@@ -495,6 +498,16 @@ pub fn validate(cfg: &MultiNetworkConfig, pools: &[TalkgroupPoolConfig]) -> Resu
         }
     }
     Ok(())
+}
+
+/// Whether `host` ends in `:port` (1..=65535): `name:port` or `[v6]:port`.
+fn has_port(host: &str) -> bool {
+    let host = host.trim();
+    let port = match host.strip_prefix('[') {
+        Some(rest) => rest.split_once("]:").map(|(_, p)| p),
+        None => host.split_once(':').filter(|(_, p)| !p.contains(':')).map(|(_, p)| p),
+    };
+    port.and_then(|p| p.parse::<u16>().ok()).is_some_and(|p| p != 0)
 }
 
 /// MCC is 10 bits and MNC 14 bits (TS 100 392-2 clause 18.4.2.1, D-MLE-SYNC,
@@ -698,6 +711,11 @@ mod tests {
         let mut ua = net("TP");
         ua.user_agent = "TMO-Austria Infra 1.0\r\nX-Evil: 1".into();
         assert!(validate(&MultiNetworkConfig { networks: vec![ua], ..Default::default() }, &[]).is_err());
+        let mut no_port = net("TP");
+        no_port.remote_host = "brew.oe1sxm.at".into();
+        assert!(validate(&MultiNetworkConfig { networks: vec![no_port], ..Default::default() }, &[]).is_err());
+        assert!(has_port("brew.example.net:9000") && has_port("[::1]:443"));
+        assert!(!has_port("brew.example.net") && !has_port("brew:0") && !has_port("::1") && !has_port("[::1]"));
         let bad_mni = MultiNetworkConfig { mcc: 1024, ..Default::default() };
         assert!(validate(&bad_mni, &[]).is_err());
         // A pool may not refer to a network that is not there.

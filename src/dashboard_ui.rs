@@ -567,7 +567,8 @@ async function refreshSlow(){
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
-  if(D.who.admin)tasks.push(getJ('/api/networks').then(v=>D.nets=v).catch(()=>{}));
+  // Admins only; asked every time, since the login state may still be loading.
+  tasks.push(getJ('/api/networks').then(v=>D.nets=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
 }
@@ -919,10 +920,11 @@ function saveSelf(){const c=mnPlain();c.name=v('ms-name').trim();c.mcc=+v('ms-mc
 function editNet(i){
   const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
   const hasPw=i>=0&&D.nets.networks[i].has_password;
+  const hp=splitHost(n.remote_host);
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit network':'New network'}</h3></div><div class="sb">
    ${fld('ne-name','Name (pools refer to it)',n.name,'maxlength="40" placeholder="e.g. TetraPack"'+(i>=0&&D.pools.some(p=>(p.remote||[]).some(r=>r.network===n.name))?' readonly title="Used by a pool"':''))}
    <div style="display:flex;gap:10px">${fld('ne-mcc','MCC',n.mcc||'','inputmode="numeric" placeholder="901"')}${fld('ne-mnc','MNC',n.mnc||'','inputmode="numeric" placeholder="9000"')}</div>
-   ${fld('ne-host','Server (host:port)',n.remote_host,'placeholder="brew.example.net:443" autocomplete="off"')}
+   <div style="display:flex;gap:10px"><div style="flex:3">${fld('ne-host','Server (host)',hp.host,'placeholder="brew.example.net" autocomplete="off"')}</div><div style="flex:1">${fld('ne-port','Port',hp.port,'inputmode="numeric" placeholder="443 / 9000"')}</div></div>
    ${fld('ne-path','Path',n.path,'placeholder="/brew"')}
    <div style="display:flex;gap:10px">${fld('ne-user','Login (Basestation ID there)',n.username,'autocomplete="off"')}${fld('ne-pw','Password',hasPw?'':'','type="password" autocomplete="new-password" placeholder="'+(hasPw?'unchanged':'')+'"')}</div>
    ${fld('ne-ua','Connection name (how this server introduces itself there)',n.user_agent,'maxlength="80" placeholder="'+esc(D.nets.default_user_agent)+'"')}
@@ -935,9 +937,15 @@ function editNet(i){
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveNet(${i})">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>$('ne-name').focus(),30);
 }
+// "host:port", "[v6]:port" or a bare host -> {host, port}.
+function splitHost(h){h=h||'';const m=h.match(/^\[([^\]]*)\](?::(\d*))?$/);if(m)return {host:m[1],port:m[2]||''};
+  const k=h.lastIndexOf(':');if(k>0&&h.indexOf(':')===k)return {host:h.slice(0,k),port:h.slice(k+1)};return {host:h,port:''};}
 function saveNet(i){
+  const host=v('ne-host').trim().replace(/^(wss?|https?):\/\//,'').replace(/\/.*$/,''),port=v('ne-port').trim(),m=$('sheet-msg');
+  if(host&&!(/^\d+$/.test(port)&&+port>=1&&+port<=65535)){m.className='msg err';m.textContent='Enter the port (1 to 65535), e.g. 443 with TLS or 9000.';$('ne-port').focus();return;}
+  const remote_host=host?(host.includes(':')?'['+host+']':host)+':'+port:'';
   const c=mnPlain();const old=i>=0?c.networks[i]:{reconnect_interval_seconds:15,tls_ca_path:'/etc/ssl/certs/ca-certificates.crt'};
-  const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host:v('ne-host').trim(),path:v('ne-path').trim()||'/brew',
+  const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host,path:v('ne-path').trim()||'/brew',
     username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,
     tls:$('ne-tls').getAttribute('aria-checked')==='true',tls_server_name:v('ne-sni').trim(),tls_pinned_cert_path:v('ne-pin').trim(),
     enabled:$('ne-on').getAttribute('aria-checked')==='true'});
