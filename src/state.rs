@@ -21,6 +21,9 @@ pub enum ClientMode {
     #[default]
     Basestation,
     Peer,
+    /// This server's own outbound link to another Brew network (see
+    /// `netlink`): set up by this server, never by a header.
+    Network,
 }
 
 impl ClientMode {
@@ -37,6 +40,7 @@ impl ClientMode {
             ClientMode::Terminal => "Terminal",
             ClientMode::Basestation => "Basestation",
             ClientMode::Peer => "Peer",
+            ClientMode::Network => "Network",
         }
     }
 
@@ -201,6 +205,9 @@ pub struct Inner {
     pub call_restores: crate::call_restore::CallRestores,
     /// Running talkgroup pool calls and their legs (see `pools`).
     pub pools: crate::pools::PoolCalls,
+    /// Links to other networks that are up: bridge slot -> connection (see
+    /// `netlink`).
+    pub netlinks: HashMap<u8, ClientId>,
 }
 
 impl Inner {
@@ -347,6 +354,10 @@ pub struct AppState {
     /// The talkgroup pools as switched right now: starts as
     /// `[[talkgroup_pools]]`, edited live from the dashboard (see `pools`).
     pub pools: std::sync::RwLock<Vec<crate::config::TalkgroupPoolConfig>>,
+    /// `[multi_network]` as it is right now, edited live (see `netlink`).
+    pub networks: std::sync::RwLock<crate::config::MultiNetworkConfig>,
+    /// The running links to other networks (see `netlink`).
+    pub netlinks: crate::netlink::NetLinks,
     /// Logins as accepted right now: start as `[auth.users]`,
     /// `[telemetry.users]` and `[control.users]`, edited live from the
     /// dashboard (see `logins`).
@@ -413,6 +424,7 @@ impl AppState {
         let mut cfg = self.config.clone();
         cfg.blacklist.issis = self.blocked_list();
         if let Ok(p) = self.pools.read() { cfg.talkgroup_pools = p.clone(); }
+        if let Ok(n) = self.networks.read() { cfg.multi_network = n.clone(); }
         if let Ok(u) = self.logins.brew.read() { cfg.auth.users = u.clone(); }
         if let Ok(u) = self.logins.telemetry.read() { cfg.telemetry.users = u.clone(); }
         if let Ok(u) = self.logins.control.read() { cfg.control.users = u.clone(); }
@@ -470,6 +482,7 @@ impl AppState {
         let sms_center = crate::sms_center::SmsCenter::open(config.sms_center.clone());
         let blocked: HashSet<u32> = config.blacklist.issis.iter().copied().collect();
         let pools = config.talkgroup_pools.clone();
+        let networks = config.multi_network.clone();
         let logins = Logins::from_config(&config);
         let locations = config.bts_locations.clone();
         let issi_names = config.issi_names.clone();
@@ -492,6 +505,8 @@ impl AppState {
                 store,
                 blocked: std::sync::RwLock::new(blocked),
                 pools: std::sync::RwLock::new(pools),
+                networks: std::sync::RwLock::new(networks),
+                netlinks: crate::netlink::NetLinks::default(),
                 logins,
                 locations: std::sync::RwLock::new(locations),
                 issi_names: std::sync::RwLock::new(issi_names),

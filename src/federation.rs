@@ -69,7 +69,7 @@ pub async fn run(state: Arc<AppState>) {
 /// handshake. Without it a peer that accepts the TCP connection but never
 /// answers would hang the attempt -- and with it this peer's reconnect loop
 /// -- forever.
-const DIAL_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Keepalive of one federation link (either direction), from `[federation]`.
 ///
@@ -145,7 +145,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> PeerIo for T {}
 
 /// Opens a connection to `peer.remote_host`, wrapped in TLS when `tls` is
 /// given (`peer.tls`).
-async fn dial(peer: &FederationPeerConfig, tls: Option<&TlsConnector>) -> anyhow::Result<Box<dyn PeerIo>> {
+pub(crate) async fn dial(peer: &FederationPeerConfig, tls: Option<&TlsConnector>) -> anyhow::Result<Box<dyn PeerIo>> {
     let tcp = TcpStream::connect(&peer.remote_host).await?;
     // Same reason as the Brew listener (`server::nodelay_listener`): a peer
     // link carries every call's 60ms voice frames, and Nagle + delayed ACKs
@@ -183,7 +183,7 @@ fn tls_server_name(peer: &FederationPeerConfig) -> &str {
 /// renewed CA bundle or pinned certificate is picked up on the next reconnect
 /// without a restart. TLS 1.3 only: rustls is built without `tls12`, the
 /// same as this server's own listener.
-fn tls_connector(peer: &FederationPeerConfig) -> anyhow::Result<TlsConnector> {
+pub(crate) fn tls_connector(peer: &FederationPeerConfig) -> anyhow::Result<TlsConnector> {
     let builder = rustls::ClientConfig::builder();
     let config = if !peer.tls_pinned_cert_path.as_os_str().is_empty() {
         let cert = CertificateDer::from_pem_file(&peer.tls_pinned_cert_path)
@@ -264,7 +264,18 @@ struct HttpResponse {
 }
 
 /// `User-Agent` this server identifies itself with when dialling a peer.
-const USER_AGENT: &str = concat!("brew-server/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("brew-server/", env!("CARGO_PKG_VERSION"));
+
+/// How an outbound link introduces itself: its `X-Brew-Mode` and its
+/// `User-Agent`. A federation link is a `Peer`; a link to another network
+/// (`netlink`) is a `Basestation` with a name the operator chooses.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LinkIdentity<'a> {
+    pub mode: &'a str,
+    pub user_agent: &'a str,
+}
+
+const PEER_IDENTITY: LinkIdentity<'static> = LinkIdentity { mode: "Peer", user_agent: USER_AGENT };
 
 /// Sends one plain (non-upgrade) `GET` (over TLS when `tls` is given), closes
 /// the connection after reading the response. Used only for the
@@ -287,11 +298,13 @@ async fn http_get(
     path: &str,
     authorization: Option<&str>,
     extra: &[(&str, String)],
+    who: LinkIdentity<'_>,
 ) -> anyhow::Result<HttpResponse> {
     let mut stream = dial(peer, tls).await?;
     let remote_host = &peer.remote_host;
+    let LinkIdentity { mode, user_agent } = who;
     let mut req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {remote_host}\r\nUser-Agent: {USER_AGENT}\r\nX-Brew-Mode: Peer\r\nX-Brew-Version: {}\r\nConnection: close\r\n",
+        "GET {path} HTTP/1.1\r\nHost: {remote_host}\r\nUser-Agent: {user_agent}\r\nX-Brew-Mode: {mode}\r\nX-Brew-Version: {}\r\nConnection: close\r\n",
         protocol::BREW_PROTOCOL_VERSION,
     );
     if let Some(a) = authorization {
@@ -336,13 +349,14 @@ fn parse_http_response(buf: &[u8]) -> anyhow::Result<HttpResponse> {
 /// dance a real Basestation performs, or a single request when the peer has
 /// `[auth]` disabled) and returns the path to actually upgrade the WebSocket
 /// at.
-async fn discover(
+pub(crate) async fn discover(
     peer: &FederationPeerConfig,
     tls: Option<&TlsConnector>,
     path: &str,
     extra: &[(&str, String)],
+    who: LinkIdentity<'_>,
 ) -> anyhow::Result<String> {
-    let resp = http_get(peer, tls, path, None, extra).await?;
+    let resp = http_get(peer, tls, path, None, extra, who).await?;
     match resp.status {
         200 => Ok(String::from_utf8(resp.body)?.trim().to_string()),
         401 => {
@@ -353,7 +367,7 @@ async fn discover(
             let authz = crate::sip::auth::build_authorization(
                 &challenge, &peer.username, &peer.password, "GET", path, &cnonce, 1,
             );
-            let resp2 = http_get(peer, tls, path, Some(&authz), extra).await?;
+            let resp2 = http_get(peer, tls, path, Some(&authz), extra, who).await?;
             if resp2.status != 200 {
                 anyhow::bail!("digest auth rejected (HTTP {})", resp2.status);
             }
@@ -389,7 +403,7 @@ async fn connect_and_run(state: &Arc<AppState>, peer: &FederationPeerConfig) -> 
     };
     let (ws_stream, remote_addr, neighbour) = tokio::time::timeout(DIAL_TIMEOUT, async {
         let path = normalize_path(&peer.path);
-        let ws_path = discover(peer, tls.as_ref(), &path, &fed_headers).await?;
+        let ws_path = discover(peer, tls.as_ref(), &path, &fed_headers, PEER_IDENTITY).await?;
 
         let remote_addr = tokio::net::lookup_host(&peer.remote_host).await.ok()
             .and_then(|mut it| it.next());
@@ -422,7 +436,7 @@ async fn connect_and_run(state: &Arc<AppState>, peer: &FederationPeerConfig) -> 
     Ok(())
 }
 
-fn normalize_path(path: &str) -> String {
+pub(crate) fn normalize_path(path: &str) -> String {
     let mut p = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
     while p.len() > 1 && p.ends_with('/') { p.pop(); }
     p
@@ -579,7 +593,7 @@ mod tests {
     async fn discovery_without_auth_identifies_as_peer() {
         let (addr, server) = http_stub(vec![OK], None).await;
         let peer = FederationPeerConfig { remote_host: addr, ..Default::default() };
-        assert_eq!(discover(&peer, None, "/brew", &[]).await.unwrap(), "/brew/");
+        assert_eq!(discover(&peer, None, "/brew", &[], PEER_IDENTITY).await.unwrap(), "/brew/");
         let requests = server.await.unwrap();
         assert!(requests[0].starts_with("GET /brew HTTP/1.1\r\n"));
         assert_identifies_as_peer(&requests[0]);
@@ -594,7 +608,7 @@ mod tests {
         let peer = FederationPeerConfig {
             remote_host: addr, username: "9000001".into(), password: "secret".into(), ..Default::default()
         };
-        assert_eq!(discover(&peer, None, "/brew", &[]).await.unwrap(), "/brew/");
+        assert_eq!(discover(&peer, None, "/brew", &[], PEER_IDENTITY).await.unwrap(), "/brew/");
         let requests = server.await.unwrap();
         assert_eq!(requests.len(), 2);
         for request in &requests { assert_identifies_as_peer(request); }
@@ -608,7 +622,7 @@ mod tests {
         let (addr, server) = http_stub(vec![challenge, OK], None).await;
         let peer = FederationPeerConfig { remote_host: addr, username: "9000001".into(), password: "x".into(), ..Default::default() };
         let offer = [(X_BREW_FEDERATION, "1".to_string()), (X_BREW_SERVER_ID, "00a1b2c3d4e5f607".to_string())];
-        assert_eq!(discover(&peer, None, "/brew", &offer).await.unwrap(), "/brew/");
+        assert_eq!(discover(&peer, None, "/brew", &offer, PEER_IDENTITY).await.unwrap(), "/brew/");
         for request in server.await.unwrap() {
             assert!(request.contains("X-Brew-Federation: 1\r\n"), "{request:?}");
             assert!(request.contains("X-Brew-Server-Id: 00a1b2c3d4e5f607\r\n"), "{request:?}");
@@ -718,7 +732,7 @@ n4vmZr6Amcla0g/ZPFe5Ty9FYRBqSwsjpiv8kFaHOslcSTovuV0FqpDd
         peer.tls = true;
         let result = async {
             let connector = tls_connector(&peer)?;
-            discover(&peer, Some(&connector), "/brew", &[]).await
+            discover(&peer, Some(&connector), "/brew", &[], PEER_IDENTITY).await
         }.await;
         if result.is_ok() {
             let requests = server.await.unwrap();

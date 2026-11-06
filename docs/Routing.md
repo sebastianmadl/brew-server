@@ -74,6 +74,8 @@ a restart. Calls that are already running keep their copies until they end.
 - Pool legs are not sent to federation peers; the original call goes there as
   before.
 - Without `[[talkgroup_pools]]` nothing changes: the server routes as it did.
+- A pool can also hold groups of other Brew networks (`remote`): a bridge
+  across networks. See [Multi-Network.md](Multi-Network.md).
 
 ## Choosing the dashboard
 

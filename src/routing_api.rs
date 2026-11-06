@@ -144,6 +144,22 @@ pub async fn pools_put(State(state): State<Arc<AppState>>, Json(pools): Json<Vec
     }
 }
 
+/// `GET /api/networks` (admins): Multi Network, the other networks and the
+/// state of their links (never a password).
+pub async fn networks_get(State(state): State<Arc<AppState>>) -> Json<crate::netlink::MultiNetworkView> {
+    Json(crate::netlink::snapshot(&state))
+}
+
+/// `POST /api/networks/save` (admins): the whole `[multi_network]` section,
+/// applied at once (only changed links reconnect) and written to the config
+/// file without a restart. An empty password keeps the saved one.
+pub async fn networks_put(State(state): State<Arc<AppState>>, Json(cfg): Json<crate::config::MultiNetworkConfig>) -> Response {
+    match crate::netlink::apply(&state, cfg, "dashboard").await {
+        Ok(()) => Json(serde_json::json!({"saved": true})).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

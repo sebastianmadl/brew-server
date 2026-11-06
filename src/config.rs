@@ -66,6 +66,11 @@ pub struct Config {
     /// `[group_access."GSSI"]`: which radios may use a group. No entry (or an
     /// empty list) = open to everyone. See `group_access`.
     pub group_access: std::collections::BTreeMap<String, GroupAccessConfig>,
+    /// `[multi_network]`: other Brew networks this server connects to itself
+    /// and bridges talkgroups with (see `netlink`). Edited live from the
+    /// dashboard (no restart).
+    #[serde(skip_serializing_if = "MultiNetworkConfig::is_unset")]
+    pub multi_network: MultiNetworkConfig,
 }
 
 /// Who may use one group: `mode = "allow"` lets only the listed ISSIs
@@ -144,11 +149,126 @@ pub struct TalkgroupPoolConfig {
     pub both_ways: bool,
     /// The groups (GSSI). With `both_ways = false` the first one is the source.
     pub groups: Vec<u32>,
+    /// Groups of other networks (`[[multi_network.networks]]`) in the pool: a
+    /// bridge across networks. They come after `groups`; with
+    /// `both_ways = false` and no `groups`, the first of them is the source.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remote: Vec<RemotePoolGroup>,
 }
 
 impl Default for TalkgroupPoolConfig {
     fn default() -> Self {
-        Self { name: String::new(), enabled: true, both_ways: true, groups: Vec::new() }
+        Self { name: String::new(), enabled: true, both_ways: true, groups: Vec::new(), remote: Vec::new() }
+    }
+}
+
+/// One group of another network in a talkgroup pool.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RemotePoolGroup {
+    /// `name` of the `[[multi_network.networks]]` entry.
+    pub network: String,
+    /// The group's GSSI in that network.
+    pub gssi: u32,
+}
+
+/// `[multi_network]`: this server's own network and the other Brew networks it
+/// connects to. Each other network is reached over one outbound connection in
+/// Basestation mode, so the far server needs nothing new: to it this server is
+/// one more Basestation. Credentials stay here; nothing is passed on to the
+/// stations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MultiNetworkConfig {
+    /// Name of this server's own network ("this server"), for the dashboard.
+    pub name: String,
+    /// MCC/MNC of this server's own network (the MNI of the stations that
+    /// connect here). 0 = not set.
+    pub mcc: u16,
+    pub mnc: u16,
+    pub networks: Vec<NetworkConfig>,
+}
+
+impl MultiNetworkConfig {
+    /// Nothing configured: left out of a written config file.
+    pub fn is_unset(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// One other Brew network (`[[multi_network.networks]]`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NetworkConfig {
+    /// Unique name; talkgroup pools refer to the network by it.
+    pub name: String,
+    /// Connect to it. An off network keeps its settings but has no link.
+    pub enabled: bool,
+    /// MCC/MNC of that network, for the dashboard. 0 = not set.
+    pub mcc: u16,
+    pub mnc: u16,
+    /// `host:port` of its Brew listener.
+    pub remote_host: String,
+    /// Discovery path there (default `/brew`).
+    pub path: String,
+    /// Brew login this server uses there (the Basestation login that network
+    /// gave out), and its password.
+    pub username: String,
+    pub password: String,
+    /// Name this server introduces itself with there (`User-Agent`), free
+    /// text, e.g. "TMO-Austria Infra 1.0". Empty: `brew-server/<version>`.
+    pub user_agent: String,
+    /// ISSI of the bridge in that network: registered there and affiliated to
+    /// the network's groups used in talkgroup pools, so its server sends
+    /// their calls here. 0: nothing is registered (only for a server that
+    /// routes groups without affiliations).
+    pub bridge_issi: u32,
+    pub reconnect_interval_seconds: u64,
+    /// TLS settings, as for `[[federation.peers]]`.
+    pub tls: bool,
+    pub tls_ca_path: PathBuf,
+    pub tls_server_name: String,
+    pub tls_pinned_cert_path: PathBuf,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: true,
+            mcc: 0,
+            mnc: 0,
+            remote_host: String::new(),
+            path: "/brew".into(),
+            username: String::new(),
+            password: String::new(),
+            user_agent: String::new(),
+            bridge_issi: 0,
+            reconnect_interval_seconds: 15,
+            tls: false,
+            tls_ca_path: "/etc/ssl/certs/ca-certificates.crt".into(),
+            tls_server_name: String::new(),
+            tls_pinned_cert_path: PathBuf::new(),
+        }
+    }
+}
+
+impl NetworkConfig {
+    /// The dial settings in the shape the federation dialer takes.
+    pub fn as_peer(&self) -> FederationPeerConfig {
+        FederationPeerConfig {
+            name: self.name.clone(),
+            remote_host: self.remote_host.clone(),
+            path: self.path.clone(),
+            username: self.username.clone(),
+            password: self.password.clone(),
+            reconnect_interval_seconds: self.reconnect_interval_seconds,
+            enabled: self.enabled,
+            tls: self.tls,
+            tls_ca_path: self.tls_ca_path.clone(),
+            tls_server_name: self.tls_server_name.clone(),
+            tls_pinned_cert_path: self.tls_pinned_cert_path.clone(),
+        }
     }
 }
 
@@ -912,6 +1032,7 @@ impl Default for Config {
             issi_names: std::collections::BTreeMap::new(),
             gssi_names: std::collections::BTreeMap::new(),
             group_access: std::collections::BTreeMap::new(),
+            multi_network: MultiNetworkConfig::default(),
         }
     }
 }

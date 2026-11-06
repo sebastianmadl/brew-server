@@ -101,6 +101,8 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/sms-center/{id}", axum::routing::delete(sms_center_delete))
         .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
         .route("/api/pools/save", axum::routing::post(crate::routing_api::pools_put))
+        .route("/api/networks", get(crate::routing_api::networks_get))
+        .route("/api/networks/save", axum::routing::post(crate::routing_api::networks_put))
         .route("/api/accounts", get(crate::accounts::list).post(crate::accounts::upsert))
         .route("/api/issi-names/set", axum::routing::post(crate::issi_names::set))
         .route("/api/issi-names/import", axum::routing::post(crate::issi_names::import))

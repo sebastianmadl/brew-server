@@ -409,6 +409,7 @@ const I={
  bts:'<path d="M12 11v10M8 21h8M9.5 21l2.5-10 2.5 10"/><circle cx="12" cy="9" r="1.4"/><path d="M7.8 5.8a6 6 0 0 0 0 6.4M16.2 5.8a6 6 0 0 1 0 6.4"/>',
  routing:'<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h3a4 4 0 0 1 4 4 2 2 0 0 0 2 2h1M7 18h3a4 4 0 0 0 4-4"/>',
  roam:'<path d="M7 4L3 8l4 4M3 8h13a5 5 0 0 1 0 10h-2M17 20l4-4-4-4M21 16H8"/>',
+ globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
  tele:'<path d="M3 12h4l3-7 4 14 3-7h4"/>',
  ctl:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
  sip:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M7 14h7M16 10h1"/>',
@@ -434,7 +435,7 @@ const ic=(n,cls)=>`<svg class="i${cls?' '+cls:''}" viewBox="0 0 24 24" aria-hidd
 const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
- ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],
+ ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],['multinet','Multi Network','globe','Network',null,true],
  ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],['accounts','Accounts','key','Network',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
  ['sms','SMS Center','sms','Integrations','/sms-center'],['tsds','Telemetry SDS','tsds','Integrations','/telemetry-sds'],
@@ -500,7 +501,7 @@ function setTheme(t){
 }
 document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},gssi:{},access:{},ctl:[],emg:[],ha:null,regs:[]};
+const D={status:null,conn:null,tele:[],pools:[],nets:null,radios:[],who:{admin:false},names:{},issi:{},gssi:{},access:{},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -566,6 +567,7 @@ async function refreshSlow(){
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
+  if(D.who.admin)tasks.push(getJ('/api/networks').then(v=>D.nets=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
 }
@@ -709,7 +711,10 @@ R.radios=()=>{
 // Name of an ISSI from the directory, if any.
 const nameOf=issi=>(D.issi||{})[String(issi)]||'';
 const gName=g=>(D.gssi||{})[String(g)]||'';
-const tgTxt=g=>{const n=gName(g);return n?`${g} · ${esc(n)}`:String(g);};
+// A group of another network shows as "network:GSSI" (inside the server it
+// is an alias above the 24 GSSI bits, see netlink.rs).
+const netOfSlot=s=>((D.nets&&D.nets.networks)||[]).find(n=>n.slot===s);
+const tgTxt=g=>{if(g>16777215){const n=netOfSlot(Math.floor(g/16777216));return `${esc(n?n.name:'net '+Math.floor(g/16777216))}:${g%16777216}`;}const n=gName(g);return n?`${g} · ${esc(n)}`:String(g);};
 const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName(g))}"`:''}>${tgTxt(g)}</span>`;
 // "2320972 · OE4SXM" for running text, number and name stacked for tables.
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
@@ -792,7 +797,8 @@ async function ctl(id,s,cmd){const body=typeof cmd==='string'?{action:cmd}:cmd;s
 R.routing=()=>{
   const adm=D.who.admin;
   const pools=D.pools;
-  const poolRows=pools.map((p,i)=>{const l=p.live;const groups=p.groups.map((g,j)=>`${tgChip(g,(!p.both_ways&&j===0)||(l&&l.gssi===g)?' src':'')}${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
+  const poolRows=pools.map((p,i)=>{const l=p.live;const mem=[...p.groups.map(g=>({t:tgChip(g,(l&&l.gssi===g)?' src':''),g})),...(p.remote||[]).map(r=>({t:`<span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${esc(r.network)}:${r.gssi}</span>`}))];
+   const groups=mem.map((m,j)=>`${!p.both_ways&&j===0?m.t.replace('class="tg','class="tg src'):m.t}${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
    const state=l?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(l.talker)} talking on ${tgTxt(l.gssi)}</span> · heard on ${l.legs.length} group${l.legs.length===1?'':'s'}${l.waiting.length?` · ${l.waiting.join(', ')} join${l.waiting.length===1?'s':''} after ${l.waiting.length===1?'its':'their'} own over`:''}`:(p.enabled?'Idle':'Switched off');
    return `<div class="row pool${p.enabled?'':' offp'}"><button class="tog" role="switch" aria-checked="${p.enabled}" aria-label="Pool ${esc(p.name)} on" ${adm?'':'disabled'} onclick="togglePool(${i})"></button>
     <div class="rm"><div class="rt">${esc(p.name)} <span class="chip ${p.enabled?'a':'i'}">${p.enabled?'on':'off'}</span><span class="chip">${p.both_ways?'⇄ both ways':'→ one way'}</span></div>
@@ -842,14 +848,15 @@ async function savePools(list,okText){
   try{await postJ('/api/pools/save',list);D.pools=await getJ('/api/pools');setMsg('pool-msg','ok',okText);render(true);return true;}
   catch(e){setMsg('pool-msg','err',e.message);render(true);return false;}
 }
-const plain=p=>({name:p.name,enabled:p.enabled,both_ways:p.both_ways,groups:p.groups});
+const plain=p=>({name:p.name,enabled:p.enabled,both_ways:p.both_ways,groups:p.groups,remote:(p.remote||[]).map(r=>({network:r.network,gssi:r.gssi}))});
 function togglePool(i){const l=D.pools.map(plain);l[i].enabled=!l[i].enabled;savePools(l,`${l[i].name} switched ${l[i].enabled?'on':'off'}.`);}
 function delPool(i){const p=D.pools[i];if(!confirm(`Delete pool "${p.name}"?`))return;const l=D.pools.map(plain);l.splice(i,1);savePools(l,`${p.name} deleted.`);}
 function editPool(i){
-  const p=i>=0?plain(D.pools[i]):{name:'',enabled:true,both_ways:true,groups:[]};
+  const p=i>=0?plain(D.pools[i]):{name:'',enabled:true,both_ways:true,groups:[],remote:[]};
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit pool':'New pool'}</h3></div><div class="sb">
    <div><label class="l" for="pe-name">Name</label><input class="f" id="pe-name" maxlength="40" value="${esc(p.name)}" placeholder="e.g. District North"></div>
    <div><label class="l" for="pe-groups">Groups (GSSI), separated by commas or spaces</label><input class="f" id="pe-groups" value="${p.groups.join(', ')}" placeholder="2321, 2323, 2324, 264" autocomplete="off"></div>
+   ${(D.nets&&D.nets.networks.length)||p.remote.length?`<div><label class="l" for="pe-remote">Groups of other networks (Multi Network), as network:GSSI</label><input class="f" id="pe-remote" value="${esc(p.remote.map(r=>r.network+':'+r.gssi).join(', '))}" placeholder="${esc(((D.nets&&D.nets.networks[0])||{name:'TetraPack'}).name)}:909" autocomplete="off"><div class="mut" style="font-size:12px;margin-top:4px">Makes the pool a bridge: a call on one of its groups is heard on the other network's groups and back, the talker's ISSI is passed on 1:1. ${D.nets?'Networks: '+D.nets.networks.map(n=>esc(n.name)).join(', '):''}</div></div>`:''}
    <div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Direction</span><div class="seg" role="radiogroup" id="pe-dir" style="margin-top:5px"><button role="radio" aria-pressed="${p.both_ways}" aria-checked="${p.both_ways}" onclick="setDir(true)">⇄ Both ways</button><button role="radio" aria-pressed="${!p.both_ways}" aria-checked="${!p.both_ways}" onclick="setDir(false)">→ One way, from the first group</button></div></div>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="pe-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
@@ -862,11 +869,80 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet();});
 async function savePool(i){
   const groups=$('pe-groups').value.split(/[\s,;]+/).filter(Boolean).map(Number);
   if(groups.some(g=>!Number.isInteger(g))){$('sheet-msg').className='msg err';$('sheet-msg').textContent='Groups must be numbers.';return;}
-  const p={name:$('pe-name').value.trim(),groups,both_ways:document.querySelector('#pe-dir button').getAttribute('aria-pressed')==='true',enabled:$('pe-on').getAttribute('aria-checked')==='true'};
+  const remote=[];
+  for(const t of ($('pe-remote')?$('pe-remote').value:'').split(/[,;]+/).map(x=>x.trim()).filter(Boolean)){const k=t.lastIndexOf(':'),g=+t.slice(k+1);
+    if(k<1||!Number.isInteger(g)){$('sheet-msg').className='msg err';$('sheet-msg').textContent=`"${t}" is not network:GSSI.`;return;}remote.push({network:t.slice(0,k).trim(),gssi:g});}
+  const p={name:$('pe-name').value.trim(),groups,remote,both_ways:document.querySelector('#pe-dir button').getAttribute('aria-pressed')==='true',enabled:$('pe-on').getAttribute('aria-checked')==='true'};
   const l=D.pools.map(plain);if(i>=0)l[i]=p;else l.push(p);
   const m=$('sheet-msg');m.className='msg mut';m.textContent='Saving…';
   try{await postJ('/api/pools/save',l);closeSheet();D.pools=await getJ('/api/pools');setMsg('pool-msg','ok',`${p.name} saved.`);render(true);}
   catch(e){m.className='msg err';m.textContent=e.message;}
+}
+
+/* ---------- multi network ---------- */
+R.multinet=()=>{
+  if(!D.who.admin)return `<div class="card"><div class="empty">Multi Network is for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
+  const M=D.nets;if(!M)return `<div class="card"><div class="empty">Loading…</div></div>`;
+  const mni=(a,b)=>a||b?`${a}/${b}`:'<span class="mut">not set</span>';
+  const rows=M.networks.map((n,i)=>{const st=!n.enabled?'<span class="st i"><i></i>switched off</span>':n.connected?`<span class="st"><i></i>connected · ${ago(n.since_ms)}</span>`:`<span class="st w"><i></i>not connected</span>${n.last_error?`<div class="mut" style="font-size:12px">${esc(n.last_error)}</div>`:''}`;
+    return `<tr${n.enabled?'':' class="off"'}><td><button class="tog" role="switch" aria-checked="${n.enabled}" aria-label="Network ${esc(n.name)} on" onclick="toggleNet(${i})"></button></td>
+     <td><b>${esc(n.name)}</b><div class="mut" style="font-size:12px">MNI ${mni(n.mcc,n.mnc)}</div></td><td>${st}</td>
+     <td><code>${esc(n.remote_host)}${esc(n.path)}</code>${n.tls?' <span class="chip">TLS</span>':''}<div class="mut" style="font-size:12px">login ${esc(n.username)||'—'} · as “${esc(n.user_agent||M.default_user_agent)}”</div></td>
+     <td>${n.bridge_issi||'<span class="mut">—</span>'}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
+     <td style="white-space:nowrap"><button class="btn" onclick="editNet(${i})">Edit</button><button class="btn danger" onclick="delNet(${i})">Delete</button></td></tr>`;}).join('');
+  return `<div class="card"><div class="ch"><h2>This server</h2>${helpBtn('mnself')}<span class="sp"></span><button class="btn" onclick="editSelf()">Edit</button></div>
+   <div class="row"><div class="rm"><div class="rt">${esc(M.name)||'<span class="mut">no name</span>'}</div><div class="rs">MNI (MCC/MNC) ${mni(M.mcc,M.mnc)}</div></div></div>
+   ${helpNote('mnself','The network of this server: the stations connected here belong to it. The MNI is for the overview and for the next steps of Multi Network (radios of other networks on a station).')}</div>
+  <div class="card"><div class="ch"><h2>Other networks</h2><span class="cnt">${M.networks.length}</span>${helpBtn('mnnets')}<span class="sp"></span><button class="btn pri" onclick="editNet(-1)">${ic('plus')}New network</button></div>
+   ${helpNote('mnnets','This server connects to each network itself, as one Basestation with the login that network gave you, and introduces itself with the connection name you choose (empty: brew-server and its version). The login stays on this server; stations never get it. What crosses is set by the talkgroup pools on the <a data-go="routing" href="#routing">Routing</a> page: put a group of a network into a pool as <code>network:GSSI</code> (e.g. TG 9 here and TetraPack:909 there) and the pool becomes a bridge; the talker\'s ISSI is passed on 1:1. The bridge ISSI is registered in that network and listens to the bridged groups so its server sends their calls here. Changes apply at once, only a changed network reconnects, no restart.')}
+   ${M.networks.length?`<div class="tw"><table><thead><tr><th style="width:52px">On</th><th>Network</th><th>Link</th><th>Server</th><th>Bridge ISSI</th><th>Bridged groups</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No other networks yet.</div>'}
+   ${msgDiv('net-msg')}</div>`;
+};
+const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
+const mnPlain=()=>({name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
+async function saveNets(cfg,okText,sheet){
+  const m=sheet?$('sheet-msg'):null;if(m){m.className='msg mut';m.textContent='Saving…';}
+  try{await postJ('/api/networks/save',cfg);if(sheet)closeSheet();D.nets=await getJ('/api/networks');setMsg('net-msg','ok',okText);render(true);return true;}
+  catch(e){if(m){m.className='msg err';m.textContent=e.message;}else{setMsg('net-msg','err',e.message);render(true);}return false;}
+}
+function toggleNet(i){const c=mnPlain();c.networks[i].enabled=!c.networks[i].enabled;saveNets(c,`${c.networks[i].name} switched ${c.networks[i].enabled?'on':'off'}.`);}
+function delNet(i){const c=mnPlain();const n=c.networks[i];if(!confirm(`Delete network "${n.name}"? Remove its groups from the pools first.`))return;c.networks.splice(i,1);saveNets(c,`${n.name} deleted.`);}
+const fld=(id,label,val,extra)=>`<div><label class="l" for="${id}">${label}</label><input class="f" id="${id}" value="${esc(val)}" ${extra||''}></div>`;
+function editSelf(){const M=D.nets;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">This server</h3></div><div class="sb">
+   ${fld('ms-name','Network name',M.name,'maxlength="40" placeholder="e.g. TMO-Austria"')}
+   <div style="display:flex;gap:10px">${fld('ms-mcc','MCC',M.mcc||'','inputmode="numeric" placeholder="901"')}${fld('ms-mnc','MNC',M.mnc||'','inputmode="numeric" placeholder="9999"')}</div>
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveSelf()">Save</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>$('ms-name').focus(),30);}
+function saveSelf(){const c=mnPlain();c.name=v('ms-name').trim();c.mcc=+v('ms-mcc')||0;c.mnc=+v('ms-mnc')||0;saveNets(c,'Saved.',true);}
+function editNet(i){
+  const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
+  const hasPw=i>=0&&D.nets.networks[i].has_password;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit network':'New network'}</h3></div><div class="sb">
+   ${fld('ne-name','Name (pools refer to it)',n.name,'maxlength="40" placeholder="e.g. TetraPack"'+(i>=0&&D.pools.some(p=>(p.remote||[]).some(r=>r.network===n.name))?' readonly title="Used by a pool"':''))}
+   <div style="display:flex;gap:10px">${fld('ne-mcc','MCC',n.mcc||'','inputmode="numeric" placeholder="901"')}${fld('ne-mnc','MNC',n.mnc||'','inputmode="numeric" placeholder="9000"')}</div>
+   ${fld('ne-host','Server (host:port)',n.remote_host,'placeholder="brew.example.net:443" autocomplete="off"')}
+   ${fld('ne-path','Path',n.path,'placeholder="/brew"')}
+   <div style="display:flex;gap:10px">${fld('ne-user','Login (Basestation ID there)',n.username,'autocomplete="off"')}${fld('ne-pw','Password',hasPw?'':'','type="password" autocomplete="new-password" placeholder="'+(hasPw?'unchanged':'')+'"')}</div>
+   ${fld('ne-ua','Connection name (how this server introduces itself there)',n.user_agent,'maxlength="80" placeholder="'+esc(D.nets.default_user_agent)+'"')}
+   ${fld('ne-issi','Bridge ISSI in that network (0 = none)',n.bridge_issi,'inputmode="numeric"')}
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-tls" aria-checked="${n.tls}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> TLS (wss://)</label>
+   ${fld('ne-sni','TLS server name (empty: host)',n.tls_server_name)}
+   ${fld('ne-pin','Pinned certificate file (self-signed server, empty: off)',n.tls_pinned_cert_path)}
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-on" aria-checked="${n.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Connect</label>
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveNet(${i})">Save</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>$('ne-name').focus(),30);
+}
+function saveNet(i){
+  const c=mnPlain();const old=i>=0?c.networks[i]:{reconnect_interval_seconds:15,tls_ca_path:'/etc/ssl/certs/ca-certificates.crt'};
+  const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host:v('ne-host').trim(),path:v('ne-path').trim()||'/brew',
+    username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,
+    tls:$('ne-tls').getAttribute('aria-checked')==='true',tls_server_name:v('ne-sni').trim(),tls_pinned_cert_path:v('ne-pin').trim(),
+    enabled:$('ne-on').getAttribute('aria-checked')==='true'});
+  if(i>=0)c.networks[i]=n;else c.networks.push(n);
+  saveNets(c,`${n.name} saved.`,true);
 }
 
 /* ---------- accounts ---------- */

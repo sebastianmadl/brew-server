@@ -18,6 +18,7 @@ mod handover;
 mod ha;
 mod ha_repl;
 mod monitor;
+mod netlink;
 mod pools;
 mod position;
 mod protocol;
@@ -86,6 +87,7 @@ async fn services(
     }
 
     tokio::spawn(federation::run(state.clone()));
+    tokio::spawn(netlink::run(state.clone()));
     tokio::spawn(aprs::run(state.clone(), aprs_rx));
     tokio::spawn(sms_center::run(state.clone()));
     tokio::spawn(emergency::run(state.clone()));

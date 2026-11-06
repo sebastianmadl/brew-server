@@ -2,6 +2,21 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased (Multi Network, part 1) adds:
+
+- **Bridges to other Brew networks.** `[multi_network]` lists other networks
+  this server connects to itself, each over one outbound connection in plain
+  Basestation mode (nothing new needed on the far server). The connection name
+  (`user_agent`) is free text, e.g. `TMO-Austria Infra 1.0`. Credentials stay
+  on this server. Talkgroup pools can hold groups of those networks
+  (`[[talkgroup_pools.remote]]`, `network:GSSI` in the editor): a call is then
+  heard across networks with the GSSI translated (TG 9 here, TG 909 there) and
+  the talker ISSI passed on 1:1. A bridge ISSI is registered there and
+  affiliated to the bridged groups. Nothing else crosses. New dashboard page
+  **Multi Network** (admins): this server's network and MNI, the other
+  networks with link state, edited live without a restart. See
+  [docs/Multi-Network.md](docs/Multi-Network.md).
+
 Version 1.20.0 adds:
 
 - **Server name.** `[dashboard] servername` (default `"Tetra Network Monitor"`)

@@ -14,12 +14,17 @@
 //! Pools are edited live from the dashboard and written to the config file
 //! without a restart (as the blacklist is). Only this server's own
 //! connections get the legs; federation peers do not.
+//!
+//! A pool may also list groups of other networks (`remote`, see `netlink`):
+//! inside the pool they are addressed by their alias, so a leg towards
+//! another network goes to that network's link only, and a call coming in
+//! over a link puts up legs on this server's groups like any other call.
 
 use crate::config::TalkgroupPoolConfig;
 use crate::protocol;
 use crate::state::{ActiveCall, AppState, CallKind, ClientId, ClientMode, Inner};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -57,14 +62,24 @@ pub struct PoolCalls {
     pub legs: std::collections::HashMap<Uuid, Uuid>,
 }
 
+/// Members of `pool` as this server addresses them: its own groups, then the
+/// aliases of its groups of other networks (`slots`: network name -> slot; a
+/// network without one is left out).
+pub fn members(pool: &TalkgroupPoolConfig, slots: &HashMap<String, u8>) -> Vec<u32> {
+    let remote = pool.remote.iter()
+        .filter_map(|r| slots.get(&r.network).map(|&s| crate::netlink::alias(s, r.gssi)));
+    pool.groups.iter().copied().chain(remote).collect()
+}
+
 /// Groups a call on `gssi` is copied to by the pools switched on in `pools`,
 /// each with the name of the (first) pool that copies it there.
-pub fn targets_for(pools: &[TalkgroupPoolConfig], gssi: u32) -> BTreeMap<u32, String> {
+pub fn targets_for(pools: &[TalkgroupPoolConfig], slots: &HashMap<String, u8>, gssi: u32) -> BTreeMap<u32, String> {
     let mut out = BTreeMap::new();
     for p in pools.iter().filter(|p| p.enabled) {
-        let copies = if p.both_ways { p.groups.contains(&gssi) } else { p.groups.first() == Some(&gssi) };
+        let groups = members(p, slots);
+        let copies = if p.both_ways { groups.contains(&gssi) } else { groups.first() == Some(&gssi) };
         if !copies { continue; }
-        for &t in p.groups.iter().filter(|&&t| t != gssi) {
+        for &t in groups.iter().filter(|&&t| t != gssi) {
             out.entry(t).or_insert_with(|| p.name.clone());
         }
     }
@@ -79,11 +94,18 @@ pub fn validate(pools: &[TalkgroupPoolConfig]) -> Result<(), String> {
         if name.is_empty() { return Err("every pool needs a name".into()); }
         if name.chars().count() > MAX_NAME { return Err(format!("pool name '{name}' is longer than {MAX_NAME} characters")); }
         if !names.insert(name.to_lowercase()) { return Err(format!("two pools are named '{name}'")); }
-        if p.groups.len() < 2 { return Err(format!("pool '{name}' needs at least two groups")); }
+        if p.groups.len() + p.remote.len() < 2 { return Err(format!("pool '{name}' needs at least two groups")); }
         let mut seen = HashSet::new();
         for &g in &p.groups {
             if g == 0 || g > 0xFF_FFFF { return Err(format!("pool '{name}': {g} is not a valid GSSI (1 to 16777215)")); }
             if !seen.insert(g) { return Err(format!("pool '{name}' lists group {g} twice")); }
+        }
+        let mut seen_remote = HashSet::new();
+        for r in &p.remote {
+            let g = r.gssi;
+            if r.network.trim().is_empty() { return Err(format!("pool '{name}': a group of another network needs its network")); }
+            if g == 0 || g > 0xFF_FFFF { return Err(format!("pool '{name}': {g} is not a valid GSSI (1 to 16777215)")); }
+            if !seen_remote.insert((r.network.as_str(), g)) { return Err(format!("pool '{name}' lists group {g} of {} twice", r.network)); }
         }
     }
     Ok(())
@@ -92,9 +114,15 @@ pub fn validate(pools: &[TalkgroupPoolConfig]) -> Result<(), String> {
 /// Replaces the pools on the running server and writes the config file
 /// without a restart. Running pool calls keep their legs until they end.
 pub async fn apply(state: &Arc<AppState>, mut pools: Vec<TalkgroupPoolConfig>, by: &str) -> Result<(), String> {
-    for p in &mut pools { p.name = p.name.trim().to_owned(); }
+    for p in &mut pools {
+        p.name = p.name.trim().to_owned();
+        for r in &mut p.remote { r.network = r.network.trim().to_owned(); }
+    }
     validate(&pools)?;
+    let networks = state.networks.read().map(|c| c.clone()).unwrap_or_default();
+    crate::netlink::validate(&networks, &pools)?;
     if let Ok(mut live) = state.pools.write() { *live = pools.clone(); }
+    crate::netlink::refresh_affiliations(state);
     tracing::warn!(count = pools.len(), by, "talkgroup pools changed");
     let cfg = state.config_snapshot();
     crate::CONFIG_WRITE_APPLIED_LIVE.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -116,8 +144,12 @@ fn busy(inner: &Inner, gssi: u32, origin: Uuid) -> bool {
 }
 
 /// Connections a leg on `gssi` goes to: the ones routing the group, as for
-/// any group call, but no federation peer.
+/// any group call, but no federation peer and no link to another network. A
+/// leg on a group of another network goes to that network's link only.
 fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> {
+    if crate::netlink::split_alias(gssi).is_some() {
+        return crate::netlink::link_for(inner, gssi).into_iter().collect();
+    }
     let mut targets = if state.config.route_without_affiliations {
         inner.clients.keys().copied().collect::<HashSet<_>>()
     } else {
@@ -126,7 +158,7 @@ fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> 
     if targets.is_empty() && !state.config.route_without_affiliations && state.config.fallback_broadcast_when_no_affiliations {
         targets = inner.clients.keys().copied().collect();
     }
-    targets.retain(|c| inner.clients.get(c).is_some_and(|c| c.mode != ClientMode::Peer));
+    targets.retain(|c| inner.clients.get(c).is_some_and(|c| !matches!(c.mode, ClientMode::Peer | ClientMode::Network)));
     targets
 }
 
@@ -171,6 +203,7 @@ fn start_leg(state: &AppState, inner: &mut Inner, origin: Uuid, gssi: u32, out: 
 /// started for the monitor.
 pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, source_issi: u32, gssi: u32, priority: u8) {
     let pools = state.pools.read().map(|p| p.clone()).unwrap_or_default();
+    let slots = crate::netlink::slots(state);
     let mut started = Vec::new();
     {
         let mut inner = state.inner.write().await;
@@ -182,7 +215,7 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
             if let Some(r) = inner.pools.runs.get_mut(&origin) { r.legs.retain(|_, l| *l != id); }
             return;
         }
-        let mut wanted = targets_for(&pools, gssi);
+        let mut wanted = targets_for(&pools, &slots, gssi);
         // A group that does not admit the talker gets no copy (`group_access`).
         wanted.retain(|t, _| state.group_permits(*t, source_issi));
         if wanted.is_empty() && !inner.pools.runs.contains_key(&id) { return; }
@@ -316,29 +349,31 @@ mod tests {
     use super::*;
 
     fn pool(name: &str, both: bool, groups: &[u32]) -> TalkgroupPoolConfig {
-        TalkgroupPoolConfig { name: name.into(), enabled: true, both_ways: both, groups: groups.to_vec() }
+        TalkgroupPoolConfig { name: name.into(), enabled: true, both_ways: both, groups: groups.to_vec(), remote: Vec::new() }
     }
+
+    fn none() -> HashMap<String, u8> { HashMap::new() }
 
     #[test]
     fn both_ways_pool_copies_from_every_group() {
         let p = [pool("Nord", true, &[2321, 2323, 264])];
-        assert_eq!(targets_for(&p, 2321).keys().copied().collect::<Vec<_>>(), vec![264, 2323]);
-        assert_eq!(targets_for(&p, 264).keys().copied().collect::<Vec<_>>(), vec![2321, 2323]);
-        assert!(targets_for(&p, 9).is_empty());
+        assert_eq!(targets_for(&p, &none(), 2321).keys().copied().collect::<Vec<_>>(), vec![264, 2323]);
+        assert_eq!(targets_for(&p, &none(), 264).keys().copied().collect::<Vec<_>>(), vec![2321, 2323]);
+        assert!(targets_for(&p, &none(), 9).is_empty());
     }
 
     #[test]
     fn one_way_pool_copies_only_from_its_first_group() {
         let p = [pool("Info", false, &[9, 2321, 2322])];
-        assert_eq!(targets_for(&p, 9).keys().copied().collect::<Vec<_>>(), vec![2321, 2322]);
-        assert!(targets_for(&p, 2321).is_empty());
+        assert_eq!(targets_for(&p, &none(), 9).keys().copied().collect::<Vec<_>>(), vec![2321, 2322]);
+        assert!(targets_for(&p, &none(), 2321).is_empty());
     }
 
     #[test]
     fn switched_off_pool_copies_nothing() {
         let mut p = pool("Off", true, &[1, 2]);
         p.enabled = false;
-        assert!(targets_for(&[p], 1).is_empty());
+        assert!(targets_for(&[p], &none(), 1).is_empty());
     }
 
     #[test]

@@ -224,6 +224,13 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         return;
     }
     let mut inner = state.inner.write().await;
+    // A group of another network (an alias, see `netlink`) is only ever
+    // started by that network's own link; nothing else may send into it.
+    let bridged = crate::netlink::split_alias(gt.destination).is_some();
+    if bridged && crate::netlink::link_for(&inner, gt.destination) != Some(source) {
+        warn!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX on another network's group from a connection that is not its link dropped");
+        return;
+    }
     let now = Instant::now();
     // The same transmission reaching us again over another peer link (a ring,
     // a mesh, a redundant link): drop it before it can pre-empt or take over
@@ -270,7 +277,11 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         }
     }
 
-    let mut targets = if state.config.route_without_affiliations {
+    // A call that came in over a link to another network reaches this
+    // server's stations only through the legs of its pools.
+    let mut targets = if bridged {
+        HashSet::new()
+    } else if state.config.route_without_affiliations {
         inner.clients.keys().copied().collect::<HashSet<_>>()
     } else {
         inner.group_clients.get(&gt.destination).cloned().unwrap_or_default()
@@ -283,6 +294,7 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
     // explicit fallback to every other connected BS. Once affiliations exist, the
     // normal selective routing above is used.
     if targets.is_empty()
+        && !bridged
         && !state.config.route_without_affiliations
         && state.config.fallback_broadcast_when_no_affiliations
     {
@@ -312,6 +324,9 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         targets.extend(inner.clients.iter().filter(|(_, c)| c.mode == ClientMode::Peer).map(|(id, _)| *id));
     }
     targets.remove(&source);
+    // A link to another network only carries the calls of its bridged
+    // groups (pool legs), never this server's own group calls.
+    targets.retain(|c| inner.clients.get(c).is_none_or(|c| c.mode != ClientMode::Network));
     inner.group_floor.insert(gt.destination, id);
     inner.calls.insert(id, ActiveCall {
         kind: CallKind::Group,
@@ -2374,7 +2389,7 @@ mod pool_tests {
     }
 
     fn pool(both_ways: bool, groups: &[u32]) -> TalkgroupPoolConfig {
-        TalkgroupPoolConfig { name: "Nord".into(), enabled: true, both_ways, groups: groups.to_vec() }
+        TalkgroupPoolConfig { name: "Nord".into(), enabled: true, both_ways, groups: groups.to_vec(), remote: Vec::new() }
     }
 
     fn state_with(pools: Vec<TalkgroupPoolConfig>) -> Arc<AppState> {
@@ -2503,7 +2518,7 @@ mod pool_tests {
             let id = uuid::Uuid::new_v4();
             let talker = stations[talker_station].0;
             handle_packet(state.clone(), talker, protocol::build_group_tx(&id, 4000 + gssi, gssi, 0)).await;
-            let reached: Vec<u32> = std::iter::once(gssi).chain(crate::pools::targets_for(&state.pools.read().unwrap(), gssi).into_keys()).collect();
+            let reached: Vec<u32> = std::iter::once(gssi).chain(crate::pools::targets_for(&state.pools.read().unwrap(), &std::collections::HashMap::new(), gssi).into_keys()).collect();
             for _ in 0..3 { handle_packet(state.clone(), talker, voice(&id)).await; }
             handle_packet(state.clone(), talker, protocol::build_call_cause(CALL_GROUP_IDLE, &id, 0)).await;
             for (sid, rx, wanted) in stations.iter_mut() {

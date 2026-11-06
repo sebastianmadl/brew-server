@@ -174,7 +174,7 @@ fn is_dispatch_console(user_agent: &str) -> bool {
     user_agent.trim_start().to_ascii_lowercase().starts_with("tetradispatch/")
 }
 
-async fn brew_discovery(
+pub(crate) async fn brew_discovery(
     State(state): State<Arc<AppState>>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     request: Request<axum::body::Body>,
