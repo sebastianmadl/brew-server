@@ -52,6 +52,12 @@ pub struct PoolRun {
     pub legs: BTreeMap<u32, Uuid>,
     /// Target groups that had a call of their own; they join when it ends.
     pub waiting: BTreeSet<u32>,
+    /// A radio answering in one of the legs (a new over on the leg's call
+    /// identifier, as any Brew station does when a radio talks in a call it
+    /// hears): that leg and the connection the answer comes from. Its voice
+    /// then goes to the original call and to the other legs, so the answer
+    /// is heard on every group of the pool, across networks too.
+    pub answer: Option<(Uuid, ClientId)>,
 }
 
 /// Pool state kept with the calls (under `AppState::inner`).
@@ -164,6 +170,56 @@ fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> 
 
 type Out = Vec<(mpsc::UnboundedSender<Vec<u8>>, Vec<u8>)>;
 
+/// Announces talker `source_issi` on leg `leg` (group `gssi`) to everyone
+/// the leg reaches but `except`, and makes the leg a copy again (owned by
+/// the pool).
+#[allow(clippy::too_many_arguments)]
+fn reannounce_leg(state: &AppState, inner: &mut Inner, leg: Uuid, gssi: u32, source_issi: u32, priority: u8, except: Option<ClientId>, out: &mut Out) {
+    let mut peers = leg_targets(state, inner, gssi);
+    if let Some(x) = except { peers.remove(&x); }
+    let header = protocol::build_group_tx(&leg, source_issi, gssi, priority);
+    for cid in &peers {
+        if let Some(c) = inner.clients.get(cid) {
+            out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
+        }
+    }
+    if let Some(call) = inner.calls.get_mut(&leg) {
+        call.owner = POOL_OWNER;
+        call.source_issi = source_issi;
+        call.peers = peers;
+        call.touch();
+    }
+    inner.group_floor.insert(gssi, leg);
+    inner.group_tx_raw.insert(leg, header);
+}
+
+/// A radio answers in leg `leg` of `origin`'s run, over connection
+/// `source`: the original call and the other legs get the new talker.
+#[allow(clippy::too_many_arguments)]
+fn announce_answer(state: &AppState, inner: &mut Inner, origin: Uuid, leg: Uuid, source: ClientId, source_issi: u32, priority: u8, out: &mut Out) {
+    let Some(run) = inner.pools.runs.get(&origin).cloned() else { return };
+    // The original call: everyone it reaches, its own station included.
+    if let Some(call) = inner.calls.get(&origin) {
+        let gssi = call.destination;
+        let mut audience = call.peers.clone();
+        audience.insert(call.owner);
+        audience.remove(&source);
+        let header = protocol::build_group_tx(&origin, source_issi, gssi, priority);
+        for cid in &audience {
+            if let Some(c) = inner.clients.get(cid) {
+                out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
+            }
+        }
+        call.touch();
+        inner.group_tx_raw.insert(origin, header);
+    }
+    for (&t, &other) in run.legs.iter().filter(|(_, l)| **l != leg) {
+        reannounce_leg(state, inner, other, t, source_issi, priority, Some(source), out);
+    }
+    if let Some(r) = inner.pools.runs.get_mut(&origin) { r.answer = Some((leg, source)); }
+    info!(origin=%origin, leg=%leg, src_issi=source_issi, "talkgroup pool: answer in a leg, heard on the whole pool");
+}
+
 /// Sets up the leg of `origin`'s run on `gssi`: a new group call there, its
 /// GROUP_TX queued for each target. Returns the leg's identifier.
 fn start_leg(state: &AppState, inner: &mut Inner, origin: Uuid, gssi: u32, out: &mut Out) -> Option<Uuid> {
@@ -208,11 +264,12 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
     {
         let mut inner = state.inner.write().await;
         let mut out: Out = Vec::new();
-        // A station sending a GROUP_TX on a leg's identifier: one of its
-        // radios talks in the leg's call, which is now an ordinary call of
-        // that station; it is no longer a copy.
-        if let Some(origin) = inner.pools.legs.remove(&id) {
-            if let Some(r) = inner.pools.runs.get_mut(&origin) { r.legs.retain(|_, l| *l != id); }
+        // A GROUP_TX on a leg's identifier: a radio answers in the leg's
+        // call. The answer is announced on the original call and the other
+        // legs too (see `PoolRun::answer`).
+        if let Some(origin) = inner.pools.legs.get(&id).copied() {
+            announce_answer(state, &mut inner, origin, id, source, source_issi, priority, &mut out);
+            for (tx, msg) in out { let _ = tx.send(msg); }
             return;
         }
         let mut wanted = targets_for(&pools, &slots, gssi);
@@ -222,24 +279,17 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
         let pool = wanted.values().next().cloned().unwrap_or_default();
         let run = inner.pools.runs.entry(id).or_insert_with(|| PoolRun {
             pool, origin_gssi: gssi, owner: source, source_issi, priority,
-            legs: BTreeMap::new(), waiting: BTreeSet::new(),
+            legs: BTreeMap::new(), waiting: BTreeSet::new(), answer: None,
         });
         run.owner = source;
         run.source_issi = source_issi;
         run.priority = priority;
+        run.answer = None;
         let existing = run.legs.clone();
-        // New over of a call with legs: the legs get the new talker.
+        // New over of a call with legs: the legs get the new talker (a leg a
+        // radio answered in is a copy again, for its whole group).
         for (&t, &leg) in &existing {
-            let header = protocol::build_group_tx(&leg, source_issi, t, priority);
-            if let Some(call) = inner.calls.get(&leg) {
-                for cid in &call.peers {
-                    if let Some(c) = inner.clients.get(cid) {
-                        out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
-                    }
-                }
-                call.touch();
-            }
-            inner.group_tx_raw.insert(leg, header);
+            reannounce_leg(state, &mut inner, leg, t, source_issi, priority, None, &mut out);
         }
         for &t in wanted.keys().filter(|t| !existing.contains_key(t)) {
             if busy(&inner, t, id) {
@@ -260,8 +310,34 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
 /// legs (same frame, the leg's call identifier).
 pub async fn on_frame(state: &Arc<AppState>, id: Uuid, raw: &[u8]) {
     let inner = state.inner.read().await;
-    let Some(run) = inner.pools.runs.get(&id) else { return };
     if raw.len() < 18 { return; }
+    // Voice of an answer in a leg: to the original call and the other legs.
+    if let Some(origin) = inner.pools.legs.get(&id) {
+        let Some(run) = inner.pools.runs.get(origin) else { return };
+        let Some((_, from)) = run.answer.filter(|(l, _)| *l == id) else { return };
+        if let Some(call) = inner.calls.get(origin) {
+            let mut frame = raw.to_vec();
+            frame[2..18].copy_from_slice(origin.as_bytes());
+            let mut audience = call.peers.clone();
+            audience.insert(call.owner);
+            audience.remove(&from);
+            for cid in &audience {
+                if let Some(c) = inner.clients.get(cid) { let _ = c.tx.send(frame.clone()); }
+            }
+            call.touch();
+        }
+        for leg in run.legs.values().filter(|l| **l != id) {
+            let Some(call) = inner.calls.get(leg) else { continue };
+            call.touch();
+            let mut frame = raw.to_vec();
+            frame[2..18].copy_from_slice(leg.as_bytes());
+            for cid in call.peers.iter().filter(|c| **c != from) {
+                if let Some(c) = inner.clients.get(cid) { let _ = c.tx.send(frame.clone()); }
+            }
+        }
+        return;
+    }
+    let Some(run) = inner.pools.runs.get(&id) else { return };
     for leg in run.legs.values() {
         let Some(call) = inner.calls.get(leg) else { continue };
         call.touch();
@@ -282,7 +358,20 @@ pub async fn on_call_end(state: &Arc<AppState>, id: Uuid, gssi: u32) -> Vec<Uuid
     {
         let mut inner = state.inner.write().await;
         if let Some(origin) = inner.pools.legs.remove(&id) {
+            let answered = inner.pools.runs.get(&origin).is_some_and(|r| r.answer.is_some_and(|(l, _)| l == id));
             if let Some(r) = inner.pools.runs.get_mut(&origin) { r.legs.retain(|_, l| *l != id); }
+            // The station of the last talker ended the call it answered in:
+            // as with any Brew group call, that ends the call for everyone,
+            // so the original call (and with it the other legs) ends too.
+            if answered {
+                if let Some(call) = inner.calls.get_mut(&origin) {
+                    let first = call.owner;
+                    call.peers.insert(first);
+                    call.owner = POOL_OWNER;
+                    to_end.push(origin);
+                    info!(origin=%origin, leg=%id, "talkgroup pool: the answer's call ended, ending the pool call");
+                }
+            }
         }
         if let Some(run) = inner.pools.runs.remove(&id) {
             to_end.extend(run.legs.values().copied());
@@ -293,7 +382,18 @@ pub async fn on_call_end(state: &Arc<AppState>, id: Uuid, gssi: u32) -> Vec<Uuid
         for o in gone {
             if let Some(run) = inner.pools.runs.remove(&o) { to_end.extend(run.legs.values().copied()); }
         }
-        for leg in &to_end { inner.pools.legs.remove(leg); }
+        for leg in &to_end {
+            inner.pools.legs.remove(leg);
+            // A leg a radio answered in is owned by that radio's station
+            // now: hand it back so it ends with the call, for everyone.
+            if let Some(call) = inner.calls.get_mut(leg) {
+                if call.owner != POOL_OWNER {
+                    let answered_by = call.owner;
+                    call.peers.insert(answered_by);
+                    call.owner = POOL_OWNER;
+                }
+            }
+        }
         // Legs waiting for this group to become free join now.
         let waiting: Vec<Uuid> = inner.pools.runs.iter()
             .filter(|(_, r)| r.waiting.contains(&gssi))

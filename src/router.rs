@@ -2403,6 +2403,47 @@ mod pool_tests {
     }
 
     #[tokio::test]
+    async fn answer_in_a_leg_is_heard_on_the_whole_pool_and_ends_with_the_call() {
+        let state = state_with(vec![pool(true, &[2321, 2323])]);
+        let (bs1, mut rx1) = station(&state, &[2321]).await;
+        let (bs2, mut rx2) = station(&state, &[2323]).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        let leg = group_txs(&drain(&mut rx2))[0].0;
+        drain(&mut rx1);
+        // A radio on bs2 answers in the call it hears (the leg's identifier).
+        handle_packet(state.clone(), bs2, protocol::build_group_tx(&leg, 5002, 2323, 0)).await;
+        assert_eq!(group_txs(&drain(&mut rx1)), vec![(id, 5002, 2321)], "the answer is announced on the original call");
+        assert!(group_txs(&drain(&mut rx2)).is_empty(), "nothing back to the answering station");
+        let frame = voice(&leg);
+        handle_packet(state.clone(), bs2, frame.clone()).await;
+        let got = drain(&mut rx1);
+        assert_eq!(ids_of(&got, protocol::CLASS_FRAME, protocol::FRAME_TRAFFIC_CHANNEL), vec![id]);
+        assert!(drain(&mut rx2).is_empty());
+        // The first talker talks again: the leg is a copy again.
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        assert_eq!(group_txs(&drain(&mut rx2)), vec![(leg, 4001, 2323)]);
+        // bs2's call of the answer ends: as for any group call, the call of
+        // the last talker's station ending ends it for everyone.
+        handle_packet(state.clone(), bs2, protocol::build_group_tx(&leg, 5002, 2323, 0)).await;
+        drain(&mut rx1);
+        handle_packet(state.clone(), bs2, protocol::build_call_cause(CALL_GROUP_IDLE, &leg, 0)).await;
+        assert_eq!(ids_of(&drain(&mut rx1), protocol::CLASS_CALL_CONTROL, CALL_GROUP_IDLE), vec![id]);
+        assert!(state.inner.read().await.calls.is_empty());
+        // Again, but now the first talker's station ends the call: the leg
+        // ends with it although bs2 holds it.
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        let leg = group_txs(&drain(&mut rx2))[0].0;
+        handle_packet(state.clone(), bs2, protocol::build_group_tx(&leg, 5002, 2323, 0)).await;
+        drain(&mut rx1);
+        handle_packet(state.clone(), bs1, protocol::build_call_cause(CALL_GROUP_IDLE, &id, 0)).await;
+        assert_eq!(ids_of(&drain(&mut rx2), protocol::CLASS_CALL_CONTROL, CALL_GROUP_IDLE), vec![leg]);
+        let inner = state.inner.read().await;
+        assert!(inner.calls.is_empty() && inner.pools.runs.is_empty() && inner.pools.legs.is_empty());
+    }
+
+    #[tokio::test]
     async fn pool_call_is_played_on_the_other_groups_with_voice_and_end() {
         let state = state_with(vec![pool(true, &[2321, 2323, 264])]);
         let (bs1, mut rx1) = station(&state, &[2321]).await;

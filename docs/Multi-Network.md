@@ -73,6 +73,13 @@ listen to a group of another network on several groups here).
 
 ## Behaviour
 
+- **Answers cross too:** a radio that answers in a call it hears (a new
+  over on that call, as Brew stations send it) is heard on every group of
+  the pool, on both networks. When the station of the last talker ends its
+  call, the call ends everywhere, as with any Brew group call.
+- A call crossing a link gets its own call identifier on the other side, so
+  a copy that comes back (e.g. a test with a server linked to itself) is
+  never mixed up with the call it came from.
 - The pool rules apply unchanged (one talker per group, a group with its own
   call joins after it, legs end with the call).
 - The discovery path is used exactly as configured (TetraPack needs

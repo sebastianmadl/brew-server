@@ -283,29 +283,65 @@ pub fn refresh_affiliations(state: &AppState) {
     }
 }
 
+/// Call identifiers of a link: this server's own on one side, the other
+/// network's on the other. A call crossing a link gets a new identifier
+/// there, so a copy that comes back (a loop through the same server, or
+/// over another way) is never taken for the call it came from, and an
+/// answer in a call over there finds the call it answers here.
+#[derive(Debug, Default)]
+pub struct CallIds {
+    to_remote: HashMap<Uuid, Uuid>,
+    to_local: HashMap<Uuid, Uuid>,
+}
+
+impl CallIds {
+    fn pair(&mut self, local: Uuid, remote: Uuid) {
+        if self.to_remote.len() >= MAX_CALLS { self.to_remote.clear(); self.to_local.clear(); }
+        self.to_remote.insert(local, remote);
+        self.to_local.insert(remote, local);
+    }
+
+    fn forget_local(&mut self, local: &Uuid) {
+        if let Some(r) = self.to_remote.remove(local) { self.to_local.remove(&r); }
+    }
+}
+
+/// Shared by the two directions of one link.
+pub type SharedCallIds = Arc<Mutex<CallIds>>;
+
+fn ids_lock(ids: &SharedCallIds) -> std::sync::MutexGuard<'_, CallIds> {
+    ids.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// What a link lets out: group calls on an alias of its own slot (with the
-/// real GSSI put back) and the call control and frames of those calls.
-/// Everything else this server sends its connections stays here.
+/// real GSSI put back) and the call control and frames of those calls, all
+/// under the call's identifier over there. Everything else this server sends
+/// its connections stays here.
 #[derive(Debug)]
 pub struct Outbound {
     slot: u8,
-    calls: HashSet<Uuid>,
+    ids: SharedCallIds,
 }
 
 /// What a link lets in: group calls on the groups it bridges (with the alias
-/// put on) and the call control and frames of those calls.
+/// put on) and the call control and frames of those calls, under this
+/// server's identifier of the call.
 #[derive(Debug)]
 pub struct Inbound {
     slot: u8,
-    calls: HashSet<Uuid>,
+    ids: SharedCallIds,
 }
 
-/// Bound on the calls a filter remembers (a call whose end was lost).
+/// Bound on the calls a link remembers (a call whose end was lost).
 const MAX_CALLS: usize = 4096;
 const DEST_AT: usize = 2 + 16 + 4;
 
 fn call_id(pkt: &[u8]) -> Option<Uuid> {
     pkt.get(2..18).and_then(|b| Uuid::from_slice(b).ok())
+}
+
+fn set_call_id(pkt: &mut [u8], id: Uuid) {
+    pkt[2..18].copy_from_slice(id.as_bytes());
 }
 
 fn is_call_or_frame(pkt: &[u8]) -> bool {
@@ -328,51 +364,57 @@ fn set_dest(pkt: &mut [u8], value: u32) {
     pkt[DEST_AT..DEST_AT + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-/// Passes call control and frames of a call in `calls`, forgetting it on its
-/// GROUP_IDLE.
-fn pass_known(calls: &mut HashSet<Uuid>, pkt: Vec<u8>) -> Option<Vec<u8>> {
-    if !is_call_or_frame(&pkt) { return None; }
-    let id = call_id(&pkt)?;
-    if !calls.contains(&id) { return None; }
-    if is_group_idle(&pkt) { calls.remove(&id); }
-    Some(pkt)
-}
-
-fn remember(calls: &mut HashSet<Uuid>, id: Uuid) {
-    if calls.len() >= MAX_CALLS { calls.clear(); }
-    calls.insert(id);
-}
-
 impl Outbound {
-    pub fn new(slot: u8) -> Self { Self { slot, calls: HashSet::new() } }
+    pub fn new(slot: u8, ids: SharedCallIds) -> Self { Self { slot, ids } }
 
     /// The packet as it goes to the other network, or `None` if it stays.
     pub fn translate(&mut self, mut pkt: Vec<u8>) -> Option<Vec<u8>> {
+        if !is_call_or_frame(&pkt) { return None; }
+        let local = call_id(&pkt)?;
+        let mut ids = ids_lock(&self.ids);
         if is_group_tx(&pkt) {
             let (slot, gssi) = split_alias(dest(&pkt))?;
             if slot != self.slot { return None; }
             set_dest(&mut pkt, gssi);
-            remember(&mut self.calls, call_id(&pkt)?);
+            let remote = match ids.to_remote.get(&local) {
+                Some(r) => *r,
+                None => { let r = Uuid::new_v4(); ids.pair(local, r); r }
+            };
+            set_call_id(&mut pkt, remote);
             return Some(pkt);
         }
-        pass_known(&mut self.calls, pkt)
+        let remote = *ids.to_remote.get(&local)?;
+        if is_group_idle(&pkt) { ids.forget_local(&local); }
+        set_call_id(&mut pkt, remote);
+        Some(pkt)
     }
 }
 
 impl Inbound {
-    pub fn new(slot: u8) -> Self { Self { slot, calls: HashSet::new() } }
+    pub fn new(slot: u8, ids: SharedCallIds) -> Self { Self { slot, ids } }
 
     /// The packet as the router gets it, or `None` if it is dropped.
     /// `bridged` says whether a group of that network is in a pool.
     pub fn translate(&mut self, mut pkt: Vec<u8>, bridged: impl Fn(u32) -> bool) -> Option<Vec<u8>> {
+        if !is_call_or_frame(&pkt) { return None; }
+        let remote = call_id(&pkt)?;
+        let mut ids = ids_lock(&self.ids);
         if is_group_tx(&pkt) {
             let gssi = dest(&pkt);
             if gssi == 0 || gssi > GSSI_MASK || !bridged(gssi) { return None; }
             set_dest(&mut pkt, alias(self.slot, gssi));
-            remember(&mut self.calls, call_id(&pkt)?);
+            // A call of ours over there (an answer in it) keeps our id.
+            let local = match ids.to_local.get(&remote) {
+                Some(l) => *l,
+                None => { let l = Uuid::new_v4(); ids.pair(l, remote); l }
+            };
+            set_call_id(&mut pkt, local);
             return Some(pkt);
         }
-        pass_known(&mut self.calls, pkt)
+        let local = *ids.to_local.get(&remote)?;
+        if is_group_idle(&pkt) { ids.forget_local(&local); }
+        set_call_id(&mut pkt, local);
+        Some(pkt)
     }
 }
 
@@ -414,7 +456,8 @@ async fn run_session(
 
     let keepalive = Keepalive::from_config(&state.config.federation);
     let mut ping = keepalive.map(Keepalive::ping_timer);
-    let mut outbound = Outbound::new(slot);
+    let ids: SharedCallIds = Arc::default();
+    let mut outbound = Outbound::new(slot, ids.clone());
     let writer = tokio::spawn(async move {
         loop {
             let packet = tokio::select! {
@@ -432,7 +475,7 @@ async fn run_session(
         let _ = ws_tx.close().await;
     });
 
-    let mut inbound = Inbound::new(slot);
+    let mut inbound = Inbound::new(slot, ids);
     let name = net.name.clone();
     loop {
         let item = tokio::select! {
@@ -631,9 +674,14 @@ mod tests {
         assert_eq!(split_alias(0xFF_FFFF), None);
     }
 
+    fn gtx(pkt: &[u8]) -> (Uuid, u32, u32) {
+        (call_id(pkt).unwrap(), u32::from_le_bytes(pkt[18..22].try_into().unwrap()), dest(pkt))
+    }
+
     #[test]
-    fn outbound_lets_out_only_calls_on_its_own_network() {
-        let mut out = Outbound::new(2);
+    fn outbound_lets_out_only_calls_on_its_own_network_under_new_ids() {
+        let ids: SharedCallIds = Arc::default();
+        let mut out = Outbound::new(2, ids.clone());
         let call = Uuid::new_v4();
         // A local group call: stays here.
         assert!(out.translate(group_tx(call, 2320972, 9)).is_none());
@@ -641,13 +689,17 @@ mod tests {
         assert!(out.translate(group_tx(call, 2320972, alias(3, 9))).is_none());
         // Its frames stay too.
         assert!(out.translate(protocol::build_dtmf_frame(&call, 1)).is_none());
-        // A call on this network's group 909: out with the real GSSI, talker 1:1.
+        // A call on this network's group 909: out with the real GSSI, talker
+        // 1:1, under an identifier of its own there.
         let leg = Uuid::new_v4();
-        let sent = out.translate(group_tx(leg, 2320972, alias(2, 909))).unwrap();
-        assert_eq!(sent, group_tx(leg, 2320972, 909));
-        assert!(out.translate(protocol::build_dtmf_frame(&leg, 1)).is_some());
+        let (remote, src, dst) = gtx(&out.translate(group_tx(leg, 2320972, alias(2, 909))).unwrap());
+        assert_eq!((src, dst), (2320972, 909));
+        assert_ne!(remote, leg);
+        // A new over keeps that identifier; frames and the end use it too.
+        assert_eq!(gtx(&out.translate(group_tx(leg, 2320973, alias(2, 909))).unwrap()).0, remote);
+        assert_eq!(call_id(&out.translate(protocol::build_dtmf_frame(&leg, 1)).unwrap()), Some(remote));
         let idle = protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &leg, 0);
-        assert!(out.translate(idle.clone()).is_some());
+        assert_eq!(call_id(&out.translate(idle).unwrap()), Some(remote));
         // After its end nothing of the call goes out any more.
         assert!(out.translate(protocol::build_dtmf_frame(&leg, 1)).is_none());
         // Registrations and services never go out.
@@ -657,19 +709,35 @@ mod tests {
 
     #[test]
     fn inbound_lets_in_only_bridged_groups_as_aliases() {
-        let mut inb = Inbound::new(2);
+        let ids: SharedCallIds = Arc::default();
+        let mut inb = Inbound::new(2, ids.clone());
         let bridged = |g: u32| g == 909;
         let other = Uuid::new_v4();
         assert!(inb.translate(group_tx(other, 1234, 9), bridged).is_none());
         assert!(inb.translate(protocol::build_dtmf_frame(&other, 1), bridged).is_none());
         let call = Uuid::new_v4();
-        let got = inb.translate(group_tx(call, 1234, 909), bridged).unwrap();
-        assert_eq!(got, group_tx(call, 1234, alias(2, 909)));
-        assert!(inb.translate(protocol::build_dtmf_frame(&call, 1), bridged).is_some());
+        let (local, src, dst) = gtx(&inb.translate(group_tx(call, 1234, 909), bridged).unwrap());
+        assert_eq!((src, dst), (1234, alias(2, 909)));
+        assert_ne!(local, call);
+        assert_eq!(call_id(&inb.translate(protocol::build_dtmf_frame(&call, 1), bridged).unwrap()), Some(local));
         // Registrations of that network never reach this server's tables.
         assert!(inb.translate(protocol::build_subscriber_message(protocol::SUB_REGISTER, 1234, &[909]), bridged).is_none());
         assert!(inb.translate(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call, 0), bridged).is_some());
         assert!(inb.translate(protocol::build_dtmf_frame(&call, 1), bridged).is_none());
+    }
+
+    #[test]
+    fn an_answer_over_there_comes_back_under_our_call_id() {
+        let ids: SharedCallIds = Arc::default();
+        let (mut out, mut inb) = (Outbound::new(1, ids.clone()), Inbound::new(1, ids));
+        let leg = Uuid::new_v4();
+        let remote = gtx(&out.translate(group_tx(leg, 2320972, alias(1, 909))).unwrap()).0;
+        // Someone over there answers in that call.
+        let back = inb.translate(group_tx(remote, 1234, 909), |_| true).unwrap();
+        assert_eq!(gtx(&back), (leg, 1234, alias(1, 909)));
+        // The same call coming back as our own id (a loop) is a new call here.
+        let looped = inb.translate(group_tx(leg, 2320972, 909), |_| true).unwrap();
+        assert_ne!(call_id(&looped), Some(leg));
     }
 
     fn pool(name: &str, remote: &[(&str, u32)]) -> TalkgroupPoolConfig {
@@ -885,9 +953,20 @@ mod e2e {
         // talker ISSI 1:1.
         let call = Uuid::new_v4();
         stations[0].send(Message::Binary(protocol::build_group_tx(&call, 2_320_001, 9, 0).into())).await.unwrap();
-        let (_, src, dst) = next_group_tx(&mut far, 2000).await.expect("call reaches the other network");
+        let (far_call, src, dst) = next_group_tx(&mut far, 2000).await.expect("call reaches the other network");
         assert_eq!((src, dst), (2_320_001, 909));
-        stations[0].send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call, 0).into())).await.unwrap();
+        // The radio over there answers in that call: heard on TG 9 here,
+        // by the first talker's station too.
+        far.send(Message::Binary(protocol::build_group_tx(&far_call, 1234, 909, 0).into())).await.unwrap();
+        let (id0, src, dst) = next_group_tx(&mut stations[0], 2000).await.expect("answer reaches the first talker");
+        assert_eq!((id0, src, dst), (call, 1234, 9));
+        let first = next_group_tx(&mut stations[2], 2000).await.expect("call reaches TG 9");
+        assert_eq!((first.1, first.2), (2_320_001, 9));
+        let (_, src, dst) = next_group_tx(&mut stations[2], 2000).await.expect("answer reaches TG 9");
+        assert_eq!((src, dst), (1234, 9));
+        // Its call ends over there: the call ends here too (no hanging floor).
+        far.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &far_call, 0).into())).await.unwrap();
+        wait_until("call ended here", async || main.inner.read().await.calls.is_empty()).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         for st in stations.iter_mut() { while next_group_tx(st, 50).await.is_some() {} }
 
@@ -904,8 +983,23 @@ mod e2e {
                 assert!(got.is_none(), "station {s} has no TG 9 radio: {got:?}");
             }
         }
-        far.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &back, 0).into())).await.unwrap();
+        // A radio here answers in the call it hears: heard over there.
+        let leg_here = {
+            let inner = main.inner.read().await;
+            *inner.pools.runs.values().next().expect("pool call running").legs.values().next().unwrap()
+        };
+        stations[2].send(Message::Binary(protocol::build_group_tx(&leg_here, 2_320_007, 9, 0).into())).await.unwrap();
+        let (id_far, src, dst) = next_group_tx(&mut far, 2000).await.expect("answer reaches the other network");
+        assert_eq!((id_far, src, dst), (back, 2_320_007, 909));
+        // The answering station ends its call: over there the call ends too,
+        // so the floor of TG 909 is free again.
+        stations[2].send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &leg_here, 0).into())).await.unwrap();
+        wait_until("call ended over there", async || tp.inner.read().await.calls.is_empty()).await;
+        wait_until("call ended here", async || main.inner.read().await.calls.is_empty()).await;
 
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        for st in stations.iter_mut() { while next_group_tx(st, 50).await.is_some() {} }
+        while next_group_tx(&mut far, 50).await.is_some() {}
         // A station cannot send into the other network by itself.
         let sneaky = Uuid::new_v4();
         stations[1].send(Message::Binary(protocol::build_group_tx(&sneaky, 2_320_004, alias(1, 909), 0).into())).await.unwrap();
@@ -971,5 +1065,66 @@ mod e2e {
         assert!(state.inner.read().await.calls.is_empty(), "a station may not start a call on another network's group");
         crate::router::handle_packet(state.clone(), link, protocol::build_group_tx(&Uuid::new_v4(), 7, target, 0)).await;
         assert!(state.inner.read().await.calls.values().any(|c| c.destination == target), "the link may");
+    }
+
+    /// Next CALL_GROUP_IDLE a station gets within `ms`.
+    async fn next_idle(ws: &mut Ws, ms: u64) -> Option<Uuid> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Ok(Some(Ok(msg))) = tokio::time::timeout(left, ws.next()).await else { return None };
+            if let Message::Binary(b) = msg {
+                if is_group_idle(&b) { return call_id(&b); }
+            }
+        }
+    }
+
+    /// The setup of the first field test: the server linked to itself.
+    /// Nothing may hang: every call ends when its station ends it.
+    #[tokio::test]
+    async fn loop_to_the_same_server_ends_every_call() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut cfg = base_config();
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "Loop".into(), remote_host: addr.to_string(), bridge_issi: 9_000_001, ..Default::default()
+        });
+        cfg.talkgroup_pools.push(TalkgroupPoolConfig {
+            name: "TestLink".into(), enabled: true, both_ways: true, groups: vec![9],
+            remote: vec![RemotePoolGroup { network: "Loop".into(), gssi: 909 }],
+        });
+        let state = Arc::new(AppState::new(cfg, "test.toml".into()).0);
+        let app = axum::Router::new()
+            .route("/brew", axum::routing::get(crate::server::brew_discovery))
+            .with_state(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await });
+        run(state.clone()).await;
+        let mut a = station(addr, &[100], &[9]).await;
+        let mut b = station(addr, &[200], &[909]).await;
+        wait_until("bridge on TG 909", async || {
+            state.inner.read().await.subscribers.get(&9_000_001).is_some_and(|s| s.groups.contains(&909))
+        }).await;
+        wait_until("radios", async || state.inner.read().await.subscribers.len() == 3).await;
+
+        // TG 9 -> TG 909 and the end.
+        let call = Uuid::new_v4();
+        a.send(Message::Binary(protocol::build_group_tx(&call, 100, 9, 0).into())).await.unwrap();
+        let (_, src, dst) = next_group_tx(&mut b, 2000).await.expect("909 hears TG 9");
+        assert_eq!((src, dst), (100, 909));
+        a.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call, 0).into())).await.unwrap();
+        assert!(next_idle(&mut b, 2000).await.is_some());
+        wait_until("no call left", async || state.inner.read().await.calls.is_empty()).await;
+
+        // TG 909 -> TG 9, TG 9 answers in the call, the answer ends it.
+        let x = Uuid::new_v4();
+        b.send(Message::Binary(protocol::build_group_tx(&x, 200, 909, 0).into())).await.unwrap();
+        let (leg, src, dst) = next_group_tx(&mut a, 2000).await.expect("TG 9 hears 909");
+        assert_eq!((src, dst), (200, 9));
+        a.send(Message::Binary(protocol::build_group_tx(&leg, 100, 9, 0).into())).await.unwrap();
+        let (id, src, dst) = next_group_tx(&mut b, 2000).await.expect("909 hears the answer");
+        assert_eq!((id, src, dst), (x, 100, 909));
+        a.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &leg, 0).into())).await.unwrap();
+        assert_eq!(next_idle(&mut b, 2000).await, Some(x));
+        wait_until("no call left after the answer", async || state.inner.read().await.calls.is_empty()).await;
     }
 }
