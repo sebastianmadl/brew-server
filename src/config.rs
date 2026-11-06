@@ -60,9 +60,57 @@ pub struct Config {
     /// `[issi_names]`: ISSI -> name ("2320972" = "OE4SXM Sebastian"), shown
     /// next to the ISSI on the dashboard. Edited live on its Directory page.
     pub issi_names: std::collections::BTreeMap<String, String>,
-    /// `[gssi_names]`: GSSI -> name ("2321" = "Bezirk Nord"), shown next to the
+    /// `[gssi_names]`: GSSI -> name ("2321" = "District North"), shown next to the
     /// group on the dashboard. Edited live on the same directory page.
     pub gssi_names: std::collections::BTreeMap<String, String>,
+    /// `[group_access."GSSI"]`: which radios may use a group. No entry (or an
+    /// empty list) = open to everyone. See `group_access`.
+    pub group_access: std::collections::BTreeMap<String, GroupAccessConfig>,
+}
+
+/// Who may use one group: `mode = "allow"` lets only the listed ISSIs
+/// affiliate to it and talk on it, `mode = "block"` keeps the listed ISSIs
+/// out. An empty list leaves the group open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct GroupAccessConfig {
+    pub mode: GroupAccessMode,
+    pub issis: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupAccessMode {
+    #[default]
+    Allow,
+    Block,
+}
+
+impl GroupAccessConfig {
+    /// May `issi` use the group?
+    pub fn permits(&self, issi: u32) -> bool {
+        if self.issis.is_empty() {
+            return true;
+        }
+        let listed = self.issis.contains(&issi);
+        match self.mode {
+            GroupAccessMode::Allow => listed,
+            GroupAccessMode::Block => !listed,
+        }
+    }
+}
+
+/// Checks `[group_access]`: keys are GSSIs and the lists hold ISSIs (both 1 to
+/// 16777215).
+pub fn validate_group_access(g: &std::collections::BTreeMap<String, GroupAccessConfig>) -> Result<()> {
+    for (k, a) in g {
+        let ok = k.trim().parse::<u32>().is_ok_and(|n| (1..=0xFF_FFFF).contains(&n));
+        anyhow::ensure!(ok, "group_access: '{k}' is not a GSSI (1 to 16777215)");
+        if let Some(i) = a.issis.iter().find(|i| !(1..=0xFF_FFFF).contains(*i)) {
+            anyhow::bail!("group_access.{k}: {i} is not an ISSI (1 to 16777215)");
+        }
+    }
+    Ok(())
 }
 
 /// `[[talkgroup_pools]]`: a named set of groups that are switched together
@@ -850,6 +898,7 @@ impl Default for Config {
             talkgroup_pools: Vec::new(),
             issi_names: std::collections::BTreeMap::new(),
             gssi_names: std::collections::BTreeMap::new(),
+            group_access: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -916,6 +965,7 @@ impl Config {
             .with_context(|| format!("reading {}", path.display()))?;
         let cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.ha.validate()?;
+        validate_group_access(&cfg.group_access)?;
         Ok(cfg)
     }
 
@@ -925,6 +975,7 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self> {
         let cfg: Self = toml::from_str(text).context("parsing config")?;
         cfg.ha.validate()?;
+        validate_group_access(&cfg.group_access)?;
         Ok(cfg)
     }
 

@@ -113,7 +113,26 @@ Two more pages of the new dashboard, both for admins:
   "2320972" = "OE4SXM Sebastian"
 
   [gssi_names]
-  "2321" = "Bezirk Nord"
+  "2321" = "District North"
+  ```
+
+  **Access** (Groups list) decides who may use a group: *Open* (no list),
+  *Only these* (allow list: only the listed ISSIs) or *Block these* (everyone
+  but the listed ISSIs). One list per group, the switch decides what it
+  means. The server records an affiliation only for an admitted radio and
+  drops a group call from any other; emergency calls always pass. A radio
+  that is not admitted therefore neither talks on the group across the
+  network nor pulls the group's calls to its station, and a pool does not
+  copy its calls to that group. Changing the list drops the affiliations it
+  no longer admits; opening it again takes effect when the radios affiliate
+  again. The radio's own Basestation still lets it attach on the air (Brew
+  has no message to refuse an affiliation), and it hears a call that reaches
+  its station for other members.
+
+  ```toml
+  [group_access."2321"]
+  mode = "allow"            # or "block"
+  issis = [2320972, 2321100]
   ```
 - **System -> Configuration:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign

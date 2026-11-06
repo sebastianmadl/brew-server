@@ -198,8 +198,8 @@ tr.off td{color:var(--text3)}
 .seg{display:inline-flex;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:2px;flex-wrap:wrap}
 .seg button{padding:5px 12px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--text2);border:0;background:none;cursor:pointer;min-height:28px}
 .seg button[aria-pressed=true]{background:var(--bg2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.2)}
-input.f,select.f{height:32px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font:13px var(--sans);min-width:0}
-input.f::placeholder{color:var(--text3)}
+input.f,select.f,textarea.f{height:32px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font:13px var(--sans);min-width:0}
+input.f::placeholder,textarea.f::placeholder{color:var(--text3)}
 .search{position:relative;display:inline-flex;align-items:center}
 .search svg{position:absolute;left:9px;width:15px;height:15px;color:var(--text3);pointer-events:none}
 .search input{padding-left:30px;width:240px}
@@ -500,7 +500,7 @@ function setTheme(t){
 }
 document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},gssi:{},ctl:[],emg:[],ha:null,regs:[]};
+const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},names:{},issi:{},gssi:{},access:{},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -564,6 +564,7 @@ async function refreshSlow(){
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
   tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
+  tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
@@ -847,9 +848,9 @@ function delPool(i){const p=D.pools[i];if(!confirm(`Delete pool "${p.name}"?`))r
 function editPool(i){
   const p=i>=0?plain(D.pools[i]):{name:'',enabled:true,both_ways:true,groups:[]};
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit pool':'New pool'}</h3></div><div class="sb">
-   <div><label class="l" for="pe-name">Name</label><input class="f" id="pe-name" maxlength="40" value="${esc(p.name)}" placeholder="e.g. Bezirk Nord"></div>
+   <div><label class="l" for="pe-name">Name</label><input class="f" id="pe-name" maxlength="40" value="${esc(p.name)}" placeholder="e.g. District North"></div>
    <div><label class="l" for="pe-groups">Groups (GSSI), separated by commas or spaces</label><input class="f" id="pe-groups" value="${p.groups.join(', ')}" placeholder="2321, 2323, 2324, 264" autocomplete="off"></div>
-   <div><span class="l" style="font-size:12px;font-weight:600;color:var(--text2)">Direction</span><div class="seg" role="radiogroup" id="pe-dir" style="margin-top:5px"><button role="radio" aria-pressed="${p.both_ways}" aria-checked="${p.both_ways}" onclick="setDir(true)">⇄ Both ways</button><button role="radio" aria-pressed="${!p.both_ways}" aria-checked="${!p.both_ways}" onclick="setDir(false)">→ One way, from the first group</button></div></div>
+   <div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Direction</span><div class="seg" role="radiogroup" id="pe-dir" style="margin-top:5px"><button role="radio" aria-pressed="${p.both_ways}" aria-checked="${p.both_ways}" onclick="setDir(true)">⇄ Both ways</button><button role="radio" aria-pressed="${!p.both_ways}" aria-checked="${!p.both_ways}" onclick="setDir(false)">→ One way, from the first group</button></div></div>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="pe-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="savePool(${i})">Save</button></div>`;
@@ -896,7 +897,7 @@ function editAcc(i){
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit login '+esc(x.username):'New login'}</h3></div><div class="sb">
    <div><label class="l" for="ac-user">Username</label><input class="f" id="ac-user" value="${esc(x.username)}" ${i>=0?'disabled':''} placeholder="e.g. 1000003" autocomplete="off" spellcheck="false"></div>
    <div><label class="l" for="ac-pw">Password</label><div style="display:flex;gap:8px"><input class="f" id="ac-pw" type="text" autocomplete="new-password" spellcheck="false" placeholder="${i>=0?'unchanged':'password'}" style="flex:1"><button type="button" class="btn" onclick="$('ac-pw').value=genPw()">Generate</button></div></div>
-   <div><label class="l" for="ac-info">Info (optional)</label><input class="f" id="ac-info" maxlength="60" value="${esc(x.info||'')}" placeholder="e.g. Relais Hauptplatz · Sysop OE4XYZ"></div>
+   <div><label class="l" for="ac-info">Info (optional)</label><input class="f" id="ac-info" maxlength="60" value="${esc(x.info||'')}" placeholder="e.g. Relay Main Square · Sysop OE4XYZ"></div>
    <div><label class="l" for="ac-pos">Position (optional): latitude, longitude</label><div style="display:flex;gap:8px"><input class="f" id="ac-pos" value="${x.lat!=null?x.lat+', '+x.lon:''}" placeholder="48.2082, 16.3738" autocomplete="off" spellcheck="false" style="flex:1"><button type="button" class="btn" onclick="hereFix()" title="Use the position of this device">${ic('pin')}Here</button></div><div class="mut" style="font-size:12px;margin-top:4px">Shown on the map. Paste it from a map app, or take this device's position.</div></div>
    ${sw('ac-b',x.brew,'Brew','Calls and SDS. Username = number, 1 to 7 digits')}
    ${sw('ac-t',x.telemetry,'Telemetry','FlowStation status reports')}
@@ -930,8 +931,8 @@ async function delAcc(i){
 }
 
 /* ---------- directory: ISSI and GSSI names ---------- */
-const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relais Nord',file:'issi-directory.csv'},
-  gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'Bezirk Nord',ex2:'2322, Bezirk Süd',file:'gssi-directory.csv'}};
+const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
+  gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'District North',ex2:'2322, District South',file:'gssi-directory.csv'}};
 const dirK=()=>UI.filter.dirk==='gssi'?'gssi':'issi';
 const dirNames=()=>D[dirK()]||{};
 R.issis=()=>{
@@ -941,35 +942,54 @@ R.issis=()=>{
   if(K==='issi')seen=new Map(ms.map(m=>[String(m.issi),m]));
   else{for(const m of ms)for(const g of (m.groups||[])){const k=String(g);seen.set(k,(seen.get(k)||0)+1);}
     for(const c of ((D.status&&D.status.active_calls)||[]))if(c.kind==='group'&&!seen.has(String(c.destination)))seen.set(String(c.destination),0);}
-  const keys=[...new Set([...Object.keys(names),...seen.keys()])].sort((a,b)=>a-b);
-  const rows=keys.filter(k=>(f==='all'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k]))&&match(q,k,names[k]));
+  const acc=K==='gssi'?(D.access||{}):{};
+  const keys=[...new Set([...Object.keys(names),...seen.keys(),...Object.keys(acc)])].sort((a,b)=>a-b);
+  const rows=keys.filter(k=>(f==='all'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k])||(f==='limited'&&acc[k]))&&match(q,k,names[k],...((acc[k]||{}).issis||[])));
+  const accCell=k=>{const a=acc[k];if(!a||!a.issis.length)return '<span class="mut">Open</span>';const n=a.issis.length;
+    return a.mode==='block'?`<span class="chip w" title="${a.issis.join(', ')}">${n} blocked</span>`:`<span class="chip a" title="${a.issis.join(', ')}">Only ${n} ISSI${n===1?'':'s'}</span>`;};
   const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
   const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
-    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>).';
-  return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']])}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
-    ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}Add name</button>`:''}</div>
+    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). The server then records an affiliation only for an admitted radio and drops a group call from any other (emergency calls always pass), so it neither talks on the group across the network nor pulls the group\'s calls to its station. The radio\'s own Basestation still lets it attach on the air (Brew has no message to refuse that), and a radio there hears a call that reaches that station for other members. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>).';
+  return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']]:[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
+    ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>
   <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
    ${helpNote('dir'+K,help)}
-   <div class="tw"><table><thead><tr><th>${d.what}</th><th>Name</th><th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
-   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td><td class="hide-s">${where(seen.get(k))}</td>
-     ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete">${ic('trash')}<span class="hide-s">Delete</span></button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}</td>`:''}</tr>`).join('')||`<tr><td colspan="4" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
+   <div class="tw"><table><thead><tr><th>${d.what}</th><th>Name</th>${K==='gssi'?'<th>Access</th>':''}<th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
+   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td>${K==='gssi'?`<td>${accCell(k)}</td>`:''}<td class="hide-s">${where(seen.get(k))}</td>
+     ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete name">${ic('trash')}<span class="hide-s">Delete</span></button>`:acc[k]?`<button class="btn" onclick="editName('${k}')">Edit</button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}</td>`:''}</tr>`).join('')||`<tr><td colspan="5" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
    </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
 };
 function editName(k){
-  const d=DIR[dirK()];const n=dirNames()[k]||'';
-  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${k?(n?'Edit name':'Name for '+k):'Add name'}</h3></div><div class="sb">
+  const K=dirK(),d=DIR[K];const n=dirNames()[k]||'';const a=K==='gssi'?(D.access||{})[k]:null;
+  const am=a&&a.issis.length?a.mode:'open';
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${K==='gssi'?(k?'Group '+k:'Add group'):(k?(n?'Edit name':'Name for '+k):'Add name')}</h3></div><div class="sb">
    <div><label class="l" for="in-issi">${d.what}</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. ${d.ex}"></div>
-   <div><label class="l" for="in-name">Name</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. ${esc(d.exn)}"></div>
+   <div><label class="l" for="in-name">Name${K==='gssi'?' (optional)':''}</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. ${esc(d.exn)}"></div>
+   ${K==='gssi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Access</span><div class="seg" role="radiogroup" id="in-acc" style="margin-top:5px">${[['open','Open'],['allow','Only these'],['block','Block these']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${am===v}" aria-checked="${am===v}" onclick="setAcc('${v}')">${l}</button>`).join('')}</div></div>
+   <div id="in-acc-box" ${am==='open'?'hidden':''}><label class="l" for="in-acc-list" id="in-acc-l">${am==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)'}</label>
+   <textarea class="f" id="in-acc-list" rows="4" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, 2321100">${a?a.issis.join(', '):''}</textarea>
+   <div class="mut" style="font-size:12px;margin-top:4px">Separated by commas, spaces or new lines. An empty list opens the group.</div></div>`:''}
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveName()">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>(k?$('in-name'):$('in-issi')).focus(),30);
 }
+function setAcc(v){document.querySelectorAll('#in-acc button').forEach(x=>{const on=x.dataset.v===v;x.setAttribute('aria-pressed',on);x.setAttribute('aria-checked',on);});
+  $('in-acc-box').hidden=v==='open';$('in-acc-l').textContent=v==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)';}
 async function saveName(){
   const K=dirK();const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
-  if(!name){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
+  let acc=null;
+  if(K==='gssi'){const b=document.querySelector('#in-acc button[aria-pressed="true"]');const v=b?b.dataset.v:'open';
+    acc={gssi:issi,mode:v==='block'?'block':'allow',issis:v==='open'?'':$('in-acc-list').value};
+    if(v!=='open'&&!acc.issis.trim()){m.className='msg err';m.textContent='Enter at least one ISSI, or choose Open.';return;}}
+  const had=dirNames()[issi]||'';
+  if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
   m.className='msg mut';m.textContent='Saving…';
-  try{D[K]=await postJ(DIR[K].api+'/set',{issi,name});closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}
+  try{
+    if(name||had)D[K]=await postJ(DIR[K].api+'/set',{issi,name});
+    if(acc)D.access=await postJ('/api/group-access/set',acc);
+    closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);
+  }catch(e){m.className='msg err';m.textContent=e.message;}
 }
 async function delName(k){
   const K=dirK();if(!confirm(`Delete the name of ${k}?`))return;

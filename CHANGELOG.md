@@ -132,6 +132,24 @@ Version 1.20.0 adds:
   restart and written to the config file (`GET /api/issi-names`,
   `GET /api/gssi-names`, admins: `POST /api/issi-names/set`,
   `POST /api/issi-names/import` and the same under `/api/gssi-names/`).
+- **Who may use a group.** Per group an allow list (only the listed ISSIs)
+  or a block list (everyone but the listed ISSIs); no list = open. The
+  server records an affiliation only for an admitted radio and drops a group
+  call from any other (emergency calls always pass), so it neither talks on
+  the group across the network nor pulls the group's calls to its station;
+  pool copies skip groups that do not admit the talker. Set on the Directory
+  page (Groups, Access: Open / Only these / Block these), applied without a
+  restart (affiliations the group no longer admits are dropped) and written
+  to the config file:
+
+  ```toml
+  [group_access."2321"]
+  mode = "allow"            # or "block"
+  issis = [2320972, 2321100]
+  ```
+
+  The radio's own Basestation still lets it attach on the air: Brew has no
+  message to refuse an affiliation there.
 - **Software version.** The Stations page shows the version a Basestation or
   terminal sends in its User-Agent (FlowStation sends its release).
 - **Appearance.** System, Light or Dark in the account menu (the sun button
@@ -143,7 +161,7 @@ Version 1.20.0 adds:
   pages are more compact, the pool groups field opens the full keyboard, the
   tab bar sits lower, the menu opened from More lies above it, and the
   classic dashboard link is in the account menu.
-- **HA page.** Changes applied live (blacklist, pools, logins, ISSI and GSSI names) no longer show
+- **HA page.** Changes applied live (blacklist, pools, logins, ISSI and GSSI names, group access) no longer show
   as pending changes.
 - **Backward compatible.** Without `[[talkgroup_pools]]` call routing is
   unchanged. All new messages are sent only to Basestations

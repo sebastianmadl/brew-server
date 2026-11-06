@@ -219,6 +219,10 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from a blacklisted ISSI dropped");
         return;
     }
+    if !state.group_permits(gt.destination, gt.source) && !emergency {
+        info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from an ISSI the group does not admit dropped (group_access)");
+        return;
+    }
     let mut inner = state.inner.write().await;
     let now = Instant::now();
     // The same transmission reaching us again over another peer link (a ring,
@@ -1031,6 +1035,10 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
                 None => local(&mut inner, HashSet::new()),
             };
             for gssi in &msg.groups {
+                if !state.group_permits(*gssi, msg.issi) {
+                    info!(%source, issi=msg.issi, gssi, "affiliation not recorded: the group does not admit this ISSI (group_access)");
+                    continue;
+                }
                 sub.groups.insert(*gssi);
                 info!(%source, issi=msg.issi, gssi, "subscriber affiliated");
             }
@@ -2532,5 +2540,130 @@ mod pool_tests {
         drain(&mut rx1);
         handle_packet(state.clone(), bs2, voice(&leg)).await;
         assert!(drain(&mut rx1).is_empty());
+    }
+}
+
+/// `[group_access]`: an allow or block list per group decides who may
+/// affiliate to it and talk on it across the network.
+#[cfg(test)]
+mod group_access_tests {
+    use super::*;
+    use crate::config::{GroupAccessConfig, GroupAccessMode};
+    use crate::protocol::{ConnVersion, SUB_AFFILIATE, SUB_REGISTER};
+    use crate::state::Client;
+
+    const GSSI: u32 = 2321;
+
+    async fn bts(state: &AppState) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let id = uuid::Uuid::new_v4();
+        state.inner.write().await.clients.insert(id, Client { tx, mode: ClientMode::Basestation, version: ConnVersion::V0, version_announced: true, remote_addr: None, connected_at_ms: 0, username: None });
+        (id, rx)
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> usize {
+        std::iter::from_fn(|| rx.try_recv().ok()).filter(|p| p.len() > 1 && p[0] == protocol::CLASS_CALL_CONTROL && p[1] == CALL_GROUP_TX).count()
+    }
+
+    async fn sub(state: &Arc<AppState>, from: ClientId, msg_type: u8, issi: u32, groups: &[u32]) {
+        handle_packet(state.clone(), from, protocol::build_subscriber_message(msg_type, issi, groups)).await;
+    }
+
+    async fn talk(state: &Arc<AppState>, from: ClientId, issi: u32, priority: u8) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), from, protocol::build_group_tx(&id, issi, GSSI, priority)).await;
+        id
+    }
+
+    /// Ten stations, 25 radios (ISSI 5000 + n on station n % 10), all
+    /// affiliating to the group. Returns the stations and their queues.
+    async fn network(state: &Arc<AppState>) -> Vec<(ClientId, mpsc::UnboundedReceiver<Vec<u8>>)> {
+        let mut st = Vec::new();
+        for _ in 0..10 { st.push(bts(state).await); }
+        for n in 0..25u32 {
+            let s = st[(n % 10) as usize].0;
+            sub(state, s, SUB_REGISTER, 5000 + n, &[]).await;
+            sub(state, s, SUB_AFFILIATE, 5000 + n, &[GSSI]).await;
+        }
+        st
+    }
+
+    fn strict(access: Option<GroupAccessConfig>) -> Arc<AppState> {
+        let mut config = crate::config::Config::default();
+        config.storage.enabled = false;
+        config.sms_center.enabled = false;
+        config.fallback_broadcast_when_no_affiliations = false;
+        if let Some(a) = access { config.group_access.insert(GSSI.to_string(), a); }
+        Arc::new(AppState::new(config, "test.toml".into()).0)
+    }
+
+    async fn affiliated(state: &AppState) -> Vec<u32> {
+        let inner = state.inner.read().await;
+        let mut v: Vec<u32> = inner.subscribers.iter().filter(|(_, s)| s.groups.contains(&GSSI)).map(|(i, _)| *i).collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[tokio::test]
+    async fn an_allow_list_admits_only_the_listed_radios() {
+        // Only 5000 (station 0) and 5001 (station 1).
+        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![5000, 5001] }));
+        let mut st = network(&state).await;
+        assert_eq!(affiliated(&state).await, vec![5000, 5001], "other affiliations are not recorded");
+
+        talk(&state, st[2].0, 5002, 0).await;
+        assert!(st.iter_mut().all(|(_, rx)| drain(rx) == 0), "a radio not on the list cannot talk on the group");
+        assert!(state.inner.read().await.calls.is_empty());
+
+        talk(&state, st[0].0, 5000, 0).await;
+        let heard: Vec<usize> = st.iter_mut().map(|(_, rx)| drain(rx)).collect();
+        assert_eq!(heard, vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0], "only the station of the other admitted radio gets the call");
+
+        // An emergency call always passes.
+        let id = talk(&state, st[3].0, 5003, EMERGENCY_PRIORITY).await;
+        assert!(state.inner.read().await.calls.contains_key(&id));
+    }
+
+    #[tokio::test]
+    async fn a_block_list_keeps_the_listed_radios_out_and_an_empty_list_is_open() {
+        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![5000, 5010, 5020] }));
+        let mut st = network(&state).await;
+        let all: Vec<u32> = (5001..5025).filter(|i| ![5010, 5020].contains(i)).collect();
+        assert_eq!(affiliated(&state).await, all);
+        talk(&state, st[0].0, 5000, 0).await;
+        assert!(st.iter_mut().all(|(_, rx)| drain(rx) == 0), "a blocked radio cannot talk on the group");
+        talk(&state, st[1].0, 5001, 0).await;
+        let heard: Vec<usize> = st.iter_mut().map(|(_, rx)| drain(rx)).collect();
+        assert_eq!(heard[0], 0, "station 0 has only blocked radios: no call for it");
+        assert_eq!(heard.iter().filter(|n| **n == 1).count(), 8, "every other station with an admitted radio hears it");
+
+        let open = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![] }));
+        network(&open).await;
+        assert_eq!(affiliated(&open).await.len(), 25, "an empty list leaves the group open");
+    }
+
+    #[tokio::test]
+    async fn a_live_change_drops_the_affiliations_the_group_no_longer_admits() {
+        let path = std::env::temp_dir().join(format!("brew-access-{}.toml", uuid::Uuid::new_v4().simple()));
+        let mut config = crate::config::Config::default();
+        config.storage.enabled = false;
+        config.sms_center.enabled = false;
+        config.fallback_broadcast_when_no_affiliations = false;
+        let state = Arc::new(AppState::new(config, path.clone()).0);
+        let mut st = network(&state).await;
+        assert_eq!(affiliated(&state).await.len(), 25);
+        let r = crate::group_access::set(
+            axum::extract::State(state.clone()),
+            axum::Json(crate::group_access::AccessRequest { gssi: GSSI.to_string(), mode: GroupAccessMode::Allow, issis: "5000\n5001".into() }),
+        ).await;
+        assert_eq!(r.status(), axum::http::StatusCode::OK);
+        assert_eq!(affiliated(&state).await, vec![5000, 5001]);
+        talk(&state, st[0].0, 5000, 0).await;
+        let heard: Vec<usize> = st.iter_mut().map(|(_, rx)| drain(rx)).collect();
+        assert_eq!(heard, vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let saved = crate::config::Config::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(saved.group_access[&GSSI.to_string()].issis, vec![5000, 5001]);
+        crate::CONFIG_WRITE_APPLIED_LIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::remove_file(&path);
     }
 }

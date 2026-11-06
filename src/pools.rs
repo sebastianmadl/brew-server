@@ -182,7 +182,9 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
             if let Some(r) = inner.pools.runs.get_mut(&origin) { r.legs.retain(|_, l| *l != id); }
             return;
         }
-        let wanted = targets_for(&pools, gssi);
+        let mut wanted = targets_for(&pools, gssi);
+        // A group that does not admit the talker gets no copy (`group_access`).
+        wanted.retain(|t, _| state.group_permits(*t, source_issi));
         if wanted.is_empty() && !inner.pools.runs.contains_key(&id) { return; }
         let pool = wanted.values().next().cloned().unwrap_or_default();
         let run = inner.pools.runs.entry(id).or_insert_with(|| PoolRun {

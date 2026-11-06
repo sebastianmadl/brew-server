@@ -358,6 +358,8 @@ pub struct AppState {
     pub issi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
     /// `[gssi_names]` as it is right now (see `issi_names`).
     pub gssi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
+    /// `[group_access]` as it is right now (see `group_access`).
+    pub group_access: std::sync::RwLock<std::collections::BTreeMap<String, crate::config::GroupAccessConfig>>,
 }
 
 /// Username -> password of one listener, shared with the dashboard.
@@ -378,6 +380,11 @@ impl Logins {
 }
 
 impl AppState {
+    /// May `issi` affiliate to and talk on `gssi` (`[group_access]`)?
+    pub fn group_permits(&self, gssi: u32, issi: u32) -> bool {
+        self.group_access.read().map_or(true, |g| g.get(&gssi.to_string()).is_none_or(|a| a.permits(issi)))
+    }
+
     pub fn is_blocked(&self, issi: u32) -> bool {
         self.blocked.read().is_ok_and(|b| b.contains(&issi))
     }
@@ -407,6 +414,7 @@ impl AppState {
         if let Ok(l) = self.locations.read() { cfg.bts_locations = l.clone(); }
         if let Ok(n) = self.issi_names.read() { cfg.issi_names = n.clone(); }
         if let Ok(n) = self.gssi_names.read() { cfg.gssi_names = n.clone(); }
+        if let Ok(g) = self.group_access.read() { cfg.group_access = g.clone(); }
         
         cfg
     }
@@ -461,6 +469,7 @@ impl AppState {
         let locations = config.bts_locations.clone();
         let issi_names = config.issi_names.clone();
         let gssi_names = config.gssi_names.clone();
+        let group_access = config.group_access.clone();
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -482,6 +491,7 @@ impl AppState {
                 locations: std::sync::RwLock::new(locations),
                 issi_names: std::sync::RwLock::new(issi_names),
                 gssi_names: std::sync::RwLock::new(gssi_names),
+                group_access: std::sync::RwLock::new(group_access),
             },
             aprs_rx,
         )

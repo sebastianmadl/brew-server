@@ -331,7 +331,13 @@ lon = 23.7640
 # [issi_names]
 # "2320972" = "OE4SXM Sebastian"
 # [gssi_names]
-# "2321" = "Bezirk Nord"
+# "2321" = "District North"
+
+# Who may use a group: "allow" = only the listed ISSIs, "block" = everyone
+# but them. No entry (or an empty list) = open. Edited on the Directory page.
+# [group_access."2321"]
+# mode = "allow"
+# issis = [2320972, 2321100]
 
 # Talkgroup pools: a call on one group is played 1:1 on the other groups of
 # the pool. both_ways = false copies only calls on the first group. A group
