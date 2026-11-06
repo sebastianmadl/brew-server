@@ -207,6 +207,8 @@ tr.exp td{background:var(--bg3);border-top:0}
 .chk{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
 .selbar{display:flex;gap:10px;align-items:center;padding:12px 18px;border-top:1px solid var(--sep);background:color-mix(in srgb,var(--accent) 6%,transparent);flex-wrap:wrap}
 .msg{font-size:12.5px;padding:0 18px 12px}
+.msg:empty{display:none}
+#cfg-msg{white-space:pre-wrap;font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px}
 .msg.err{color:var(--danger)} .msg.ok{color:var(--ok)}
 
 /* Sheet (pool editor) */
@@ -218,6 +220,54 @@ tr.exp td{background:var(--bg3);border-top:0}
 .sheet label.l{font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px}
 .sheet .acts{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--sep)}
 .sheet input.f{width:100%}
+
+/* Account button (top right) and login window */
+.acctbtn{display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 10px 0 4px;border-radius:99px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font:600 12.5px var(--sans);cursor:pointer}
+.acctbtn:hover{border-color:var(--text3)}
+.acctbtn .av{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--on-accent);font-weight:700;font-size:12px;text-transform:uppercase}
+.acctbtn svg{width:14px;height:14px;color:var(--text3)}
+.loginbtn{padding:0 14px}
+.loginbtn svg{width:16px;height:16px}
+.menu{position:absolute;right:28px;top:56px;z-index:40;min-width:220px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;box-shadow:0 18px 48px -16px rgba(0,0,0,.45);padding:6px;display:none}
+.menu.on{display:block}
+.menu .who{padding:10px 12px 8px;border-bottom:1px solid var(--sep);margin-bottom:4px}
+.menu .who b{display:block;font-size:14px}
+.menu .who span{font-size:12px;color:var(--text3)}
+.menu button{display:flex;width:100%;align-items:center;gap:10px;padding:9px 12px;border:0;background:none;color:var(--text);font:500 13px var(--sans);border-radius:8px;cursor:pointer;text-align:left}
+.menu button:hover{background:var(--bg3)}
+.menu button svg{width:16px;height:16px;color:var(--text3)}
+.login{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;padding:16px;
+  background:color-mix(in srgb,var(--bg) 55%,transparent);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3)}
+.login.on{display:flex}
+.login.solid{background:var(--bg)}
+@media (prefers-reduced-transparency:reduce){.login{background:var(--bg)}}
+.lcard{width:min(380px,100%);background:var(--bg2);border:1px solid var(--border);border-radius:18px;box-shadow:0 32px 80px -28px rgba(0,0,0,.6);padding:30px 28px 24px;position:relative}
+.lcard .logo{width:52px;height:52px;border-radius:14px;margin:0 auto 14px;display:grid;place-items:center}
+.lcard .logo svg{width:28px;height:28px}
+.lcard h2{text-align:center;margin:0;font-size:20px;letter-spacing:-.01em}
+.lcard .lsub{text-align:center;color:var(--text3);font-size:13px;margin:4px 0 22px}
+.lcard label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin:0 0 6px}
+.lcard .fld{position:relative;margin-bottom:14px}
+.lcard input{width:100%;height:42px;padding:0 12px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font:15px var(--sans)}
+.lcard input:focus{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px;border-color:var(--accent)}
+.lcard .eye{position:absolute;right:6px;bottom:6px;width:30px;height:30px;border:0;background:none;color:var(--text3);cursor:pointer;border-radius:7px;display:grid;place-items:center}
+.lcard .eye svg{width:17px;height:17px}
+.lcard .go{width:100%;height:42px;justify-content:center;font-size:14px;margin-top:4px}
+.lcard .lerr{color:var(--danger);font-size:13px;min-height:18px;margin:2px 0 8px;display:flex;gap:6px;align-items:center}
+.lcard .lerr svg{width:15px;height:15px;flex-shrink:0}
+.lcard .x{position:absolute;right:12px;top:12px;width:32px;height:32px;border:0;background:none;color:var(--text3);border-radius:8px;cursor:pointer;display:grid;place-items:center}
+.lcard .x svg{width:16px;height:16px}
+.lcard .lfoot{text-align:center;font-size:12px;color:var(--text3);margin-top:16px}
+@keyframes shake{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+.lcard.bad{animation:shake .35s}
+@media (prefers-reduced-motion:reduce){.lcard.bad{animation:none}}
+body.locked aside,body.locked main,body.locked .tabbar{visibility:hidden}
+
+/* Accounts and configuration */
+.svc{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--sep)}
+.yes{color:var(--ok);font-weight:600} .no{color:var(--text3)}
+textarea.cfg{width:100%;min-height:62vh;resize:vertical;border:0;border-top:1px solid var(--sep);background:var(--bg3);color:var(--text);font:12.5px/1.55 var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);padding:14px 18px;tab-size:4;white-space:pre;overflow:auto}
+textarea.cfg:focus{outline:none;box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 
 iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:transparent}
 
@@ -256,7 +306,6 @@ iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:trans
   </div>
   <nav id="nav"></nav>
   <div class="sbfoot">
-    <div class="acct"><span id="acct"></span><button class="btn" id="loginbtn" hidden onclick="doLogin()">Log in</button><button class="btn" id="logoutbtn" hidden onclick="doLogout()">Log out</button></div>
     <a href="/classic">Classic dashboard</a><br>
     brew-server by ysamouhos<br>
     Redesign + extra features: <a href="https://github.com/sebastianmadl" target="_blank" rel="noopener">OE4SXM</a>
@@ -269,6 +318,13 @@ iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:trans
     <h1 id="title">Overview</h1>
     <span class="pill" id="live"><i></i><span>Live</span></span>
     <span class="sp"></span>
+    <span class="pill" id="rochip" hidden title="You can look at everything; changes need an admin login">Read only</span>
+    <button class="btn loginbtn" id="loginbtn" hidden onclick="openLogin(false)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M14 17l5-5-5-5M19 12H8"/></svg><span>Log in</span></button>
+    <button class="acctbtn" id="acctbtn" hidden aria-haspopup="menu" aria-expanded="false" onclick="toggleMenu(event)"><span class="av" id="acct-av"></span><span id="acct-name"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+  </div>
+  <div class="menu" id="menu" role="menu"><div class="who"><b id="menu-name"></b><span id="menu-role"></span></div>
+    <button role="menuitem" onclick="go('accounts');closeMenu()" id="menu-acc"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg>Accounts</button>
+    <button role="menuitem" onclick="doLogout()"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>Log out</button>
   </div>
   <div class="content" id="content"></div>
 </main>
@@ -279,6 +335,21 @@ iframe.embed{width:100%;border:0;min-height:calc(100vh - 130px);background:trans
   <button class="tab" data-tab="stations"></button>
   <button class="tab" data-tab="routing"></button>
   <button class="tab" data-tab="more"></button>
+</div>
+
+<div class="login" id="login" role="dialog" aria-modal="true" aria-labelledby="login-title">
+  <form class="lcard" id="lcard" onsubmit="submitLogin(event)" autocomplete="on">
+    <button type="button" class="x" id="login-x" onclick="closeLogin()" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span class="sr">Close</span></button>
+    <div class="logo" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M12 11v10M8 21h8M9.5 21l2.5-10 2.5 10"/><circle cx="12" cy="9" r="1.4"/><path d="M7.8 5.8a6 6 0 0 0 0 6.4M16.2 5.8a6 6 0 0 1 0 6.4M5 3.5a10 10 0 0 0 0 11M19 3.5a10 10 0 0 1 0 11"/></svg></div>
+    <h2 id="login-title">Sign in</h2>
+    <div class="lsub">__SERVERNAME__</div>
+    <div class="fld"><label for="lu">Username</label><input id="lu" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
+    <div class="fld"><label for="lp">Password</label><input id="lp" name="password" type="password" autocomplete="current-password" required style="padding-right:42px">
+      <button type="button" class="eye" onclick="const p=$('lp');p.type=p.type==='password'?'text':'password';this.setAttribute('aria-pressed',p.type==='text')" aria-pressed="false" title="Show password"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span class="sr">Show password</span></button></div>
+    <div class="lerr" id="lerr" role="alert"></div>
+    <button class="btn pri go" id="lgo" type="submit">Sign in</button>
+    <div class="lfoot">brew-server dashboard</div>
+  </form>
 </div>
 
 <div class="scrim" id="scrim" onclick="if(event.target===this)closeSheet()"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" id="sheet"></div></div>
@@ -302,6 +373,8 @@ const I={
  tsds:'<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
  ha:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',
  set:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+ key:'<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+ file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
  more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
@@ -315,10 +388,10 @@ const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],
- ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],
+ ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],['accounts','Accounts','key','Network',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
  ['sms','SMS Center','sms','Integrations','/sms-center'],['tsds','Telemetry SDS','tsds','Integrations','/telemetry-sds'],
- ['ha','High Availability','ha','System','/ha'],['settings','Settings','set','System','/settings',true]
+ ['ha','High Availability','ha','System','/ha'],['config','Configuration','file','System',null,true],['settings','Settings','set','System','/settings',true]
 ];
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 const $=id=>document.getElementById(id);
@@ -329,12 +402,47 @@ function dur(ms){const s=Math.max(0,Math.floor(ms/1000));const h=Math.floor(s/36
 function ago(ms){if(!ms)return '—';const s=Math.max(0,(Date.now()-ms)/1000);if(s<60)return Math.floor(s)+' s';if(s<3600)return Math.floor(s/60)+' min';if(s<86400)return Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';return Math.floor(s/86400)+' d';}
 const mhz=hz=>hz?(hz/1e6).toFixed(5).replace(/0+$/,'').replace(/\.$/,'')+' MHz':'—';
 const isToday=ms=>new Date(ms).toDateString()===new Date().toDateString();
-async function getJ(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status+' '+(await r.text()));return r.json();}
-async function postJ(u,body){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const t=await r.text();if(!r.ok)throw new Error(t||r.status);try{return JSON.parse(t)}catch(e){return t}}
-function doLogin(){location.href='/login?next='+encodeURIComponent(location.pathname+location.hash);}
-function doLogout(){location.href=location.protocol+'//logout:'+Date.now()+'@'+location.host+location.pathname;}
+// Every request says it comes from this page: without a login the server
+// then answers a plain 401 (this page's login window opens) instead of
+// making the browser pop its own dialog.
+async function api(u,opt){opt=opt||{};opt.headers=Object.assign({'x-brew-ui':'1'},opt.headers||{});opt.cache='no-store';
+  const r=await fetch(u,opt);const t=await r.text();
+  if(r.status===401){needAuth();throw new Error('Log in first');}
+  if(!r.ok)throw new Error(t||String(r.status));try{return JSON.parse(t)}catch(e){return t}}
+const getJ=u=>api(u);
+const postJ=(u,body)=>api(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+function doLogin(){openLogin(false);}
+let authAsk=null;
+function needAuth(){
+  if($('login').classList.contains('on')||authAsk)return;
+  authAsk=fetch('/api/whoami',{cache:'no-store',headers:{'x-brew-ui':'1'}}).then(r=>r.json()).then(w=>{D.who=w;openLogin(!!w.need_login);}).catch(()=>{}).finally(()=>{authAsk=null;});
+}
+function openLogin(must){
+  closeMenu();$('login').classList.add('on');$('login').classList.toggle('solid',must);document.body.classList.toggle('locked',must);
+  $('login-x').hidden=must;$('lerr').textContent='';$('lgo').disabled=false;setTimeout(()=>($('lu').value?$('lp'):$('lu')).focus(),30);
+}
+function closeLogin(){if(document.body.classList.contains('locked'))return;$('login').classList.remove('on');}
+async function submitLogin(e){
+  e.preventDefault();const b=$('lgo');b.disabled=true;b.textContent='Signing in…';$('lerr').textContent='';
+  try{const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:$('lu').value.trim(),password:$('lp').value})});
+    if(!r.ok)throw new Error(r.status===401?'Wrong username or password.':(await r.text())||'Could not sign in.');
+    $('lp').value='';$('login').classList.remove('on');document.body.classList.remove('locked');
+    await refreshSlow();await refreshFast();render(true);
+  }catch(err){$('lerr').innerHTML=ic('alert')+esc(err.message);const c=$('lcard');c.classList.remove('bad');void c.offsetWidth;c.classList.add('bad');$('lp').select();}
+  finally{b.disabled=false;b.textContent='Sign in';}
+}
+async function doLogout(){
+  closeMenu();try{await fetch('/api/logout',{method:'POST'});}catch(e){}
+  // Basic credentials the browser still caches (classic pages) are dropped the old way.
+  const w=await fetch('/api/whoami',{cache:'no-store',headers:{'x-brew-ui':'1'}}).then(r=>r.json()).catch(()=>({}));
+  if(w.username){location.href=location.protocol+'//logout:'+Date.now()+'@'+location.host+location.pathname;return;}
+  location.reload();
+}
+function toggleMenu(e){e.stopPropagation();const m=$('menu'),on=!m.classList.contains('on');m.classList.toggle('on',on);$('acctbtn').setAttribute('aria-expanded',on);}
+function closeMenu(){$('menu').classList.remove('on');$('acctbtn').setAttribute('aria-expanded','false');}
+document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:true},ctl:[],emg:[],ha:null,regs:[]};
+const D={status:null,conn:null,tele:[],pools:[],radios:[],who:{admin:false},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -374,6 +482,7 @@ function helpNote(key,text){return `<div class="note" id="h-${key}" ${UI.help[ke
 
 /* ---------- data ---------- */
 async function refreshFast(){
+  if(document.body.classList.contains('locked'))return;
   try{
     const [st,pools,emg]=await Promise.all([getJ('/api/status'),getJ('/api/pools'),getJ('/api/emergencies')]);
     D.status=st;D.pools=pools;D.emg=emg;ok=true;
@@ -384,9 +493,11 @@ async function refreshFast(){
   render();
 }
 async function refreshSlow(){
+  if(document.body.classList.contains('locked'))return;
   const tasks=[getJ('/api/connections').then(v=>D.conn=v),getJ('/api/telemetry').then(v=>D.tele=v),getJ('/api/radios').then(v=>D.radios=v),
     getJ('/api/ha').then(v=>D.ha=v),getJ('/api/whoami').then(v=>D.who=v)];
   if(UI.page==='radios')tasks.push(getJ('/api/registrations').then(v=>D.regs=v));
+  if(UI.page==='accounts'&&D.who.admin)tasks.push(getJ('/api/accounts').then(v=>D.acc=v));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
@@ -400,8 +511,10 @@ function chrome(){
   if(ha){$('hw-ha').textContent=ha.enabled?(ha.role[0].toUpperCase()+ha.role.slice(1)+(ha.vip_held?' · VIP held':'')):'Off (single node)';$('hw-ha-dot').className='dot'+(ha.enabled?(ha.role==='active'?'':' w'):' i');}
   const w=D.who;
   document.body.classList.toggle('ro',!w.admin);
-  $('acct').textContent=w.username?('Signed in as '+w.username):(w.admin?'':'Read only');
-  $('loginbtn').hidden=!(w.can_login&&!w.username);$('logoutbtn').hidden=!w.username;
+  if(w.need_login&&!$('login').classList.contains('on'))openLogin(true);
+  $('loginbtn').hidden=!(w.can_login&&!w.username);$('acctbtn').hidden=!w.username;$('rochip').hidden=w.admin||!!w.need_login;
+  if(w.username){$('acct-av').textContent=w.username[0];$('acct-name').textContent=w.username;$('menu-name').textContent=w.username;
+    $('menu-role').textContent=w.admin?'Admin':'Viewer (read only)';$('menu-acc').hidden=!w.admin;}
   if(st){$('b-calls').textContent=st.active_calls.filter(x=>!legIds().has(x.uuid)).length||'';}
   $('b-radios').textContent=(c&&c.mobile_stations.length)||'';
   $('b-routing').textContent=D.pools.filter(p=>p.enabled).length||'';
@@ -673,6 +786,97 @@ async function savePool(i){
   const m=$('sheet-msg');m.className='msg mut';m.textContent='Saving…';
   try{await postJ('/api/pools/save',l);closeSheet();D.pools=await getJ('/api/pools');setMsg('pool-msg','ok',`${p.name} saved.`);render(true);}
   catch(e){m.className='msg err';m.textContent=e.message;}
+}
+
+/* ---------- accounts ---------- */
+const svcChip=(name,s)=>!s?'':`<span class="chip ${!s.enabled?'':s.open?'w':'a'}">${name}: ${!s.enabled?'switched off':s.open?'open, no login needed':'login required'}</span>`;
+const yn=b=>b?'<span class="yes">✓ yes</span>':'<span class="no">— no</span>';
+R.accounts=()=>{
+  if(!D.who.admin)return `<div class="card"><div class="empty">Accounts are for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
+  const a=D.acc;
+  if(!a)return '<div class="card"><div class="empty">Loading…</div></div>';
+  const q=UI.filter.acc||'';
+  const rows=a.accounts.filter(x=>!q||x.username.includes(q));
+  return `<div class="card"><div class="ch"><h2>Station and terminal logins</h2><span class="mut">${a.accounts.length}</span>${helpBtn('acc')}<span class="sp"></span>
+    <div class="search">${ic('search')}<input class="f" placeholder="Username…" value="${esc(q)}" oninput="UI.filter.acc=this.value;render(true);const i=document.querySelector('.search input');i.focus();i.setSelectionRange(i.value.length,i.value.length)" aria-label="Filter logins"></div>
+    <button class="btn pri" onclick="editAcc(-1)">${ic('plus')}New login</button></div>
+   ${helpNote('acc','The logins Basestations and terminals (apps, consoles) use to connect to this server. <b>Brew</b> carries calls and SDS; the login is the station\'s or terminal\'s number (1 to 7 digits). <b>Telemetry</b> and <b>control</b> are the FlowStation links for status reports and commands (DGNA, kick, restart). One login can be on all three. Changes apply to the next connection at once, without a restart, and are written to the config file. Connections that are already up stay until they reconnect. Careful: while the telemetry or control list is empty, that link needs no login; the first login you add there turns the login on, and stations without one are refused from then on.')}
+   <div class="svc">${svcChip('Brew',a.brew)}${svcChip('Telemetry',a.telemetry)}${svcChip('Control',a.control)}</div>
+   <div class="tw"><table><thead><tr><th>Username</th><th>Brew</th><th>Telemetry</th><th>Control</th><th></th></tr></thead><tbody>
+   ${rows.map(x=>{const i=a.accounts.indexOf(x);return `<tr><td><b class="m">${esc(x.username)}</b></td><td>${yn(x.brew)}</td><td>${yn(x.telemetry)}</td><td>${yn(x.control)}</td>
+     <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="editAcc(${i})">Edit</button> <button class="btn danger" onclick="delAcc(${i})">Delete</button></td></tr>`;}).join('')||'<tr><td colspan="5" class="mut">No logins</td></tr>'}
+   </tbody></table></div>${msgDiv('acc-msg','padding:12px 18px')}</div>`;
+};
+function editAcc(i){
+  const x=i>=0?D.acc.accounts[i]:{username:'',brew:true,telemetry:true,control:true};
+  const sw=(id,on,label,hint)=>`<label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="${id}" aria-checked="${on}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">${label}</b><br><span class="mut" style="font-size:12px">${hint}</span></span></label>`;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit login '+esc(x.username):'New login'}</h3></div><div class="sb">
+   <div><label class="l" for="ac-user">Username</label><input class="f" id="ac-user" value="${esc(x.username)}" ${i>=0?'disabled':''} placeholder="e.g. 1000003" autocomplete="off" spellcheck="false"></div>
+   <div><label class="l" for="ac-pw">Password</label><div style="display:flex;gap:8px"><input class="f" id="ac-pw" type="text" autocomplete="new-password" spellcheck="false" placeholder="${i>=0?'unchanged':'password'}" style="flex:1"><button type="button" class="btn" onclick="$('ac-pw').value=genPw()">Generate</button></div></div>
+   ${sw('ac-b',x.brew,'Brew','Calls and SDS. Username = number, 1 to 7 digits')}
+   ${sw('ac-t',x.telemetry,'Telemetry','FlowStation status reports')}
+   ${sw('ac-c',x.control,'Control','Commands to the station: DGNA, kick, restart')}
+   <div class="mut" style="font-size:12px">Applies to the next connection at once, no restart.</div>
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveAcc(${i})">Save</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>(i>=0?$('ac-pw'):$('ac-user')).focus(),30);
+}
+function genPw(){const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';const a=new Uint32Array(16);crypto.getRandomValues(a);return [...a].map(n=>c[n%c.length]).join('');}
+const on=id=>$(id).getAttribute('aria-checked')==='true';
+async function saveAcc(i){
+  const body={username:$('ac-user').value.trim(),password:$('ac-pw').value,brew:on('ac-b'),telemetry:on('ac-t'),control:on('ac-c')};
+  const m=$('sheet-msg');m.className='msg mut';m.textContent='Saving…';
+  try{D.acc=await postJ('/api/accounts',body);closeSheet();setMsg('acc-msg','ok',`${body.username} saved. It works for the next connection.`);render(true);}
+  catch(e){m.className='msg err';m.textContent=e.message;}
+}
+async function delAcc(i){
+  const x=D.acc.accounts[i];if(!confirm(`Delete login "${x.username}" from Brew, telemetry and control?`))return;
+  try{D.acc=await api('/api/accounts/'+encodeURIComponent(x.username),{method:'DELETE'});setMsg('acc-msg','ok',`${x.username} deleted.`);}catch(e){setMsg('acc-msg','err',e.message);}
+  render(true);
+}
+
+/* ---------- configuration ---------- */
+R.config=()=>{
+  if(!D.who.admin)return `<div class="card"><div class="empty">The configuration is for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
+  if(UI.raw==null){if(!UI.rawLoading)loadRaw();return '<div class="card"><div class="empty">Loading…</div></div>';}
+  const secs=[...UI.raw.matchAll(/^\s*(\[\[?[^\]\n]+\]\]?)/gm)].map(m=>m[1]);
+  return `<div class="card"><div class="ch"><h2>Full configuration</h2><span class="mut">brew-server.toml</span>${helpBtn('cfg')}<span class="sp"></span>
+    <select class="f" onchange="jumpSec(this.value);this.value=''" aria-label="Jump to section"><option value="">Jump to section…</option>${[...new Set(secs)].map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+    <button class="btn" onclick="if(!UI.rawDirty||confirm('Throw away your changes and load the file again?'))loadRaw()">Reload</button>
+    <button class="btn pri" onclick="saveRaw()">Save and apply</button></div>
+   ${helpNote('cfg','Every setting of the server. <b>Save and apply</b> checks the text first; a mistake is shown and nothing is saved. Then the server restarts within a few seconds to apply it: running calls drop and stations reconnect by themselves, and you sign in again. Logins (Accounts), talkgroup pools (Routing) and the ISSI blacklist change without a restart on their own pages. With high availability on, apply the file from the High Availability page.')}
+   ${msgDiv('cfg-msg','padding:10px 18px')}
+   <textarea class="cfg" id="cfg" spellcheck="false" autocapitalize="off" aria-label="Configuration file" oninput="UI.raw=this.value;UI.rawDirty=true">${esc(UI.raw)}</textarea></div>`;
+};
+async function loadRaw(){
+  UI.rawLoading=true;
+  try{UI.raw=await getJ('/api/config/raw');UI.rawDirty=false;setMsg('cfg-msg','','');}catch(e){UI.raw=null;setMsg('cfg-msg','err',e.message);}
+  UI.rawLoading=false;render(true);
+}
+function jumpSec(sec){
+  const t=$('cfg');if(!t||!sec)return;const i=t.value.search(new RegExp('^\\s*'+sec.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'m'));if(i<0)return;
+  t.focus();t.setSelectionRange(i,i);const line=t.value.slice(0,i).split('\n').length-1;t.scrollTop=Math.max(0,line*parseFloat(getComputedStyle(t).lineHeight)-20);
+}
+async function saveRaw(){
+  const text=$('cfg')?$('cfg').value:UI.raw;
+  if(!confirm('Save and apply? The server restarts to apply it; running calls drop.'))return;
+  setMsg('cfg-msg','mut','Checking and saving…');
+  try{const r=await api('/api/config/raw',{method:'PUT',body:text});UI.rawDirty=false;
+    setMsg('cfg-msg','ok',(r&&r.note?r.note[0].toUpperCase()+r.note.slice(1):'Saved')+'.');
+    if(!(D.ha&&D.ha.enabled))waitRestart();
+  }catch(e){setMsg('cfg-msg','err',e.message);}
+}
+async function waitRestart(){
+  // The process restarts a moment after the file changed: wait until it is gone and back.
+  let down=false;
+  for(let n=0;n<60;n++){await new Promise(r=>setTimeout(r,1000));
+    const up=await fetch('/healthz',{cache:'no-store'}).then(r=>r.ok).catch(()=>false);
+    if(!up){down=true;setMsg('cfg-msg','mut','Restarting…');continue;}
+    if(down||n>=8){setMsg('cfg-msg','ok','Applied: the server is back with the new configuration.');UI.raw=null;
+      const w=await fetch('/api/whoami',{cache:'no-store',headers:{'x-brew-ui':'1'}}).then(r=>r.json()).catch(()=>null);
+      if(w){D.who=w;if(w.need_login||(!w.username&&!w.admin))openLogin(!!w.need_login);}
+      render(true);return;}
+  }
 }
 
 buildNav();

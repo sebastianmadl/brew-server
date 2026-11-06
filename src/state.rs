@@ -344,6 +344,27 @@ pub struct AppState {
     /// The talkgroup pools as switched right now: starts as
     /// `[[talkgroup_pools]]`, edited live from the dashboard (see `pools`).
     pub pools: std::sync::RwLock<Vec<crate::config::TalkgroupPoolConfig>>,
+    /// Logins as accepted right now: start as `[auth.users]`,
+    /// `[telemetry.users]` and `[control.users]`, edited live from the
+    /// dashboard (see `logins`).
+    pub logins: Logins,
+}
+
+/// Username -> password of one listener, shared with the dashboard.
+pub type Users = std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>;
+
+/// The live login lists of the Brew, telemetry and control listeners.
+pub struct Logins {
+    pub brew: Users,
+    pub telemetry: Users,
+    pub control: Users,
+}
+
+impl Logins {
+    fn from_config(cfg: &Config) -> Self {
+        let users = |u: &std::collections::HashMap<String, String>| std::sync::Arc::new(std::sync::RwLock::new(u.clone()));
+        Self { brew: users(&cfg.auth.users), telemetry: users(&cfg.telemetry.users), control: users(&cfg.control.users) }
+    }
 }
 
 impl AppState {
@@ -370,6 +391,10 @@ impl AppState {
         let mut cfg = self.config.clone();
         cfg.blacklist.issis = self.blocked_list();
         if let Ok(p) = self.pools.read() { cfg.talkgroup_pools = p.clone(); }
+        if let Ok(u) = self.logins.brew.read() { cfg.auth.users = u.clone(); }
+        if let Ok(u) = self.logins.telemetry.read() { cfg.telemetry.users = u.clone(); }
+        if let Ok(u) = self.logins.control.read() { cfg.control.users = u.clone(); }
+        
         cfg
     }
 }
@@ -419,6 +444,7 @@ impl AppState {
         let sms_center = crate::sms_center::SmsCenter::open(config.sms_center.clone());
         let blocked: HashSet<u32> = config.blacklist.issis.iter().copied().collect();
         let pools = config.talkgroup_pools.clone();
+        let logins = Logins::from_config(&config);
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -436,6 +462,7 @@ impl AppState {
                 store,
                 blocked: std::sync::RwLock::new(blocked),
                 pools: std::sync::RwLock::new(pools),
+                logins,
             },
             aprs_rx,
         )

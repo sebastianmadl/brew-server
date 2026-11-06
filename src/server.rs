@@ -360,7 +360,7 @@ const MAX_BREW_USERNAME_DIGITS: usize = 7;
 
 /// A Brew username must be non-empty, all decimal digits, and at most
 /// `MAX_BREW_USERNAME_DIGITS` long.
-fn is_valid_brew_username(username: &str) -> bool {
+pub(crate) fn is_valid_brew_username(username: &str) -> bool {
     !username.is_empty()
         && username.len() <= MAX_BREW_USERNAME_DIGITS
         && username.bytes().all(|b| b.is_ascii_digit())
@@ -378,7 +378,7 @@ async fn verify_digest(state: &Arc<AppState>, headers: &HeaderMap, method: &str,
         warn!(username = %username, "rejecting Brew auth: username must be 1-7 digits");
         return None;
     }
-    let password = state.config.auth.users.get(username)?;
+    let password = state.logins.brew.read().ok().and_then(|u| u.get(username).cloned())?;
     let nonce = p.get("nonce")?;
     if !state.inner.read().await.digest_nonces.contains_key(nonce) { return None; }
     let realm = p.get("realm").map(String::as_str).unwrap_or("");

@@ -2,40 +2,6 @@
 
 All notable changes to brew-server, newest first.
 
-Version 1.21.0 adds:
-
-- **Redesigned dashboard.** A new dashboard in the style of the FlowStation
-  one: sidebar with Monitor, Network, Integrations and System, light and dark
-  following the system, a tab bar on phones, status shown with text and not
-  by colour alone, help behind "?" buttons. Overview, Calls, SDS, Radios,
-  Stations & Cells, Routing, Roaming, Telemetry, Control and HA are native
-  pages; Map, SIP, SMS Center, Telemetry SDS and Settings open the classic
-  pages inside it. It is the default. `[dashboard] legacy_ui = true` serves
-  the classic dashboard at `/` instead; both stay reachable under `/classic`
-  and `/ui`.
-
-  ```toml
-  [dashboard]
-  legacy_ui = false
-  ```
-
-- **DGNA to several radios.** The Routing page assigns a group (with an
-  optional name of up to 15 characters) to many radios at once, or takes it
-  away again, each through the control link of the Basestation the radio is
-  registered on (`POST /api/dgna`, admins). The radios' answers come back
-  over telemetry and show per radio (`GET /api/radios`).
-- **Talkgroup pools.** `[[talkgroup_pools]]` connects talkgroups inside the
-  server: a call on one group is played 1:1 on the others, voice and over end
-  included, both ways or only from the first group. A group that already has
-  a call is joined when that over ends. Pools are switched on and off,
-  edited, added and deleted on the Routing page and apply without a restart
-  (`GET /api/pools`, `POST /api/pools/save`). See
-  [docs/Routing.md](docs/Routing.md).
-- **HA page.** Changes applied live (blacklist, pools) no longer show as
-  pending changes.
-- **Backward compatible.** Without `[[talkgroup_pools]]` routing is
-  unchanged; nothing new is sent to Basestations, terminals or peers.
-
 Version 1.20.0 adds:
 
 - **Server name.** `[dashboard] servername` (default `"Tetra Network Monitor"`)
@@ -110,7 +76,52 @@ Version 1.20.0 adds:
   radio restores it on another Basestation, and a call between radios on two
   Basestations becomes local again when one radio comes to the other's
   Basestation. See [docs/Handover.md](docs/Handover.md).
-- **Backward compatible.** All new messages are sent only to Basestations
+- **Redesigned dashboard.** A new dashboard in the style of the FlowStation
+  one: sidebar with Monitor, Network, Integrations and System, light and dark
+  following the system, a tab bar on phones, status shown with text and not
+  by colour alone, help behind "?" buttons. Overview, Calls, SDS, Radios,
+  Stations & Cells, Routing, Roaming, Telemetry, Control, Accounts,
+  Configuration and HA are native pages; Map, SIP, SMS Center, Telemetry SDS and Settings open the classic
+  pages inside it. It is the default. `[dashboard] legacy_ui = true` serves
+  the classic dashboard at `/` instead; both stay reachable under `/classic`
+  and `/ui`.
+
+  ```toml
+  [dashboard]
+  legacy_ui = false
+  ```
+
+- **DGNA to several radios.** The Routing page assigns a group (with an
+  optional name of up to 15 characters) to many radios at once, or takes it
+  away again, each through the control link of the Basestation the radio is
+  registered on (`POST /api/dgna`, admins). The radios' answers come back
+  over telemetry and show per radio (`GET /api/radios`).
+- **Talkgroup pools.** `[[talkgroup_pools]]` connects talkgroups inside the
+  server: a call on one group is played 1:1 on the others, voice and over end
+  included, both ways or only from the first group. A group that already has
+  a call is joined when that over ends. Pools are switched on and off,
+  edited, added and deleted on the Routing page and apply without a restart
+  (`GET /api/pools`, `POST /api/pools/save`). See
+  [docs/Routing.md](docs/Routing.md).
+- **Login window.** The new dashboard signs in with its own login window
+  (Log in button top right, account menu with Log out) and a session cookie
+  (`POST /api/login`, `POST /api/logout`; sessions end after 12 hours idle
+  and on a restart). A closed dashboard shows only the login window until
+  someone signs in. HTTP Basic auth keeps working everywhere, so the classic
+  pages and scripts are unchanged.
+- **Accounts page.** Adds, changes and deletes the logins Basestations and
+  terminals connect with, on Brew (`[auth.users]`), telemetry
+  (`[telemetry.users]`) and control (`[control.users]`) at once or each on
+  its own. Applies to the next connection without a restart and is written
+  to the config file (`GET`/`POST /api/accounts`,
+  `DELETE /api/accounts/{username}`, admins).
+- **Configuration page.** The whole config file in an editor with a section
+  jump. Save checks the file (a mistake is shown with its line and nothing is
+  saved) and applies it with the usual restart.
+- **HA page.** Changes applied live (blacklist, pools, logins) no longer show
+  as pending changes.
+- **Backward compatible.** Without `[[talkgroup_pools]]` call routing is
+  unchanged. All new messages are sent only to Basestations
   that were offered the matching extension; TetraPack, Brandmeister and older
   Basestations see no change. The messages are specified for other
   implementations in [docs/Brew-Extensions.md](docs/Brew-Extensions.md).

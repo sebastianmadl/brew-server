@@ -86,3 +86,18 @@ legacy_ui = true
 
 Both stay reachable either way: the classic dashboard under `/classic`, the
 new one under `/ui`.
+
+## Logins and the config file
+
+Two more pages of the new dashboard, both for admins:
+
+- **Network -> Accounts:** the logins Basestations and terminals connect with.
+  One login can be on Brew (the station's or terminal's number, 1 to 7
+  digits), telemetry and control at once. Changes apply to the next
+  connection without a restart and are written to the config file;
+  connections already up stay until they reconnect. Adding the first
+  telemetry or control login turns the login on for that listener: stations
+  without one are refused from then on.
+- **System -> Configuration:** the whole config file. Save checks it and
+  applies it with a restart (running calls drop, stations reconnect, you sign
+  in again).

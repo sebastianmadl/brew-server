@@ -47,6 +47,35 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let app = app(state.clone());
+
+    if cfg.tls.enabled {
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &cfg.tls.cert_path,
+            &cfg.tls.key_path,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "loading dashboard TLS cert {} and key {}",
+                cfg.tls.cert_path.display(),
+                cfg.tls.key_path.display()
+            )
+        })?;
+        tracing::info!(listen=%listen, auth=!cfg.users.is_empty(), tls=true, "dashboard listening (TLS)");
+        axum_server::bind_rustls(listen, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(listen).await?;
+        tracing::info!(listen=%listen, auth=!cfg.users.is_empty(), tls=false, "dashboard listening");
+        axum::serve(listener, app).await?;
+    }
+    Ok(())
+}
+
+/// Every dashboard route with its auth layers.
+fn app(state: Arc<AppState>) -> Router {
     // Privileged routes -- viewing/editing server config *and* issuing
     // Basestation control commands -- are split into their own sub-router
     // with an extra require_admin layer, merged into the rest of the
@@ -72,6 +101,8 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/api/sms-center/{id}", axum::routing::delete(sms_center_delete))
         .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
         .route("/api/pools/save", axum::routing::post(crate::routing_api::pools_put))
+        .route("/api/accounts", get(crate::accounts::list).post(crate::accounts::upsert))
+        .route("/api/accounts/{username}", axum::routing::delete(crate::accounts::remove))
         .route("/api/ha/active", axum::routing::post(ha_make_active))
         .route("/api/ha/standby", axum::routing::post(ha_make_standby))
         .route("/api/ha/persist", axum::routing::post(ha_set_persist))
@@ -79,7 +110,7 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/api/config/ha", get(ha_config_get).put(ha_config_put))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
-    let app = Router::new()
+    Router::new()
         .route("/", get(index))
         .route("/classic", get(classic_index))
         .route("/ui", get(crate::dashboard_ui::page))
@@ -116,31 +147,9 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         // Unauthenticated liveness probe that works on both HA nodes (the
         // Brew listener's /healthz only exists on the Active one).
         .route("/healthz", get(dashboard_healthz))
-        .with_state(state.clone());
-
-    if cfg.tls.enabled {
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-            &cfg.tls.cert_path,
-            &cfg.tls.key_path,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "loading dashboard TLS cert {} and key {}",
-                cfg.tls.cert_path.display(),
-                cfg.tls.key_path.display()
-            )
-        })?;
-        tracing::info!(listen=%listen, auth=!cfg.users.is_empty(), tls=true, "dashboard listening (TLS)");
-        axum_server::bind_rustls(listen, rustls_config)
-            .serve(app.into_make_service())
-            .await?;
-    } else {
-        let listener = tokio::net::TcpListener::bind(listen).await?;
-        tracing::info!(listen=%listen, auth=!cfg.users.is_empty(), tls=false, "dashboard listening");
-        axum::serve(listener, app).await?;
-    }
-    Ok(())
+        .route("/api/login", axum::routing::post(crate::dashboard_auth::login))
+        .route("/api/logout", axum::routing::post(crate::dashboard_auth::logout))
+        .with_state(state)
 }
 
 /// HTTP Basic auth guard for every dashboard route (including the `/api/live`
@@ -159,8 +168,17 @@ async fn require_basic(State(state): State<Arc<AppState>>, request: Request, nex
         return next.run(request).await;
     }
     let users = &cfg.users;
-    if users.is_empty() || basic_username(users, request.headers()).is_some() {
+    if users.is_empty() || dashboard_user(users, request.headers()).is_some() {
         return next.run(request).await;
+    }
+    // The new dashboard's page and `whoami` load without a login: the page
+    // then opens its own login window.
+    let path = request.uri().path();
+    if path == "/ui" || path == "/api/whoami" || (path == "/" && !cfg.legacy_ui) {
+        return next.run(request).await;
+    }
+    if crate::dashboard_auth::from_ui(request.headers()) {
+        return (StatusCode::UNAUTHORIZED, "login required").into_response();
     }
     basic_challenge(&cfg.realm)
 }
@@ -183,9 +201,10 @@ async fn require_admin(State(state): State<Arc<AppState>>, request: Request, nex
     if cfg.users.is_empty() {
         return next.run(request).await; // auth disabled: everyone is an admin
     }
-    match basic_username(&cfg.users, request.headers()) {
+    match dashboard_user(&cfg.users, request.headers()) {
         Some(user) if cfg.admins.is_empty() || cfg.admins.iter().any(|a| a == &user) => next.run(request).await,
         Some(_) => (StatusCode::FORBIDDEN, "Forbidden: this dashboard user is not listed in [dashboard].admins\n").into_response(),
+        None if crate::dashboard_auth::from_ui(request.headers()) => (StatusCode::UNAUTHORIZED, "login required").into_response(),
         None => basic_challenge(&cfg.realm),
     }
 }
@@ -210,7 +229,7 @@ async fn login(Query(q): Query<HashMap<String, String>>) -> Redirect {
 /// this is purely a UI convenience.
 async fn whoami(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<serde_json::Value> {
     let cfg = &state.config.dashboard;
-    let username = basic_username(&cfg.users, &headers);
+    let username = dashboard_user(&cfg.users, &headers);
     let admin = match &username {
         _ if cfg.users.is_empty() => true, // auth disabled: everyone is effectively admin
         Some(user) => cfg.admins.is_empty() || cfg.admins.iter().any(|a| a == user),
@@ -219,7 +238,16 @@ async fn whoami(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<
     // A Login button is useful only in open mode, when nobody is signed in
     // yet and there's actually a credential to sign in with.
     let can_login = cfg.ui.open && username.is_none() && !cfg.users.is_empty();
-    Json(serde_json::json!({ "username": username, "admin": admin, "open": cfg.ui.open, "can_login": can_login }))
+    // Closed dashboard and nobody signed in: the new dashboard shows its
+    // login window and nothing else.
+    let need_login = !cfg.ui.open && username.is_none() && !cfg.users.is_empty();
+    Json(serde_json::json!({ "username": username, "admin": admin, "open": cfg.ui.open, "can_login": can_login, "need_login": need_login }))
+}
+
+/// The signed-in dashboard user: HTTP Basic credentials, or the session
+/// cookie of the new dashboard's login window.
+fn dashboard_user(users: &HashMap<String, String>, headers: &HeaderMap) -> Option<String> {
+    basic_username(users, headers).or_else(|| crate::dashboard_auth::session_user(users, headers))
 }
 
 /// Validates the request's HTTP Basic credentials against `users` and
@@ -1133,7 +1161,7 @@ pub async fn config_raw_get(State(state): State<Arc<AppState>>) -> Response {
 pub async fn config_raw_put(State(state): State<Arc<AppState>>, body: String) -> Response {
     let cfg = match config::Config::parse(&body) {
         Ok(cfg) => cfg,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid config: {e}")).into_response(),
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid config: {e:#}")).into_response(),
     };
     match save_config(&state, &cfg).await {
         Ok(()) => Json(saved_note(&state)).into_response(),
@@ -2176,6 +2204,63 @@ mod tests {
 
         let missing = login(Query(HashMap::new())).await.into_response();
         assert_eq!(loc(missing.headers()), "/");
+    }
+
+    /// One raw HTTP/1.1 request to the test server; returns the response head and body.
+    async fn http(addr: std::net::SocketAddr, req: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        c.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        c.read_to_string(&mut out).await.unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn login_window_session_works_next_to_basic_auth() {
+        let mut c = config::Config::default();
+        c.storage.enabled = false;
+        c.sms_center.enabled = false;
+        c.dashboard.users = HashMap::from([("admin".into(), "pw".into()), ("viewer".into(), "v".into())]);
+        c.dashboard.admins = vec!["admin".into()];
+        let state = Arc::new(AppState::new(c, "test.toml".into()).0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+        let get = |path: &str, extra: &str| format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{extra}\r\n");
+
+        // The new page and whoami load without a login; whoami asks for one.
+        assert!(http(addr, get("/", "")).await.starts_with("HTTP/1.1 200"));
+        let who = http(addr, get("/api/whoami", "")).await;
+        assert!(who.contains("\"need_login\":true"), "{who}");
+        // Data needs a login: the browser's dialog for classic pages, a plain 401 for the new page.
+        let classic = http(addr, get("/api/status", "")).await;
+        assert!(classic.starts_with("HTTP/1.1 401") && classic.to_lowercase().contains("www-authenticate"), "{classic}");
+        let ui = http(addr, get("/api/status", "x-brew-ui: 1\r\n")).await;
+        assert!(ui.starts_with("HTTP/1.1 401") && !ui.to_lowercase().contains("www-authenticate"), "{ui}");
+        // Basic still works.
+        let b64 = base64::engine::general_purpose::STANDARD.encode("admin:pw");
+        assert!(http(addr, get("/api/status", &format!("Authorization: Basic {b64}\r\n"))).await.starts_with("HTTP/1.1 200"));
+
+        // Wrong password: no cookie.
+        let post = |body: &str| format!("POST /api/login HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let bad = http(addr, post(r#"{"username":"admin","password":"no"}"#)).await;
+        assert!(bad.starts_with("HTTP/1.1 401") && !bad.to_lowercase().contains("set-cookie"), "{bad}");
+        // Viewer: signed in, but not for admin routes.
+        let cookie_of = |r: &str| r.lines().find(|l| l.to_lowercase().starts_with("set-cookie:")).unwrap()
+            .split_once(':').unwrap().1.trim().split(';').next().unwrap().to_string();
+        let v = http(addr, post(r#"{"username":"viewer","password":"v"}"#)).await;
+        let vc = cookie_of(&v);
+        assert!(http(addr, get("/api/status", &format!("Cookie: {vc}\r\nx-brew-ui: 1\r\n"))).await.starts_with("HTTP/1.1 200"));
+        assert!(http(addr, get("/api/accounts", &format!("Cookie: {vc}\r\nx-brew-ui: 1\r\n"))).await.starts_with("HTTP/1.1 403"));
+        // Admin: admin routes, then logout ends the session.
+        let a = http(addr, post(r#"{"username":"admin","password":"pw"}"#)).await;
+        assert!(a.contains("\"admin\":true"), "{a}");
+        let ac = cookie_of(&a);
+        assert!(http(addr, get("/api/accounts", &format!("Cookie: {ac}\r\nx-brew-ui: 1\r\n"))).await.starts_with("HTTP/1.1 200"));
+        let out = format!("POST /api/logout HTTP/1.1\r\nHost: x\r\nConnection: close\r\nCookie: {ac}\r\nContent-Length: 0\r\n\r\n");
+        assert!(http(addr, out).await.starts_with("HTTP/1.1 204"));
+        assert!(http(addr, get("/api/accounts", &format!("Cookie: {ac}\r\nx-brew-ui: 1\r\n"))).await.starts_with("HTTP/1.1 401"));
     }
 }
 

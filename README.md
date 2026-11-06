@@ -32,8 +32,11 @@ servername = "Tetra Network Monitor"
 The dashboard (port 9003) has a sidebar layout that follows the system's
 light or dark mode. Its **Routing** page sends DGNA to several radios at once
 and manages talkgroup pools, which connect talkgroups inside the server
-without a restart ([docs/Routing.md](docs/Routing.md)). To keep the classic
-dashboard at `/`:
+without a restart ([docs/Routing.md](docs/Routing.md)). **Accounts** adds
+the logins of Basestations and terminals (Brew, telemetry, control) without a
+restart, and **Configuration** edits the whole config file. Sign in with the
+Log in button top right; HTTP Basic auth keeps working too. To keep the
+classic dashboard at `/`:
 
 ```toml
 [dashboard]
