@@ -682,11 +682,11 @@ R.calls=()=>{
   const st=D.status,now=Date.now();if(!st)return '<div class="empty">Loading…</div>';
   const legs=legIds();const q=UI.filter.calls||'';const k=UI.filter.callk||'all';
   const act=st.active_calls.filter(x=>!legs.has(x.uuid));
-  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination)));
+  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination),c.kind==='group'&&c.destination>16777215?tgTxt(c.destination):''));
   return `<div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${act.length}</span></div>${act.length?act.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
   <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span></div>
   <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th><th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
-   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
+   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 R.sds=()=>{

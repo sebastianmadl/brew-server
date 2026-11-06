@@ -40,7 +40,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 /// Longest network name accepted from the dashboard.
@@ -360,6 +360,26 @@ fn dest(pkt: &[u8]) -> u32 {
     u32::from_le_bytes(pkt[DEST_AT..DEST_AT + 4].try_into().unwrap_or_default())
 }
 
+fn src(pkt: &[u8]) -> u32 {
+    u32::from_le_bytes(pkt[DEST_AT - 4..DEST_AT].try_into().unwrap_or_default())
+}
+
+/// One readable log line for a call crossing the link (GROUP_TX = a new
+/// over, GROUP_IDLE = call end); other packets are not logged.
+fn log_crossing(network: &str, dir: &str, before: &[u8], after: Option<&[u8]>) {
+    if is_group_tx(before) {
+        let (talker, gssi) = (src(before), dest(before));
+        match (dir, after) {
+            ("in", Some(_)) => info!("multi network: call in from {network}:{gssi}, talker {talker}"),
+            ("in", None) => debug!("multi network: call on {network}:{gssi} not bridged, dropped"),
+            (_, Some(p)) => info!("multi network: call out to {network}:{}, talker {talker}", dest(p)),
+            _ => {}
+        }
+    } else if is_group_idle(before) && after.is_some() {
+        info!("multi network: call {dir} ended ({network})");
+    }
+}
+
 fn set_dest(pkt: &mut [u8], value: u32) {
     pkt[DEST_AT..DEST_AT + 4].copy_from_slice(&value.to_le_bytes());
 }
@@ -458,10 +478,19 @@ async fn run_session(
     let mut ping = keepalive.map(Keepalive::ping_timer);
     let ids: SharedCallIds = Arc::default();
     let mut outbound = Outbound::new(slot, ids.clone());
+    let out_name = net.name.clone();
     let writer = tokio::spawn(async move {
         loop {
             let packet = tokio::select! {
-                p = rx.recv() => match p { Some(p) => outbound.translate(p), None => break },
+                p = rx.recv() => match p {
+                    Some(p) => {
+                        let probe = (is_group_tx(&p) || is_group_idle(&p)).then(|| p.clone());
+                        let out = outbound.translate(p);
+                        if let Some(before) = probe { log_crossing(&out_name, "out", &before, out.as_deref()); }
+                        out
+                    }
+                    None => break,
+                },
                 p = up_rx.recv() => match p { Some(p) => Some(p), None => break },
                 _ = federation::ping_due(&mut ping) => {
                     if ws_tx.send(Message::Ping(Default::default())).await.is_err() { break; }
@@ -491,7 +520,10 @@ async fn run_session(
             Ok(Message::Binary(data)) => {
                 let pools = pools_now(state);
                 let groups = bridged_groups(&pools, &name);
-                if let Some(p) = inbound.translate(data.to_vec(), |g| groups.contains(&g)) {
+                let probe = (is_group_tx(&data) || is_group_idle(&data)).then(|| data.to_vec());
+                let p = inbound.translate(data.to_vec(), |g| groups.contains(&g));
+                if let Some(before) = probe { log_crossing(&name, "in", &before, p.as_deref()); }
+                if let Some(p) = p {
                     crate::router::handle_packet(state.clone(), id, p).await;
                 }
             }
@@ -664,6 +696,15 @@ mod tests {
 
     fn group_tx(id: Uuid, src: u32, dst: u32) -> Vec<u8> {
         protocol::build_group_tx(&id, src, dst, 0)
+    }
+
+    #[test]
+    fn log_line_reads_talker_and_group() {
+        let pkt = group_tx(Uuid::new_v4(), 2320972, 909);
+        assert_eq!((src(&pkt), dest(&pkt)), (2320972, 909));
+        // Short or foreign packets are not logged and do not panic.
+        log_crossing("Test", "in", &[protocol::CLASS_CALL_CONTROL, protocol::CALL_GROUP_TX], None);
+        log_crossing("Test", "out", &pkt, Some(&pkt));
     }
 
     #[test]
