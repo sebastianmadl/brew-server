@@ -232,6 +232,10 @@ pub struct NetworkConfig {
     /// their calls here. 0: nothing is registered (only for a server that
     /// routes groups without affiliations).
     pub bridge_issi: u32,
+    /// Register a talker there (and affiliate it to the group) before its
+    /// first over goes out, the way a Basestation registers its radios
+    /// before they talk. Off: talkers are passed through unregistered.
+    pub register_talkers: bool,
     pub reconnect_interval_seconds: u64,
     /// TLS settings, as for `[[federation.peers]]`.
     pub tls: bool,
@@ -253,6 +257,7 @@ impl Default for NetworkConfig {
             password: String::new(),
             user_agent: String::new(),
             bridge_issi: 0,
+            register_talkers: true,
             reconnect_interval_seconds: 15,
             tls: false,
             tls_ca_path: "/etc/ssl/certs/ca-certificates.crt".into(),

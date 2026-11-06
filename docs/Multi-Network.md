@@ -23,7 +23,15 @@ station (migration) and individual calls or SDS across networks come later.
   affiliated to the bridged groups, so that network's server sends their
   calls here. With `bridge_issi = 0` nothing is registered (only for a server
   that routes groups without affiliations).
-- **Nothing else crosses**, in either direction: no registrations, no
+- **Talkers are registered there** (`register_talkers`, default on): before
+  a talker's first over goes out, the link registers its ISSI in that network
+  and affiliates it to the group, as a Basestation does for its radios (a
+  server such as TetraPack does not show or route a talker it does not know).
+  They are deregistered when the link is stopped. Switch it off for a link
+  to this same server (a loop test): there the registration would move the
+  radio off its own station. There is no collision check yet: an ISSI that is
+  registered in that network elsewhere is moved to this link.
+- **Nothing else crosses**, in either direction: no other registrations, no
   services, no calls on groups that are not bridged. A station cannot send
   into another network by itself.
 - A **main switch** (`enabled`, on the Multi Network page next to "This
@@ -52,6 +60,7 @@ username = "1234567"      # Basestation login there
 password = "secret"
 user_agent = "TMO-Austria Infra 1.0"
 bridge_issi = 9000001     # ISSI of the bridge in that network, 0 = none
+register_talkers = true   # register talkers there before their first over
 reconnect_interval_seconds = 15
 tls = true                # wss://, settings as for [[federation.peers]]
 # tls_ca_path, tls_server_name, tls_pinned_cert_path
@@ -90,9 +99,9 @@ listen to a group of another network on several groups here).
   `keepalive_timeout_seconds`.
 - A network that is used by a pool cannot be deleted or renamed; remove its
   groups from the pools first.
-- Whether the far server accepts a talker ISSI that is not registered there
-  depends on that server. Registering the talkers there ("register all ISSI",
-  with a filter and a collision check) is the next step.
+- Registering all radios there ("register all ISSI", with a filter and a
+  collision check) is the next step; today only talkers are registered, on
+  their first over.
 
 ## Standards
 

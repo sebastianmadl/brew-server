@@ -899,7 +899,7 @@ R.multinet=()=>{
    ${M.networks.length?`<div class="tw"><table><thead><tr><th style="width:52px">On</th><th>Network</th><th>Link</th><th>Server</th><th>Bridge ISSI</th><th>Bridged groups</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No other networks yet.</div>'}
    ${msgDiv('net-msg')}</div>`;
 };
-const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
+const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,register_talkers:n.register_talkers!==false,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
 const mnPlain=()=>({enabled:D.nets.enabled,name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
 async function saveNets(cfg,okText,sheet){
   const m=sheet?$('sheet-msg'):null;if(m){m.className='msg mut';m.textContent='Saving…';}
@@ -919,7 +919,7 @@ function editSelf(){const M=D.nets;
   $('scrim').classList.add('on');setTimeout(()=>$('ms-name').focus(),30);}
 function saveSelf(){const c=mnPlain();c.name=v('ms-name').trim();c.mcc=+v('ms-mcc')||0;c.mnc=+v('ms-mnc')||0;saveNets(c,'Saved.',true);}
 function editNet(i){
-  const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
+  const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,register_talkers:true,reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
   const hasPw=i>=0&&D.nets.networks[i].has_password;
   const hp=splitHost(n.remote_host);
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit network':'New network'}</h3></div><div class="sb">
@@ -930,6 +930,7 @@ function editNet(i){
    <div style="display:flex;gap:10px">${fld('ne-user','Login (Basestation ID there)',n.username,'autocomplete="off"')}${fld('ne-pw','Password',hasPw?'':'','type="password" autocomplete="new-password" placeholder="'+(hasPw?'unchanged':'')+'"')}</div>
    ${fld('ne-ua','Connection name (how this server introduces itself there)',n.user_agent,'maxlength="80" placeholder="'+esc(D.nets.default_user_agent)+'"')}
    ${fld('ne-issi','Bridge ISSI in that network (0 = none)',n.bridge_issi,'inputmode="numeric"')}
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-reg" aria-checked="${n.register_talkers}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Register talkers there before they talk (like a base station)</label>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-tls" aria-checked="${n.tls}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> TLS (wss://)</label>
    ${fld('ne-sni','TLS server name (empty: host)',n.tls_server_name)}
    ${fld('ne-pin','Pinned certificate file (self-signed server, empty: off)',n.tls_pinned_cert_path)}
@@ -947,7 +948,7 @@ function saveNet(i){
   const remote_host=host?(host.includes(':')?'['+host+']':host)+':'+port:'';
   const c=mnPlain();const old=i>=0?c.networks[i]:{reconnect_interval_seconds:15,tls_ca_path:'/etc/ssl/certs/ca-certificates.crt'};
   const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host,path:v('ne-path').trim()||'/brew',
-    username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,
+    username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,register_talkers:$('ne-reg').getAttribute('aria-checked')==='true',
     tls:$('ne-tls').getAttribute('aria-checked')==='true',tls_server_name:v('ne-sni').trim(),tls_pinned_cert_path:v('ne-pin').trim(),
     enabled:$('ne-on').getAttribute('aria-checked')==='true'});
   if(i>=0)c.networks[i]=n;else c.networks.push(n);

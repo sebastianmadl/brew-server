@@ -321,7 +321,17 @@ fn ids_lock(ids: &SharedCallIds) -> std::sync::MutexGuard<'_, CallIds> {
 pub struct Outbound {
     slot: u8,
     ids: SharedCallIds,
+    /// Talkers registered over there by this link, with their groups
+    /// (`None` = talkers are not registered).
+    talkers: Option<SharedTalkers>,
+    bridge_issi: u32,
 }
+
+/// Talkers a link registered in the other network (ISSI -> groups).
+pub type SharedTalkers = Arc<std::sync::Mutex<HashMap<u32, BTreeSet<u32>>>>;
+
+/// Bound on the talkers a link keeps registered.
+const MAX_TALKERS: usize = 1024;
 
 /// What a link lets in: group calls on the groups it bridges (with the alias
 /// put on) and the call control and frames of those calls, under this
@@ -385,7 +395,41 @@ fn set_dest(pkt: &mut [u8], value: u32) {
 }
 
 impl Outbound {
-    pub fn new(slot: u8, ids: SharedCallIds) -> Self { Self { slot, ids } }
+    pub fn new(slot: u8, ids: SharedCallIds) -> Self { Self { slot, ids, talkers: None, bridge_issi: 0 } }
+
+    /// Also register talkers over there before their first over.
+    pub fn registering(mut self, talkers: SharedTalkers, bridge_issi: u32) -> Self {
+        self.talkers = Some(talkers);
+        self.bridge_issi = bridge_issi;
+        self
+    }
+
+    /// Everything the link sends for `pkt`: the talker's registration and
+    /// affiliation there when it is new (as a Basestation does for a radio
+    /// before it talks), then the packet as it goes over, or nothing if
+    /// the packet stays here.
+    pub fn packets(&mut self, pkt: Vec<u8>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        if let (Some(talkers), true) = (&self.talkers, is_group_tx(&pkt)) {
+            let talker = src(&pkt);
+            if let Some((slot, gssi)) = split_alias(dest(&pkt)) {
+                if slot == self.slot && talker != 0 && talker <= GSSI_MASK && talker != self.bridge_issi {
+                    let mut t = talkers.lock().unwrap_or_else(|e| e.into_inner());
+                    if !t.contains_key(&talker) && t.len() < MAX_TALKERS {
+                        out.push(protocol::build_subscriber_message(protocol::SUB_REGISTER, talker, &[]));
+                        t.insert(talker, BTreeSet::new());
+                    }
+                    if let Some(groups) = t.get_mut(&talker) {
+                        if groups.insert(gssi) {
+                            out.push(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, talker, &[gssi]));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(p) = self.translate(pkt) { out.push(p); }
+        out
+    }
 
     /// The packet as it goes to the other network, or `None` if it stays.
     pub fn translate(&mut self, mut pkt: Vec<u8>) -> Option<Vec<u8>> {
@@ -477,7 +521,9 @@ async fn run_session(
     let keepalive = Keepalive::from_config(&state.config.federation);
     let mut ping = keepalive.map(Keepalive::ping_timer);
     let ids: SharedCallIds = Arc::default();
+    let talkers: SharedTalkers = Arc::default();
     let mut outbound = Outbound::new(slot, ids.clone());
+    if net.register_talkers { outbound = outbound.registering(talkers.clone(), net.bridge_issi); }
     let out_name = net.name.clone();
     let writer = tokio::spawn(async move {
         loop {
@@ -485,21 +531,23 @@ async fn run_session(
                 p = rx.recv() => match p {
                     Some(p) => {
                         let probe = (is_group_tx(&p) || is_group_idle(&p)).then(|| p.clone());
-                        let out = outbound.translate(p);
-                        if let Some(before) = probe { log_crossing(&out_name, "out", &before, out.as_deref()); }
+                        let out = outbound.packets(p);
+                        if let Some(before) = probe { log_crossing(&out_name, "out", &before, out.last().map(|p| p.as_slice()).filter(|p| p.first() == Some(&protocol::CLASS_CALL_CONTROL))); }
                         out
                     }
                     None => break,
                 },
-                p = up_rx.recv() => match p { Some(p) => Some(p), None => break },
+                p = up_rx.recv() => match p { Some(p) => vec![p], None => break },
                 _ = federation::ping_due(&mut ping) => {
                     if ws_tx.send(Message::Ping(Default::default())).await.is_err() { break; }
                     continue;
                 }
             };
-            if let Some(p) = packet {
-                if ws_tx.send(Message::Binary(p.into())).await.is_err() { break; }
+            let mut gone = false;
+            for p in packet {
+                if ws_tx.send(Message::Binary(p.into())).await.is_err() { gone = true; break; }
             }
+            if gone { break; }
         }
         let _ = ws_tx.close().await;
     });
@@ -533,9 +581,16 @@ async fn run_session(
         }
     }
     // Deregister the bridge ISSI on a deliberate stop (best effort).
-    if stopped(stop) && net.bridge_issi != 0 {
-        let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, net.bridge_issi, &[]));
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    // Deregister the talkers it registered there, too.
+    if stopped(stop) {
+        let registered: Vec<u32> = talkers.lock().map(|t| t.keys().copied().collect()).unwrap_or_default();
+        for issi in &registered {
+            let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, *issi, &[]));
+        }
+        if net.bridge_issi != 0 {
+            let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, net.bridge_issi, &[]));
+        }
+        if net.bridge_issi != 0 || !registered.is_empty() { tokio::time::sleep(Duration::from_millis(200)).await; }
     }
     drop(up_tx);
     writer.abort();
@@ -643,6 +698,7 @@ pub struct NetworkView {
     pub has_password: bool,
     pub user_agent: String,
     pub bridge_issi: u32,
+    pub register_talkers: bool,
     pub reconnect_interval_seconds: u64,
     pub tls: bool,
     pub tls_server_name: String,
@@ -677,7 +733,7 @@ pub fn snapshot(state: &AppState) -> MultiNetworkView {
             name: n.name.clone(), slot: slots.get(&n.name).copied().unwrap_or(0), enabled: n.enabled, mcc: n.mcc, mnc: n.mnc,
             remote_host: n.remote_host.clone(), path: n.path.clone(), username: n.username.clone(),
             has_password: !n.password.is_empty(), user_agent: n.user_agent.clone(), bridge_issi: n.bridge_issi,
-            reconnect_interval_seconds: n.reconnect_interval_seconds, tls: n.tls,
+            register_talkers: n.register_talkers, reconnect_interval_seconds: n.reconnect_interval_seconds, tls: n.tls,
             tls_server_name: n.tls_server_name.clone(),
             tls_ca_path: n.tls_ca_path.display().to_string(),
             tls_pinned_cert_path: n.tls_pinned_cert_path.display().to_string(),
@@ -696,6 +752,28 @@ mod tests {
 
     fn group_tx(id: Uuid, src: u32, dst: u32) -> Vec<u8> {
         protocol::build_group_tx(&id, src, dst, 0)
+    }
+
+    #[test]
+    fn talker_is_registered_and_affiliated_once_before_its_first_over() {
+        let talkers: SharedTalkers = Arc::default();
+        let mut out = Outbound::new(2, Arc::default()).registering(talkers.clone(), 9_000_001);
+        let kinds = |v: &[Vec<u8>]| v.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>();
+        let reg = (protocol::CLASS_SUBSCRIBER, protocol::SUB_REGISTER);
+        let aff = (protocol::CLASS_SUBSCRIBER, protocol::SUB_AFFILIATE);
+        let gtx = (protocol::CLASS_CALL_CONTROL, protocol::CALL_GROUP_TX);
+        let first = out.packets(group_tx(Uuid::new_v4(), 2320972, alias(2, 909)));
+        assert_eq!(kinds(&first), vec![reg, aff, gtx]);
+        assert_eq!(&first[1][18..22], &909u32.to_le_bytes());
+        assert_eq!(kinds(&out.packets(group_tx(Uuid::new_v4(), 2320972, alias(2, 909)))), vec![gtx]);
+        assert_eq!(kinds(&out.packets(group_tx(Uuid::new_v4(), 2320972, alias(2, 910)))), vec![aff, gtx]);
+        // The bridge ISSI is registered already; other networks' calls stay.
+        assert_eq!(kinds(&out.packets(group_tx(Uuid::new_v4(), 9_000_001, alias(2, 909)))), vec![gtx]);
+        assert!(out.packets(group_tx(Uuid::new_v4(), 2320973, alias(3, 909))).is_empty());
+        assert_eq!(talkers.lock().unwrap().get(&2320972).map(|g| g.len()), Some(2));
+        // Switched off: passed through as before.
+        let mut plain = Outbound::new(2, Arc::default());
+        assert_eq!(kinds(&plain.packets(group_tx(Uuid::new_v4(), 2320972, alias(2, 909)))), vec![gtx]);
     }
 
     #[test]
@@ -996,6 +1074,9 @@ mod e2e {
         stations[0].send(Message::Binary(protocol::build_group_tx(&call, 2_320_001, 9, 0).into())).await.unwrap();
         let (far_call, src, dst) = next_group_tx(&mut far, 2000).await.expect("call reaches the other network");
         assert_eq!((src, dst), (2_320_001, 909));
+        // Like a Basestation, the link registered the talker there first
+        // and affiliated it to the group.
+        assert!(tp.inner.read().await.subscribers.get(&2_320_001).is_some_and(|s| s.groups.contains(&909)));
         // The radio over there answers in that call: heard on TG 9 here,
         // by the first talker's station too.
         far.send(Message::Binary(protocol::build_group_tx(&far_call, 1234, 909, 0).into())).await.unwrap();
@@ -1067,6 +1148,7 @@ mod e2e {
         reconcile(&main);
         wait_until("main switch off: link gone", async || main.inner.read().await.netlinks.is_empty()).await;
         wait_until("main switch off: bridge gone there", async || !tp.inner.read().await.subscribers.contains_key(&9_000_001)).await;
+        wait_until("main switch off: talkers gone there", async || !tp.inner.read().await.subscribers.contains_key(&2_320_001)).await;
         assert!(!snapshot(&main).networks[0].connected);
         if let Ok(mut live) = main.networks.write() { live.enabled = true; }
         reconcile(&main);
@@ -1144,7 +1226,9 @@ mod e2e {
         let addr = listener.local_addr().unwrap();
         let mut cfg = base_config();
         cfg.multi_network.networks.push(NetworkConfig {
-            name: "Loop".into(), remote_host: addr.to_string(), bridge_issi: 9_000_001, ..Default::default()
+            // A link to this same server must not register the talkers:
+            // that would move them off their own station here.
+            name: "Loop".into(), remote_host: addr.to_string(), bridge_issi: 9_000_001, register_talkers: false, ..Default::default()
         });
         cfg.talkgroup_pools.push(TalkgroupPoolConfig {
             name: "TestLink".into(), enabled: true, both_ways: true, groups: vec![9],
