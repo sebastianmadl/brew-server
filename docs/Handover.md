@@ -184,7 +184,7 @@ radios survives a station change in both directions:
   ends the Brew call. Not restored within 8 s: the other radio's call ends
   as above.
 
-Multi-cell FlowStations do not announce `call-handoff` yet.
+Multi-cell FlowStations do not announce `call-handoff` yet. Between the cells of one multi-cell FlowStation such calls survive a cell change without the server: the FlowStation handles them itself.
 
 ## What the dashboard shows
 

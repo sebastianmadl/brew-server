@@ -54,7 +54,9 @@ Version 1.20.0 adds:
   registration log.
 - **Cell Change Log.** The Connections page lists every cell change of a
   radio with from / to cell and how (announced, not announced, within
-  station); kept in memory, 200 entries.
+  station); with the `ms-reselection` extension the Basestation the radio
+  left reports the reselection type (undeclared, unannounced, announced
+  type 1 / 2 / 3, `SERVICE_MS_RESELECTION`). Kept in memory, 200 entries.
 - **Unannounced cell change.** When a radio registers on another Basestation
   without a prepared handover, the Basestation it left gets
   `SERVICE_MS_MOVED` if it asked for it (`ms-moved` capability and
