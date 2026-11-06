@@ -380,9 +380,14 @@ impl Logins {
 }
 
 impl AppState {
-    /// May `issi` affiliate to and talk on `gssi` (`[group_access]`)?
+    /// May `issi` affiliate to `gssi` (`[group_access]`)?
     pub fn group_permits(&self, gssi: u32, issi: u32) -> bool {
         self.group_access.read().map_or(true, |g| g.get(&gssi.to_string()).is_none_or(|a| a.permits(issi)))
+    }
+
+    /// May `issi` talk on `gssi` (`[group_access]`: admitted and not RX only)?
+    pub fn group_may_talk(&self, gssi: u32, issi: u32) -> bool {
+        self.group_access.read().map_or(true, |g| g.get(&gssi.to_string()).is_none_or(|a| a.may_talk(issi)))
     }
 
     pub fn is_blocked(&self, issi: u32) -> bool {

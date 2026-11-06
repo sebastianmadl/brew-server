@@ -142,14 +142,23 @@ Version 1.20.0 adds:
   restart (affiliations the group no longer admits are dropped) and written
   to the config file:
 
+  RX only (switch plus an optional list) makes radios listeners: every radio
+  when the list is empty, otherwise only the listed ones. A listener may
+  attach and hear the group but gets no floor.
+
   ```toml
   [group_access."2321"]
   mode = "allow"            # or "block"
   issis = [2320972, 2321100]
+  rx_only = true            # optional
+  rx_only_issis = [2321100] # optional, empty = everyone listens only
   ```
 
-  The radio's own Basestation still lets it attach on the air: Brew has no
-  message to refuse an affiliation there.
+  With the new `group-access` extension a Basestation that asks for it gets
+  the lists (`SERVICE_GROUP_ACCESS`, 0x1F, after its announcement and on
+  every change) and refuses the attachment and the request to talk on the
+  air itself (FlowStation). A Basestation without it still lets the radio
+  attach and talk locally: base Brew has no message to refuse that.
 - **Software version.** The Stations page shows the version a Basestation or
   terminal sends in its User-Agent (FlowStation sends its release).
 - **Appearance.** System, Light or Dark in the account menu (the sun button

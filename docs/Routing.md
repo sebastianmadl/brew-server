@@ -125,14 +125,27 @@ Two more pages of the new dashboard, both for admins:
   network nor pulls the group's calls to its station, and a pool does not
   copy its calls to that group. Changing the list drops the affiliations it
   no longer admits; opening it again takes effect when the radios affiliate
-  again. The radio's own Basestation still lets it attach on the air (Brew
-  has no message to refuse an affiliation), and it hears a call that reaches
-  its station for other members.
+  again.
+
+  **RX only** makes radios listeners on the group: with the list empty every
+  radio, otherwise only the listed ISSIs. A listener is admitted (it may
+  attach and hears the calls) but the server drops its group calls, so it
+  gets no floor. Talking needs both: admitted by Access and not listen-only.
+
+  A Basestation that announces the `group-access` capability (FlowStation)
+  gets the lists live and refuses on the air itself: the attachment of a
+  group the radio may not use, the call set-up and the request to talk of a
+  radio that may not talk (see [Brew-Extensions.md](Brew-Extensions.md),
+  section 12). On any other Basestation the radio can still attach and talk
+  locally (base Brew has no message to refuse it), and it hears a call that
+  reaches its station for other members.
 
   ```toml
   [group_access."2321"]
   mode = "allow"            # or "block"
   issis = [2320972, 2321100]
+  rx_only = true            # optional
+  rx_only_issis = [2321100] # optional, empty = everyone listens only
   ```
 - **System -> Configuration:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign

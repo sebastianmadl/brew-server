@@ -945,12 +945,14 @@ R.issis=()=>{
   const acc=K==='gssi'?(D.access||{}):{};
   const keys=[...new Set([...Object.keys(names),...seen.keys(),...Object.keys(acc)])].sort((a,b)=>a-b);
   const rows=keys.filter(k=>(f==='all'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k])||(f==='limited'&&acc[k]))&&match(q,k,names[k],...((acc[k]||{}).issis||[])));
-  const accCell=k=>{const a=acc[k];if(!a||!a.issis.length)return '<span class="mut">Open</span>';const n=a.issis.length;
-    return a.mode==='block'?`<span class="chip w" title="${a.issis.join(', ')}">${n} blocked</span>`:`<span class="chip a" title="${a.issis.join(', ')}">Only ${n} ISSI${n===1?'':'s'}</span>`;};
+  const accCell=k=>{const a=acc[k];if(!a)return '<span class="mut">Open</span>';const n=a.issis.length;
+    const join=!n?'':a.mode==='block'?`<span class="chip w" title="${a.issis.join(', ')}">${n} blocked</span>`:`<span class="chip a" title="${a.issis.join(', ')}">Only ${n} ISSI${n===1?'':'s'}</span>`;
+    const rx=!a.rx_only?'':a.rx_only_issis.length?`<span class="chip i" title="${a.rx_only_issis.join(', ')}">${a.rx_only_issis.length} RX only</span>`:'<span class="chip i">RX only</span>';
+    return [join,rx].filter(Boolean).join(' ')||'<span class="mut">Open</span>';};
   const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
   const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
-    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). The server then records an affiliation only for an admitted radio and drops a group call from any other (emergency calls always pass), so it neither talks on the group across the network nor pulls the group\'s calls to its station. The radio\'s own Basestation still lets it attach on the air (Brew has no message to refuse that), and a radio there hears a call that reaches that station for other members. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>).';
+    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones; who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>).';
   return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']]:[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>
   <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
@@ -969,7 +971,10 @@ function editName(k){
    ${K==='gssi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Access</span><div class="seg" role="radiogroup" id="in-acc" style="margin-top:5px">${[['open','Open'],['allow','Only these'],['block','Block these']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${am===v}" aria-checked="${am===v}" onclick="setAcc('${v}')">${l}</button>`).join('')}</div></div>
    <div id="in-acc-box" ${am==='open'?'hidden':''}><label class="l" for="in-acc-list" id="in-acc-l">${am==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)'}</label>
    <textarea class="f" id="in-acc-list" rows="4" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, 2321100">${a?a.issis.join(', '):''}</textarea>
-   <div class="mut" style="font-size:12px;margin-top:4px">Separated by commas, spaces or new lines. An empty list opens the group.</div></div>`:''}
+   <div class="mut" style="font-size:12px;margin-top:4px">Separated by commas, spaces or new lines. An empty list opens the group.</div></div>
+   <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="in-rx" aria-checked="${!!(a&&a.rx_only)}" onclick="const on=this.getAttribute('aria-checked')!=='true';this.setAttribute('aria-checked',on);$('in-rx-box').hidden=!on"></button><span><b style="font-size:13.5px">RX only</b><br><span class="mut" style="font-size:12px">Listen only: these radios may not talk on the group</span></span></label>
+   <div id="in-rx-box" ${a&&a.rx_only?'':'hidden'}><label class="l" for="in-rx-list">Listen-only ISSIs (empty = everyone)</label>
+   <textarea class="f" id="in-rx-list" rows="3" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="empty = nobody may talk">${a?a.rx_only_issis.join(', '):''}</textarea></div>`:''}
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveName()">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>(k?$('in-name'):$('in-issi')).focus(),30);
@@ -980,10 +985,11 @@ async function saveName(){
   const K=dirK();const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
   let acc=null;
   if(K==='gssi'){const b=document.querySelector('#in-acc button[aria-pressed="true"]');const v=b?b.dataset.v:'open';
-    acc={gssi:issi,mode:v==='block'?'block':'allow',issis:v==='open'?'':$('in-acc-list').value};
+    const rx=$('in-rx').getAttribute('aria-checked')==='true';
+    acc={gssi:issi,mode:v==='block'?'block':'allow',issis:v==='open'?'':$('in-acc-list').value,rx_only:rx,rx_only_issis:rx?$('in-rx-list').value:''};
     if(v!=='open'&&!acc.issis.trim()){m.className='msg err';m.textContent='Enter at least one ISSI, or choose Open.';return;}}
   const had=dirNames()[issi]||'';
-  if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
+  if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||acc.rx_only||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
   m.className='msg mut';m.textContent='Saving…';
   try{
     if(name||had)D[K]=await postJ(DIR[K].api+'/set',{issi,name});

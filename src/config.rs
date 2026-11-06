@@ -70,12 +70,15 @@ pub struct Config {
 
 /// Who may use one group: `mode = "allow"` lets only the listed ISSIs
 /// affiliate to it and talk on it, `mode = "block"` keeps the listed ISSIs
-/// out. An empty list leaves the group open.
+/// out. An empty list leaves the group open. `rx_only` makes radios listeners
+/// only: all of them when `rx_only_issis` is empty, else the listed ones.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct GroupAccessConfig {
     pub mode: GroupAccessMode,
     pub issis: Vec<u32>,
+    pub rx_only: bool,
+    pub rx_only_issis: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -87,7 +90,17 @@ pub enum GroupAccessMode {
 }
 
 impl GroupAccessConfig {
-    /// May `issi` use the group?
+    /// Nothing limited: no entry needed.
+    pub fn is_open(&self) -> bool {
+        self.issis.is_empty() && !self.rx_only
+    }
+
+    /// May `issi` talk on the group (admitted and not a listener only)?
+    pub fn may_talk(&self, issi: u32) -> bool {
+        self.permits(issi) && !(self.rx_only && (self.rx_only_issis.is_empty() || self.rx_only_issis.contains(&issi)))
+    }
+
+    /// May `issi` affiliate to (and listen on) the group?
     pub fn permits(&self, issi: u32) -> bool {
         if self.issis.is_empty() {
             return true;
@@ -106,7 +119,7 @@ pub fn validate_group_access(g: &std::collections::BTreeMap<String, GroupAccessC
     for (k, a) in g {
         let ok = k.trim().parse::<u32>().is_ok_and(|n| (1..=0xFF_FFFF).contains(&n));
         anyhow::ensure!(ok, "group_access: '{k}' is not a GSSI (1 to 16777215)");
-        if let Some(i) = a.issis.iter().find(|i| !(1..=0xFF_FFFF).contains(*i)) {
+        if let Some(i) = a.issis.iter().chain(&a.rx_only_issis).find(|i| !(1..=0xFF_FFFF).contains(*i)) {
             anyhow::bail!("group_access.{k}: {i} is not an ISSI (1 to 16777215)");
         }
     }

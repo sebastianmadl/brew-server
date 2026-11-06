@@ -37,7 +37,7 @@ connect talkgroups inside the server without a restart
 Basestations and terminals (Brew, telemetry, control) without a restart, with
 an info text and position per login, the **Directory** keeps names for ISSIs
 and groups (`[issi_names]`, `[gssi_names]`) and who may use a group (allow or
-block list, `[group_access]`), and **Configuration** edits the whole config
+block list and RX only, `[group_access]`), and **Configuration** edits the whole config
 file. Sign in with the Log in button top right; HTTP Basic auth keeps working
 too. To keep the classic dashboard at `/`:
 

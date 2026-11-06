@@ -40,7 +40,7 @@ The extensions use:
 | --- | --- | --- |
 | `CLASS_SUBSCRIBER` | `0xf0` | `SUB_REGISTER` (1), `SUB_REREGISTER` (2), `SUB_DEREGISTER` (0), `SUB_AFFILIATE` (8): unchanged. A registration on B is what moves a radio. |
 | `CLASS_CALL_CONTROL` | `0xf1` | `GROUP_TX` (2), `GROUP_IDLE` (3), `CALL_RELEASE` (10) with its cause byte, `SIMPLEX_GRANTED` (12), `SIMPLEX_IDLE` (13): unchanged. |
-| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1E`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
+| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1F`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
 
 Routing stays as in Brew: one routing entry per ISSI, the newest registration
 wins, and a registration keeps the ISSI's group affiliations.
@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -80,6 +80,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `call-restore` | takes individual calls that move with their radio | `call-restore` (FlowStation: together with `handover-v1`) |
 | `call-handoff` | hands a local call between two of its radios to the network, and joins a network call of two of its radios locally (section 8.5) | `call-handoff` (FlowStation: together with `call-restore`, not on multi-cell stations yet) |
 | `cell-directory` | wants `SERVICE_CELL_DIRECTORY` (section 5.3) | `cell-directory` (FlowStation: on its own, also on multi-cell stations) |
+| `group-access` | refuses group attachments and requests to talk itself, from `SERVICE_GROUP_ACCESS` (section 12) | `group-access` (FlowStation: on its own, also on multi-cell stations) |
 
 ### 3.3 Summary
 
@@ -96,6 +97,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1C` | `SERVICE_CALL_NOT_RESTORED` | B → server | `call-restore` | B: `call-restore` |
 | `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
 | `0x1E` | `SERVICE_CALL_HANDOFF` | server → A → server | `call-handoff` | A: `call-handoff` |
+| `0x1F` | `SERVICE_GROUP_ACCESS` | server → Basestation | `group-access` | `group-access` |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
 reselection), and add the others one by one; each is independent except where
@@ -835,11 +837,85 @@ over. Without late entry it would hear nothing until the next over.
 | with extensions | A or B without `call-handoff` | local calls between two radios end when one leaves; a call over Brew stays on Brew |
 | without `cell-directory` | with | the Basestation gets no list; its neighbour list works as configured, only without names and checks |
 | with `cell-directory` | older Basestation | no capability, no list; the server lists its cells to the others without the optional fields |
+| with `group-access` | without | the server still records no affiliation for a radio the group does not admit and drops its group calls, but the Basestation lets it attach and talk locally |
 
 Every new field is optional for the receiver, and unknown fields and types
 are ignored, so a newer side can always talk to an older one.
 
-## 12. Implementation checklist
+## 12. Group access (`group-access`)
+
+Not about cell changes, but negotiated the same way. The server keeps, per
+group, who may use it; the Basestation enforces it on the air, so a radio
+that may not use a group is refused before it attaches or talks, and also
+on calls that stay local to one Basestation.
+
+### 12.1 The rule per group
+
+- `mode` `allow` with `issis`: only these ISSIs may attach (and listen);
+  `block`: every ISSI but these. An empty `issis` admits everyone.
+- `rx_only` `true`: radios listen only; with `rx_only_issis` empty that is
+  every radio, otherwise only the listed ones.
+- An ISSI may *talk* (start a call on the group, get the floor) when it is
+  admitted and not listen-only.
+- Emergency calls (call priority 15, "pre-emptive priority 4 (Emergency)", table 14.46) always pass.
+- A group without an entry is open.
+
+### 12.2 `SERVICE_GROUP_ACCESS` (0x1F)
+
+Server → Basestation, extension `group-access`, only to a Basestation that
+named the `group-access` capability in its last `SERVICE_BTS_INFO`. The whole
+table each time; open groups are left out, so `{"groups":[]}` opens all.
+
+```json
+{"groups":[
+ {"gssi":2321,"mode":"allow","issis":[2320972,2321100],"rx_only":false,"rx_only_issis":[]},
+ {"gssi":9,"mode":"block","issis":[4013],"rx_only":true,"rx_only_issis":[2320972]}]}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `groups` | yes | 0 to 4096 entries, sorted by GSSI |
+| `gssi` | yes | 1 to 16777215 |
+| `mode` | no | `allow` (default) or `block` |
+| `issis`, `rx_only_issis` | no | ISSIs, 1 to 16777215 each; absent = empty |
+| `rx_only` | no | default `false` |
+
+Server:
+
+- Sends the table to a capable Basestation right after each of its
+  `SERVICE_BTS_INFO`, and to every capable Basestation whenever it changes.
+- Enforces the rules on its side too, for Basestations without the
+  capability: records `SUB_AFFILIATE` only for admitted ISSIs and drops a
+  `GROUP_TX` from an ISSI that may not talk (not for emergency calls).
+
+Basestation:
+
+- Keeps the last table; a malformed message is dropped and the previous
+  table stays; a single bad entry is left out (that group stays open).
+  Forget the table on reconnect (a new one follows the announcement).
+- Attachment of a group the radio may not use (U-ATTACH/DETACH GROUP
+  IDENTITY, or the group identity location demand of U-LOCATION UPDATE
+  DEMAND): refuse it in the acknowledgement, with group identity
+  accept/reject = 1 (table 16.44) and the group in the group identity
+  downlink with a group identity detachment downlink reason (clause 16.8.2;
+  in the location update accept, clause 16.10.23). FlowStation uses
+  "Temporary 1 detachment" (table 16.52; the values are network dependent):
+  the rules can change, and an MS should not retry a group detached
+  permanently. Detachments are never refused.
+- U-TX DEMAND from a radio that may not talk: an individually addressed
+  D-TX GRANTED "transmission not granted" (clause 14.5.2.2.1 b), table
+  14.80); the radio stays in the call.
+- Group U-SETUP from a radio the group does not admit, or from a listen-only
+  radio when no call runs: D-RELEASE. ETSI names no disconnect cause for
+  this; FlowStation uses "Requested service not available" (table 14.55).
+- Group U-SETUP from a listen-only radio while a call runs (late entry): it
+  joins to listen; its individually addressed D-CONNECT says "not allowed to
+  request for transmission" (transmission request permission = 1, clause
+  14.8.43, table 14.81) and does not grant it the floor.
+- The rules are per group, so a multi-cell Basestation applies them on
+  every cell.
+
+## 13. Implementation checklist
 
 Server:
 
@@ -860,6 +936,7 @@ Server:
 - [ ] Optional: `SERVICE_MS_CELL`, `SERVICE_MS_RESELECTION` for display.
 - [ ] Optional: keep the optional cell fields of `SERVICE_BTS_INFO` (5.1.1)
       and send `SERVICE_CELL_DIRECTORY` (5.3) to capable Basestations.
+- [ ] Optional: send `SERVICE_GROUP_ACCESS` (12.2) to capable Basestations.
 
 Basestation:
 
@@ -879,13 +956,17 @@ Basestation:
       join a network call of two own radios on U-CALL RESTORE.
 - [ ] Optional: report what each cell broadcasts in `SERVICE_BTS_INFO`
       (5.1.1); take `SERVICE_CELL_DIRECTORY` to name and check neighbours.
+- [ ] Optional: take `SERVICE_GROUP_ACCESS` and refuse attachments, set-ups
+      and requests to talk (section 12).
 
-## 13. Reference implementation
+## 14. Reference implementation
 
 - brew-server: `src/carriers.rs` (registry, `SERVICE_BTS_INFO`,
   `SERVICE_MS_CELL`, `SERVICE_CELL_DIRECTORY`), `src/handover.rs` (relay, `SERVICE_MS_MOVED`),
   `src/roaming_log.rs` (`SERVICE_MS_RESELECTION`), `src/call_restore.rs`,
+  `src/group_access.rs` (`SERVICE_GROUP_ACCESS`),
   `src/router.rs` (registration handling and late entry).
 - FlowStation: `crates/tetra-entities/src/net_brew/protocol.rs` (messages),
-  `net_brew/worker.rs` (negotiation, cell directory), `net_dashboard/roaming.rs` (Roaming page), `mle/mle_bs.rs` (U-PREPARE,
+  `net_brew/worker.rs` (negotiation, cell directory, group access), `mm/mm_bs.rs` and
+  `cmce/subentities/cc_bs/procedures/` (group access on the air), `net_dashboard/roaming.rs` (Roaming page), `mle/mle_bs.rs` (U-PREPARE,
   D-NEW-CELL, D-PREPARE-FAIL), the Brew entity and CMCE for restores.

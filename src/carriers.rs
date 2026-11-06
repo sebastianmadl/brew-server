@@ -31,8 +31,9 @@ pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 /// (`SERVICE_CALL_RESTORE`, see `call_restore`), `call-handoff`
 /// (`SERVICE_CALL_HANDOFF`, see `call_restore`) and
 /// `cell-directory` (`SERVICE_CELL_DIRECTORY`, to a Basestation that also names
-/// it in its capabilities, see `directory_updates`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory";
+/// it in its capabilities, see `directory_updates`) and `group-access`
+/// (`SERVICE_GROUP_ACCESS`, likewise, see `group_access::updates`).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access";
 
 /// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`) for
 /// `SERVICE_CELL_DIRECTORY`.
@@ -571,6 +572,10 @@ pub async fn handle_bts_info(state: &Arc<AppState>, source: ClientId, json: &str
     for (to, packet) in directory_updates(&inner, (!changed).then_some(source)) {
         if let Some(client) = inner.clients.get(&to) { let _ = client.tx.send(packet); }
     }
+    // And who may use which group, if it asked for it.
+    for (to, packet) in crate::group_access::updates(state, &inner, Some(source)) {
+        if let Some(client) = inner.clients.get(&to) { let _ = client.tx.send(packet); }
+    }
 }
 
 fn directory_entries(inner: &crate::state::Inner) -> Vec<DirectoryEntry> {
@@ -866,7 +871,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY, crate::group_access::CAPABILITY]);
     }
 
     #[test]

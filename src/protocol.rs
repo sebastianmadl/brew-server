@@ -161,6 +161,13 @@ pub const SERVICE_CALL_HANDOFF: u8 = 0x1E;
 /// (see `carriers::directory_updates`).
 pub const SERVICE_CELL_DIRECTORY: u8 = 0x1D;
 
+/// `CLASS_SERVICE` type the server sends to a Basestation with who may use
+/// which group (`{"groups":[{"gssi":N,"mode":"allow"|"block","issis":[..],
+/// "rx_only":bool,"rx_only_issis":[..]}]}`), so it refuses a group
+/// attachment or a request to talk itself. Only sent to a Basestation that
+/// announced the `group-access` capability (see `group_access::updates`).
+pub const SERVICE_GROUP_ACCESS: u8 = 0x1F;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());

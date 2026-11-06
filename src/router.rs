@@ -219,8 +219,8 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from a blacklisted ISSI dropped");
         return;
     }
-    if !state.group_permits(gt.destination, gt.source) && !emergency {
-        info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from an ISSI the group does not admit dropped (group_access)");
+    if !state.group_may_talk(gt.destination, gt.source) && !emergency {
+        info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from an ISSI that may not talk on the group dropped (group_access)");
         return;
     }
     let mut inner = state.inner.write().await;
@@ -2607,7 +2607,7 @@ mod group_access_tests {
     #[tokio::test]
     async fn an_allow_list_admits_only_the_listed_radios() {
         // Only 5000 (station 0) and 5001 (station 1).
-        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![5000, 5001] }));
+        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![5000, 5001], ..Default::default() }));
         let mut st = network(&state).await;
         assert_eq!(affiliated(&state).await, vec![5000, 5001], "other affiliations are not recorded");
 
@@ -2626,7 +2626,7 @@ mod group_access_tests {
 
     #[tokio::test]
     async fn a_block_list_keeps_the_listed_radios_out_and_an_empty_list_is_open() {
-        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![5000, 5010, 5020] }));
+        let state = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![5000, 5010, 5020], ..Default::default() }));
         let mut st = network(&state).await;
         let all: Vec<u32> = (5001..5025).filter(|i| ![5010, 5020].contains(i)).collect();
         assert_eq!(affiliated(&state).await, all);
@@ -2637,9 +2637,67 @@ mod group_access_tests {
         assert_eq!(heard[0], 0, "station 0 has only blocked radios: no call for it");
         assert_eq!(heard.iter().filter(|n| **n == 1).count(), 8, "every other station with an admitted radio hears it");
 
-        let open = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![] }));
+        let open = strict(Some(GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![], ..Default::default() }));
         network(&open).await;
         assert_eq!(affiliated(&open).await.len(), 25, "an empty list leaves the group open");
+    }
+
+    #[tokio::test]
+    async fn rx_only_radios_listen_but_may_not_talk() {
+        // Everyone listens only, except nobody: no talker at all (but an emergency).
+        let state = strict(Some(GroupAccessConfig { rx_only: true, ..Default::default() }));
+        let mut st = network(&state).await;
+        assert_eq!(affiliated(&state).await.len(), 25, "listeners stay affiliated");
+        talk(&state, st[0].0, 5000, 0).await;
+        assert!(st.iter_mut().all(|(_, rx)| drain(rx) == 0));
+        let id = talk(&state, st[0].0, 5000, EMERGENCY_PRIORITY).await;
+        assert!(state.inner.read().await.calls.contains_key(&id), "an emergency call passes");
+
+        // Only 5001 and 5002 listen only; 5003 talks and all nine other stations hear it.
+        let state = strict(Some(GroupAccessConfig { rx_only: true, rx_only_issis: vec![5001, 5002], ..Default::default() }));
+        let mut st = network(&state).await;
+        talk(&state, st[1].0, 5001, 0).await;
+        assert!(st.iter_mut().all(|(_, rx)| drain(rx) == 0));
+        talk(&state, st[3].0, 5003, 0).await;
+        let heard: Vec<usize> = st.iter_mut().map(|(_, rx)| drain(rx)).collect();
+        assert_eq!(heard.iter().filter(|n| **n == 1).count(), 9);
+    }
+
+    /// A Basestation that announced `group-access` gets the lists after its
+    /// `SERVICE_BTS_INFO` and on every change; one without it never does.
+    #[tokio::test]
+    async fn capable_stations_get_the_lists() {
+        let path = std::env::temp_dir().join(format!("brew-access2-{}.toml", uuid::Uuid::new_v4().simple()));
+        let mut config = crate::config::Config::default();
+        config.storage.enabled = false;
+        config.sms_center.enabled = false;
+        config.group_access.insert("2321".into(), GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![4013], ..Default::default() });
+        let state = Arc::new(AppState::new(config, path.clone()).0);
+        let (a, mut a_rx) = bts(&state).await;
+        let (b, mut b_rx) = bts(&state).await;
+        let lists = |rx: &mut mpsc::UnboundedReceiver<Vec<u8>>| -> Vec<serde_json::Value> {
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .filter(|p| p.len() > 2 && p[0] == protocol::CLASS_SERVICE && p[1] == protocol::SERVICE_GROUP_ACCESS)
+                .map(|p| serde_json::from_slice(&p[2..p.len() - 1]).unwrap())
+                .collect()
+        };
+        handle_packet(state.clone(), a, protocol::build_service(protocol::SERVICE_BTS_INFO,
+            r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1528,"carrier_ext":264,"location_area":2}],"capabilities":["group-access"]}"#)).await;
+        handle_packet(state.clone(), b, protocol::build_service(protocol::SERVICE_BTS_INFO,
+            r#"{"mcc":232,"mnc":5,"cells":[{"carrier":1530,"carrier_ext":264,"location_area":1}]}"#)).await;
+        let got = lists(&mut a_rx);
+        assert_eq!(got, vec![serde_json::json!({"groups":[{"gssi":2321,"mode":"block","issis":[4013],"rx_only":false,"rx_only_issis":[]}]})]);
+        assert!(lists(&mut b_rx).is_empty(), "no capability, no lists");
+
+        let r = crate::group_access::set(
+            axum::extract::State(state.clone()),
+            axum::Json(crate::group_access::AccessRequest { gssi: "2321".into(), mode: GroupAccessMode::Allow, issis: String::new(), rx_only: true, rx_only_issis: "4014".into() }),
+        ).await;
+        assert_eq!(r.status(), axum::http::StatusCode::OK);
+        assert_eq!(lists(&mut a_rx), vec![serde_json::json!({"groups":[{"gssi":2321,"mode":"allow","issis":[],"rx_only":true,"rx_only_issis":[4014]}]})]);
+        assert!(lists(&mut b_rx).is_empty());
+        crate::CONFIG_WRITE_APPLIED_LIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -2654,7 +2712,7 @@ mod group_access_tests {
         assert_eq!(affiliated(&state).await.len(), 25);
         let r = crate::group_access::set(
             axum::extract::State(state.clone()),
-            axum::Json(crate::group_access::AccessRequest { gssi: GSSI.to_string(), mode: GroupAccessMode::Allow, issis: "5000\n5001".into() }),
+            axum::Json(crate::group_access::AccessRequest { gssi: GSSI.to_string(), mode: GroupAccessMode::Allow, issis: "5000\n5001".into(), rx_only: false, rx_only_issis: String::new() }),
         ).await;
         assert_eq!(r.status(), axum::http::StatusCode::OK);
         assert_eq!(affiliated(&state).await, vec![5000, 5001]);
