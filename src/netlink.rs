@@ -1067,6 +1067,22 @@ mod e2e {
         assert!(state.inner.read().await.calls.values().any(|c| c.destination == target), "the link may");
     }
 
+    fn voice(id: &Uuid) -> Vec<u8> {
+        protocol::build_traffic_frame(id, &[1; protocol::ACELP_CODED_FRAME_BYTES], &[2; protocol::ACELP_CODED_FRAME_BYTES])
+    }
+
+    /// Call id of the next voice frame a station gets within `ms`.
+    async fn next_voice(ws: &mut Ws, ms: u64) -> Option<Uuid> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Ok(Some(Ok(msg))) = tokio::time::timeout(left, ws.next()).await else { return None };
+            if let Message::Binary(b) = msg {
+                if b.first() == Some(&protocol::CLASS_FRAME) && b.get(1) == Some(&protocol::FRAME_TRAFFIC_CHANNEL) { return call_id(&b); }
+            }
+        }
+    }
+
     /// Next CALL_GROUP_IDLE a station gets within `ms`.
     async fn next_idle(ws: &mut Ws, ms: u64) -> Option<Uuid> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
@@ -1109,8 +1125,11 @@ mod e2e {
         // TG 9 -> TG 909 and the end.
         let call = Uuid::new_v4();
         a.send(Message::Binary(protocol::build_group_tx(&call, 100, 9, 0).into())).await.unwrap();
-        let (_, src, dst) = next_group_tx(&mut b, 2000).await.expect("909 hears TG 9");
+        let (b_call, src, dst) = next_group_tx(&mut b, 2000).await.expect("909 hears TG 9");
         assert_eq!((src, dst), (100, 909));
+        // Voice crosses, under the call id 909 knows.
+        a.send(Message::Binary(voice(&call).into())).await.unwrap();
+        assert_eq!(next_voice(&mut b, 2000).await, Some(b_call), "909 hears the voice");
         a.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call, 0).into())).await.unwrap();
         assert!(next_idle(&mut b, 2000).await.is_some());
         wait_until("no call left", async || state.inner.read().await.calls.is_empty()).await;
@@ -1120,9 +1139,13 @@ mod e2e {
         b.send(Message::Binary(protocol::build_group_tx(&x, 200, 909, 0).into())).await.unwrap();
         let (leg, src, dst) = next_group_tx(&mut a, 2000).await.expect("TG 9 hears 909");
         assert_eq!((src, dst), (200, 9));
+        b.send(Message::Binary(voice(&x).into())).await.unwrap();
+        assert_eq!(next_voice(&mut a, 2000).await, Some(leg), "TG 9 hears the voice");
         a.send(Message::Binary(protocol::build_group_tx(&leg, 100, 9, 0).into())).await.unwrap();
         let (id, src, dst) = next_group_tx(&mut b, 2000).await.expect("909 hears the answer");
         assert_eq!((id, src, dst), (x, 100, 909));
+        a.send(Message::Binary(voice(&leg).into())).await.unwrap();
+        assert_eq!(next_voice(&mut b, 2000).await, Some(x), "909 hears the answer's voice");
         a.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &leg, 0).into())).await.unwrap();
         assert_eq!(next_idle(&mut b, 2000).await, Some(x));
         wait_until("no call left after the answer", async || state.inner.read().await.calls.is_empty()).await;
