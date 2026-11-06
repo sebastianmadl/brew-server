@@ -212,11 +212,13 @@ async fn connect_and_run(state: &Arc<AppState>, net: &NetworkConfig, slot: u8, g
     let tls = if peer.tls { Some(federation::tls_connector(&peer)?) } else { None };
     let who = LinkIdentity { mode: "Basestation", user_agent: user_agent(net) };
     let dial = async {
-        let path = federation::normalize_path(&peer.path);
+        // Paths as configured / discovered: a trailing slash may matter to
+        // the far server.
+        let path = leading_slash(&peer.path);
         let ws_path = federation::discover(&peer, tls.as_ref(), &path, &[], who).await?;
         let remote_addr = tokio::net::lookup_host(&peer.remote_host).await.ok().and_then(|mut it| it.next());
         let scheme = if tls.is_some() { "wss" } else { "ws" };
-        let ws_url = format!("{scheme}://{}{}", peer.remote_host, federation::normalize_path(&ws_path));
+        let ws_url = format!("{scheme}://{}{}", peer.remote_host, leading_slash(&ws_path));
         let mut request = ws_url.into_client_request()?;
         request.headers_mut().insert("User-Agent", who.user_agent.parse()?);
         request.headers_mut().insert("X-Brew-Mode", "Basestation".parse()?);
@@ -234,6 +236,11 @@ async fn connect_and_run(state: &Arc<AppState>, net: &NetworkConfig, slot: u8, g
     info!(network = %net.name, slot, "multi network: link up");
     run_session(state, net, slot, gen, ws, remote_addr, stop).await;
     Ok(())
+}
+
+fn leading_slash(path: &str) -> String {
+    let p = path.trim();
+    if p.starts_with('/') { p.to_string() } else { format!("/{p}") }
 }
 
 /// Groups of network `name` that the switched-on pools bridge.

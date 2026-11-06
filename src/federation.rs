@@ -356,9 +356,20 @@ pub(crate) async fn discover(
     extra: &[(&str, String)],
     who: LinkIdentity<'_>,
 ) -> anyhow::Result<String> {
-    let resp = http_get(peer, tls, path, None, extra, who).await?;
+    // A server may move its discovery path (`/brew` -> `/brew/`) with a
+    // redirect: followed a few times, on the same server only.
+    let mut path = path.to_string();
+    let mut resp = http_get(peer, tls, &path, None, extra, who).await?;
+    for _ in 0..MAX_REDIRECTS {
+        if !matches!(resp.status, 301 | 302 | 303 | 307 | 308) { break; }
+        let location = resp.headers.get("location")
+            .ok_or_else(|| anyhow::anyhow!("discovery status {} with no Location", resp.status))?;
+        path = redirect_path(peer, tls.is_some(), location)?;
+        resp = http_get(peer, tls, &path, None, extra, who).await?;
+    }
+    let path = path.as_str();
     match resp.status {
-        200 => Ok(String::from_utf8(resp.body)?.trim().to_string()),
+        200 => ws_path_from(resp.body),
         401 => {
             let challenge_hdr = resp.headers.get("www-authenticate")
                 .ok_or_else(|| anyhow::anyhow!("401 with no WWW-Authenticate"))?;
@@ -371,10 +382,44 @@ pub(crate) async fn discover(
             if resp2.status != 200 {
                 anyhow::bail!("digest auth rejected (HTTP {})", resp2.status);
             }
-            Ok(String::from_utf8(resp2.body)?.trim().to_string())
+            ws_path_from(resp2.body)
         }
         other => anyhow::bail!("unexpected discovery status {other}"),
     }
+}
+
+/// The WebSocket path a discovery answered with. Anything that is not a
+/// plain path (a web page behind a redirect, an error text) is refused, so
+/// it is never dialled.
+fn ws_path_from(body: Vec<u8>) -> anyhow::Result<String> {
+    let text = String::from_utf8(body)?;
+    let p = text.trim();
+    if p.is_empty() || p.len() > 256 || p.chars().any(|c| c.is_whitespace() || c == '<') {
+        anyhow::bail!("discovery answered with something that is not a path (wrong path configured?)");
+    }
+    Ok(p.to_string())
+}
+
+/// Redirects of one discovery that are followed.
+const MAX_REDIRECTS: usize = 3;
+
+/// Path a discovery redirect points to: a path, or a URL on the same host
+/// and scheme (anything else is an error that says what to configure).
+fn redirect_path(peer: &FederationPeerConfig, tls: bool, location: &str) -> anyhow::Result<String> {
+    let location = location.trim();
+    if location.starts_with('/') { return Ok(location.to_string()); }
+    let (scheme, rest) = location.split_once("://")
+        .ok_or_else(|| anyhow::anyhow!("discovery redirected to {location:?}"))?;
+    let want = if tls { "https" } else { "http" };
+    if !scheme.eq_ignore_ascii_case(want) {
+        anyhow::bail!("discovery redirected to {location} ({}: switch TLS {})", scheme, if tls { "off" } else { "on" });
+    }
+    let (authority, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(a, p)| (a, format!("/{p}")));
+    let host_of = |h: &str| h.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map_or(h, |(h, _)| h).to_ascii_lowercase();
+    if host_of(authority) != host_of(&peer.remote_host) {
+        anyhow::bail!("discovery redirected to another server: {location}");
+    }
+    Ok(path)
 }
 
 /// Neighbour id from the 101 response when the peer accepted loop-safe mode;
@@ -577,6 +622,36 @@ mod tests {
             requests
         });
         (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn discovery_follows_a_redirect_on_the_same_server() {
+        const MOVED: &str = "HTTP/1.1 301 Moved Permanently\r\nLocation: /brew/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (addr, server) = http_stub(vec![MOVED, OK], None).await;
+        let peer = FederationPeerConfig { remote_host: addr, ..Default::default() };
+        assert_eq!(discover(&peer, None, "/brew", &[], PEER_IDENTITY).await.unwrap(), "/brew/");
+        let requests = server.await.unwrap();
+        assert!(requests[1].starts_with("GET /brew/ HTTP/1.1\r\n"), "{:?}", requests[1]);
+    }
+
+    #[tokio::test]
+    async fn discovery_refuses_a_web_page() {
+        const PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Length: 27\r\nConnection: close\r\n\r\n<html><body>Hi</body></html";
+        let (addr, _server) = http_stub(vec![PAGE], None).await;
+        let peer = FederationPeerConfig { remote_host: addr, ..Default::default() };
+        let err = discover(&peer, None, "/brew", &[], PEER_IDENTITY).await.unwrap_err().to_string();
+        assert!(err.contains("not a path"), "{err}");
+    }
+
+    #[test]
+    fn redirect_path_stays_on_the_same_server() {
+        let peer = FederationPeerConfig { remote_host: "core.example.net:443".into(), ..Default::default() };
+        assert_eq!(redirect_path(&peer, true, "/brew/").unwrap(), "/brew/");
+        assert_eq!(redirect_path(&peer, true, "https://core.example.net/brew/").unwrap(), "/brew/");
+        assert_eq!(redirect_path(&peer, true, "https://CORE.example.net:443/x").unwrap(), "/x");
+        assert!(redirect_path(&peer, true, "https://evil.example/brew").is_err());
+        let err = redirect_path(&peer, false, "https://core.example.net/brew/").unwrap_err().to_string();
+        assert!(err.contains("switch TLS on"), "{err}");
     }
 
     fn assert_identifies_as_peer(request: &str) {

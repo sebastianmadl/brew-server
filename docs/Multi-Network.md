@@ -47,7 +47,7 @@ enabled = true
 mcc = 901
 mnc = 9000
 remote_host = "brew.example.net:443"
-path = "/brew"
+path = "/brew/"           # TetraPack: /brew/ (trailing slash matters)
 username = "1234567"      # Basestation login there
 password = "secret"
 user_agent = "TMO-Austria Infra 1.0"
@@ -75,6 +75,10 @@ listen to a group of another network on several groups here).
 
 - The pool rules apply unchanged (one talker per group, a group with its own
   call joins after it, legs end with the call).
+- The discovery path is used exactly as configured (TetraPack needs
+  `/brew/`; `/brew` is redirected to its web page there). A redirect on the
+  same server is followed; an answer that is not a WebSocket path is refused
+  with a hint.
 - The keepalive of the links is `[federation] keepalive_interval_seconds` /
   `keepalive_timeout_seconds`.
 - A network that is used by a pool cannot be deleted or renamed; remove its
