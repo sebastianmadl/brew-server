@@ -27,6 +27,19 @@ of the config:
 servername = "Tetra Network Monitor"
 ```
 
+## Dashboard
+
+The dashboard (port 9003) has a sidebar layout that follows the system's
+light or dark mode. Its **Routing** page sends DGNA to several radios at once
+and manages talkgroup pools, which connect talkgroups inside the server
+without a restart ([docs/Routing.md](docs/Routing.md)). To keep the classic
+dashboard at `/`:
+
+```toml
+[dashboard]
+legacy_ui = true
+```
+
 ## Run directly
 
 Requires a Rust toolchain and a C compiler (the vendored ACELP codec in
@@ -57,6 +70,7 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 - [Handover](docs/Handover.md) -- radios keep group and individual calls when they move between Basestations
 - [Brew extensions](docs/Brew-Extensions.md) -- the protocol behind it, for other server and Basestation implementations
 - [Late entry](docs/Late-Entry.md) -- join running group calls mid-over
+- [Routing](docs/Routing.md) -- DGNA to several radios, talkgroup pools
 - [ISSI blacklist](docs/ISSI-Blacklist.md)
 - [Basestation locations](docs/Basestation-Locations.md)
 
@@ -68,4 +82,4 @@ one LAN. See [docs/High-Availability.md](docs/High-Availability.md).
 ## Credits
 
 - Joaquin EA5GVK
-- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions
+- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions, dashboard redesign, Routing page and talkgroup pools

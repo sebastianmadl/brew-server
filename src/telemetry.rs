@@ -591,6 +591,11 @@ pub struct TelemetryState {
     /// is keyed only by ISSI, with no BTS-id concept on the wire, so it isn't
     /// nested under a station the way that one is.
     pub brew_ms_rssi: HashMap<u32, f32>,
+    /// Each radio's groups as its station last reported them
+    /// (`MsGroupCatalogSnapshot`), keyed by ISSI.
+    pub ms_groups: HashMap<u32, Vec<MsGroupInfo>>,
+    /// The last DGNA answer per ISSI (`DgnaStatus`) and when it came (ms).
+    pub dgna_status: HashMap<u32, (DgnaStatusInfo, u64)>,
     store: Option<Arc<crate::store::Store>>,
 }
 
@@ -861,6 +866,14 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
     };
 
     let mut t = state.telemetry.write().await;
+    if !t.stations.contains_key(id) { return; }
+    // A radio's groups and the answer to a DGNA, kept per ISSI for the
+    // dashboard's Routing page (whichever station reported them last).
+    match &event {
+        TelemetryEvent::MsGroupCatalogSnapshot { issi, groups } => { t.ms_groups.insert(*issi, groups.clone()); }
+        TelemetryEvent::DgnaStatus(status) => { t.dgna_status.insert(status.issi, (status.clone(), now_ms())); }
+        _ => {}
+    }
     let Some(bts) = t.stations.get_mut(id) else { return };
     bts.last_event_at_ms = now_ms();
 

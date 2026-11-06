@@ -29,11 +29,11 @@ pub fn set_server_name(name: &str) {
     let _ = SERVER_NAME.set(html_escape(name));
 }
 
-fn server_name() -> &'static str {
+pub(crate) fn server_name() -> &'static str {
     SERVER_NAME.get_or_init(|| html_escape(&config::DashboardConfig::default().servername))
 }
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -70,6 +70,8 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/api/config/blacklist", get(blacklist_get))
         .route("/api/config/blacklist/{issi}", axum::routing::post(blacklist_add).delete(blacklist_remove))
         .route("/api/sms-center/{id}", axum::routing::delete(sms_center_delete))
+        .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
+        .route("/api/pools/save", axum::routing::post(crate::routing_api::pools_put))
         .route("/api/ha/active", axum::routing::post(ha_make_active))
         .route("/api/ha/standby", axum::routing::post(ha_make_standby))
         .route("/api/ha/persist", axum::routing::post(ha_set_persist))
@@ -79,6 +81,10 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/classic", get(classic_index))
+        .route("/ui", get(crate::dashboard_ui::page))
+        .route("/api/radios", get(crate::routing_api::radios))
+        .route("/api/pools", get(crate::routing_api::pools_get))
         .route("/calls", get(calls_page))
         .route("/sds", get(sds_page))
         .route("/telemetry-sds", get(telemetry_sds_page))
@@ -245,7 +251,13 @@ fn basic_challenge(realm: &str) -> Response {
 static INDEX_HTML: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| HTML.replace("__STYLE__", STYLE).replace("__VERSION__", VERSION).replace("__SERVERNAME__", server_name()));
 
-pub async fn index() -> Html<&'static str> { Html(INDEX_HTML.as_str()) }
+/// `/`: the redesigned dashboard, or the classic one with `[dashboard]
+/// legacy_ui = true` (the classic one stays at `/classic`, the new one at `/ui`).
+pub async fn index(State(state): State<Arc<AppState>>) -> Response {
+    if state.config.dashboard.legacy_ui { Html(INDEX_HTML.as_str()).into_response() } else { crate::dashboard_ui::page().await.into_response() }
+}
+
+pub async fn classic_index() -> Html<&'static str> { Html(INDEX_HTML.as_str()) }
 
 /// Builds a standalone, auto-refreshing log page for one table. `endpoint` is
 /// the JSON API the page polls; `extract_js` is a JS expression that, given the
@@ -1245,7 +1257,24 @@ h2 .backlink{text-transform:none;letter-spacing:normal;margin-left:8px}
 .badge{display:inline-block;padding:2px 7px;border-radius:99px;font-size:11px;font-weight:600}.badge-pos{background:#123047;color:#5cc0f2;border:1px solid #1d4a66}.badge-sds{background:#203047;color:#8fa2b8}.pos-undec{color:#8fa2b8;font-style:italic}
 .badge-reg-in{background:#173822;color:#52d273;border:1px solid #245c37}.badge-reg-out{background:#203047;color:#8fa2b8;border:1px solid #2c405c}.badge-reg-timeout{background:#3a2f12;color:#e8b93d;border:1px solid #5c4a1d}
 .ha-active{background:#173822;color:#52d273;border:1px solid #245c37}.ha-standby{background:#123047;color:#5cc0f2;border:1px solid #1d4a66}.ha-init{background:#203047;color:#8fa2b8}.ha-fault,.ha-down{background:#3a1414;color:#f2545b;border:1px solid #5c1d1d}a.ha-hdr{text-decoration:none;font-size:11px}
+/* Embedded in the new dashboard (?embed=1): no header, its colours. */
+html.embed{--e-bg:#eceff4;--e-bg2:#ffffff;--e-bg3:#f3f5f9;--e-border:#dde3ec;--e-sep:rgba(20,30,50,.09);--e-text:#16202e;--e-text2:#3d4f66;--e-text3:#5f7188;--e-accent:#00876a;--e-link:#1565c0}
+@media (prefers-color-scheme:dark){html.embed{--e-bg:#090d14;--e-bg2:#111824;--e-bg3:#19212f;--e-border:#232e40;--e-sep:rgba(255,255,255,.07);--e-text:#eef3fb;--e-text2:#94abc9;--e-text3:#7f93b5;--e-accent:#00d4a8;--e-link:#4da6ff}}
+html.embed,html.embed body{background:var(--e-bg)!important;color:var(--e-text)!important;font-family:-apple-system,BlinkMacSystemFont,Inter,'Segoe UI',system-ui,sans-serif}
+html.embed header,html.embed .backlink,html.embed p:has(> .backlink),html.embed .emg-ribbon{display:none!important}
+html.embed .wrap{padding:0 2px 24px;max-width:none}
+html.embed .panel,html.embed .card,html.embed .bts-card,html.embed .navlink{background:var(--e-bg2)!important;border-color:var(--e-border)!important;color:var(--e-text)!important;box-shadow:0 1px 3px rgba(20,30,50,.08)}
+html.embed .panel{margin-top:14px}
+html.embed h2{color:var(--e-text)!important;font-size:15px;text-transform:none;letter-spacing:0;font-weight:650}
+html.embed th{color:var(--e-text3)!important;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+html.embed th,html.embed td{border-bottom-color:var(--e-sep)!important}
+html.embed .muted,html.embed .ver,html.embed .pager{color:var(--e-text2)!important}
+html.embed a{color:var(--e-link)}
+html.embed input,html.embed select,html.embed textarea{background:var(--e-bg3)!important;color:var(--e-text)!important;border:1px solid var(--e-border)!important;border-radius:8px;padding:6px 9px;font:inherit}
+html.embed button,html.embed .pager button,html.embed .ctl-row button{background:var(--e-bg2)!important;color:var(--e-text)!important;border:1px solid var(--e-border)!important;border-radius:8px;padding:6px 12px;font-weight:600;cursor:pointer}
+html.embed .pill,html.embed .reg-issi,html.embed .cell-carrier{background:var(--e-bg3)!important;color:var(--e-text2)!important;border-color:var(--e-border)!important}
 </style><script>
+if(new URLSearchParams(location.search).has('embed'))document.documentElement.classList.add('embed');
 // Admin login/logout, shared by every page header. The dashboard can be
 // read-only to anonymous visitors (open mode); logging in only unlocks
 // config editing and Basestation control. doLogin() navigates to the
@@ -1475,8 +1504,10 @@ pub async fn ha_status(State(state): State<Arc<AppState>>) -> Json<serde_json::V
         Ok(saved) => {
             // Setting names only, never values (this endpoint is not
             // admin-only and settings include passwords). Includes [ha].
+            // Live edits (blacklist, talkgroup pools) are applied already,
+            // so the running config is compared with them in.
             let diff = crate::ha::config_diff(
-                &crate::ha::config_sections(&state.config, true),
+                &crate::ha::config_sections(&state.config_snapshot(), true),
                 &crate::ha::config_sections(saved, true),
             );
             v["pending_changes"] = (!diff.is_empty()).into();

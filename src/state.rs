@@ -196,6 +196,8 @@ pub struct Inner {
     /// Individual calls that can move to another Basestation with their
     /// radio (see `call_restore`).
     pub call_restores: crate::call_restore::CallRestores,
+    /// Running talkgroup pool calls and their legs (see `pools`).
+    pub pools: crate::pools::PoolCalls,
 }
 
 impl Inner {
@@ -339,6 +341,9 @@ pub struct AppState {
     /// edited live from the dashboard, which also writes the config file
     /// without restarting (`config` itself is a startup snapshot).
     pub blocked: std::sync::RwLock<HashSet<u32>>,
+    /// The talkgroup pools as switched right now: starts as
+    /// `[[talkgroup_pools]]`, edited live from the dashboard (see `pools`).
+    pub pools: std::sync::RwLock<Vec<crate::config::TalkgroupPoolConfig>>,
 }
 
 impl AppState {
@@ -364,6 +369,7 @@ impl AppState {
     pub fn config_snapshot(&self) -> Config {
         let mut cfg = self.config.clone();
         cfg.blacklist.issis = self.blocked_list();
+        if let Ok(p) = self.pools.read() { cfg.talkgroup_pools = p.clone(); }
         cfg
     }
 }
@@ -412,6 +418,7 @@ impl AppState {
         let (aprs_tx, aprs_rx) = mpsc::unbounded_channel();
         let sms_center = crate::sms_center::SmsCenter::open(config.sms_center.clone());
         let blocked: HashSet<u32> = config.blacklist.issis.iter().copied().collect();
+        let pools = config.talkgroup_pools.clone();
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -428,6 +435,7 @@ impl AppState {
                 ha,
                 store,
                 blocked: std::sync::RwLock::new(blocked),
+                pools: std::sync::RwLock::new(pools),
             },
             aprs_rx,
         )

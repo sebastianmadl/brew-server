@@ -82,6 +82,9 @@ realm = "brew-server-dashboard"
 # Name of this server: main dashboard heading and the browser tab title of
 # every dashboard page.
 servername = "Tetra Network Monitor"
+# true: serve the classic dashboard at / instead of the redesigned one.
+# Both stay reachable under /classic and /ui.
+legacy_ui = false
 admins = ["admin"]
 
 [dashboard.ui]
@@ -322,6 +325,16 @@ console_users = []
 name = "Athens HQ"
 lat = 37.9917
 lon = 23.7640
+
+# Talkgroup pools: a call on one group is played 1:1 on the other groups of
+# the pool. both_ways = false copies only calls on the first group. A group
+# with its own running call is joined when that over ends. Managed on the
+# dashboard's Routing page without a restart. See docs/Routing.md.
+# [[talkgroup_pools]]
+# name = "Region East"
+# enabled = true
+# both_ways = true
+# groups = [2321, 2323, 2324, 2329, 264]
 
 # See https://github.com/ysamouhos/brew-server/wiki/High-Availability.
 # Active/standby high availability: two brew-servers on the same LAN / Layer 2

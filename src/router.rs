@@ -351,6 +351,12 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
     state.monitor.call_started(id, "group", gt.source, gt.destination, if emergency { gt.priority.max(EMERGENCY_PRIORITY) } else { gt.priority }).await;
     info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, priority=gt.priority,
         target_count=targets.len(), "routed GROUP_TX");
+    // Talkgroup pools: the call is played on the pool's other groups too.
+    // Not for a call a federation peer brought in: its server has the pools.
+    if !is_peer(&*state.inner.read().await, source) {
+        crate::pools::on_group_tx(state, source, id, gt.source, gt.destination,
+            if emergency { gt.priority.max(EMERGENCY_PRIORITY) } else { gt.priority }).await;
+    }
 }
 
 /// Relays a position decoded here to the peers -- unless it came out of an SDS
@@ -781,11 +787,13 @@ async fn route_call_frame(state: &Arc<AppState>, source: ClientId, id: uuid::Uui
     let Some(txs) = call_frame_recipients(state, source, id, "voice").await else { return };
     state.monitor.voice_frame(id).await;
     for tx in txs { let _ = tx.send(raw.clone()); }
+    crate::pools::on_frame(state, id, &raw).await;
 }
 
 async fn route_dtmf_frame(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid, raw: Vec<u8>) {
     let Some(txs) = call_frame_recipients(state, source, id, "DTMF").await else { return };
     for tx in txs { let _ = tx.send(raw.clone()); }
+    crate::pools::on_frame(state, id, &raw).await;
 }
 
 /// Shared participant/permission check and recipient lookup for both call
@@ -889,6 +897,15 @@ pub(crate) async fn end_call(state: &Arc<AppState>, source: ClientId, id: uuid::
     for tx in txs { let _ = tx.send(raw.clone()); }
     state.monitor.call_ended(id).await;
     info!(%source, uuid=%id, kind=?call.kind, "routed call end");
+
+    // Talkgroup pools: a pool call's legs end with it, and legs that waited
+    // for this group to become free join their call now.
+    if call.kind == CallKind::Group {
+        for leg in crate::pools::on_call_end(state, id, call.destination).await {
+            let release = protocol::build_call_cause(CALL_GROUP_IDLE, &leg, 0);
+            Box::pin(end_call(state, crate::pools::POOL_OWNER, leg, release)).await;
+        }
+    }
 
     // If this call was bridged to SIP (Brew subscriber calling out), the Brew
     // side just ended it first: tell the SIP peer too, instead of leaving its
@@ -2314,5 +2331,206 @@ mod late_entry_tests {
             assert_eq!(drain(rx), vec![gt.clone(), voice(&id)]);
         }
         assert_eq!(state.inner.read().await.calls[&id].peers.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+    use crate::config::TalkgroupPoolConfig;
+    use crate::{protocol::ConnVersion, state::{Client, ClientMode}};
+
+    /// A Basestation with radios in `groups`, plus the queue of what it is sent.
+    async fn station(state: &AppState, groups: &[u32]) -> (ClientId, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let id = uuid::Uuid::new_v4();
+        let mut inner = state.inner.write().await;
+        inner.clients.insert(id, Client { tx, mode: ClientMode::Basestation, version: ConnVersion::V0, version_announced: true, remote_addr: None, connected_at_ms: 0, username: None });
+        for g in groups { inner.group_clients.entry(*g).or_default().insert(id); }
+        (id, rx)
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    /// (call state, call id, destination) of every GROUP_TX in `msgs`.
+    fn group_txs(msgs: &[Vec<u8>]) -> Vec<(uuid::Uuid, u32, u32)> {
+        msgs.iter().filter(|m| m.len() >= 26 && m[0] == protocol::CLASS_CALL_CONTROL && m[1] == CALL_GROUP_TX)
+            .map(|m| (uuid::Uuid::from_slice(&m[2..18]).unwrap(), u32::from_le_bytes(m[18..22].try_into().unwrap()), u32::from_le_bytes(m[22..26].try_into().unwrap())))
+            .collect()
+    }
+
+    fn ids_of(msgs: &[Vec<u8>], class: u8, kind: u8) -> Vec<uuid::Uuid> {
+        msgs.iter().filter(|m| m.len() >= 18 && m[0] == class && m[1] == kind).map(|m| uuid::Uuid::from_slice(&m[2..18]).unwrap()).collect()
+    }
+
+    fn pool(both_ways: bool, groups: &[u32]) -> TalkgroupPoolConfig {
+        TalkgroupPoolConfig { name: "Nord".into(), enabled: true, both_ways, groups: groups.to_vec() }
+    }
+
+    fn state_with(pools: Vec<TalkgroupPoolConfig>) -> Arc<AppState> {
+        let state = AppState::for_test();
+        *state.pools.write().unwrap() = pools;
+        state
+    }
+
+    fn voice(id: &uuid::Uuid) -> Vec<u8> {
+        protocol::build_traffic_frame(id, &[1; protocol::ACELP_CODED_FRAME_BYTES], &[2; protocol::ACELP_CODED_FRAME_BYTES])
+    }
+
+    #[tokio::test]
+    async fn pool_call_is_played_on_the_other_groups_with_voice_and_end() {
+        let state = state_with(vec![pool(true, &[2321, 2323, 264])]);
+        let (bs1, mut rx1) = station(&state, &[2321]).await;
+        let (_bs2, mut rx2) = station(&state, &[2323, 264]).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        let got = drain(&mut rx2);
+        let txs = group_txs(&got);
+        // The call itself does not reach bs2 (no 2321 radios there); its two legs do.
+        let mut dests: Vec<u32> = txs.iter().map(|t| t.2).collect();
+        dests.sort();
+        assert_eq!(dests, vec![264, 2323]);
+        assert!(txs.iter().all(|t| t.0 != id && t.1 == 4001));
+        let legs: Vec<uuid::Uuid> = txs.iter().map(|t| t.0).collect();
+        // The talker's own station gets nothing back for its own group.
+        assert!(group_txs(&drain(&mut rx1)).is_empty());
+
+        // Voice is copied to each leg under the leg's identifier.
+        let frame = voice(&id);
+        handle_packet(state.clone(), bs1, frame.clone()).await;
+        let got = drain(&mut rx2);
+        let mut frame_ids = ids_of(&got, protocol::CLASS_FRAME, protocol::FRAME_TRAFFIC_CHANNEL);
+        frame_ids.sort();
+        let mut want = legs.clone();
+        want.sort();
+        assert_eq!(frame_ids, want);
+        assert!(got.iter().all(|m| m[18..] == frame[18..]));
+
+        // The end of the call ends the legs.
+        handle_packet(state.clone(), bs1, protocol::build_call_cause(CALL_GROUP_IDLE, &id, 0)).await;
+        let mut ended = ids_of(&drain(&mut rx2), protocol::CLASS_CALL_CONTROL, CALL_GROUP_IDLE);
+        ended.sort();
+        assert_eq!(ended, want);
+        let inner = state.inner.read().await;
+        assert!(inner.calls.is_empty() && inner.pools.runs.is_empty() && inner.pools.legs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_way_pool_copies_only_from_its_first_group() {
+        let state = state_with(vec![pool(false, &[9, 2321])]);
+        let (bs1, _rx1) = station(&state, &[9]).await;
+        let (bs2, mut rx2) = station(&state, &[2321]).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs2, protocol::build_group_tx(&id, 4002, 2321, 0)).await;
+        assert!(state.inner.read().await.pools.runs.is_empty());
+        handle_packet(state.clone(), bs2, protocol::build_call_cause(CALL_GROUP_IDLE, &id, 0)).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 9, 0)).await;
+        assert_eq!(group_txs(&drain(&mut rx2)).iter().map(|t| t.2).collect::<Vec<_>>(), vec![2321]);
+    }
+
+    #[tokio::test]
+    async fn busy_group_joins_when_its_own_call_ends() {
+        // One way, so 2324's own call is not copied to 2321.
+        let state = state_with(vec![pool(false, &[2321, 2324])]);
+        let (bs1, _rx1) = station(&state, &[2321]).await;
+        let (bs2, mut rx2) = station(&state, &[2324]).await;
+        // 2324 has its own call (only bs2 has 2324 radios, so it reaches nobody else).
+        let own = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs2, protocol::build_group_tx(&own, 5000, 2324, 0)).await;
+        // While 2324 talks the pool call on 2321 starts: 2324's leg waits...
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        drain(&mut rx2);
+        assert_eq!(state.inner.read().await.pools.runs[&id].waiting.iter().copied().collect::<Vec<_>>(), vec![2324]);
+        // ...and joins once 2324's over ends.
+        handle_packet(state.clone(), bs2, protocol::build_call_cause(CALL_GROUP_IDLE, &own, 0)).await;
+        let txs = group_txs(&drain(&mut rx2));
+        assert_eq!(txs.len(), 1);
+        assert_eq!((txs[0].1, txs[0].2), (4001, 2324));
+        let leg = txs[0].0;
+        handle_packet(state.clone(), bs1, voice(&id)).await;
+        assert_eq!(ids_of(&drain(&mut rx2), protocol::CLASS_FRAME, protocol::FRAME_TRAFFIC_CHANNEL), vec![leg]);
+    }
+
+    #[tokio::test]
+    async fn a_leg_never_starts_further_legs() {
+        // 2321 and 2323 are in two pools that share 2323: a call on 2321
+        // reaches 2323 (pool A) but not 2399 (pool B, through 2323).
+        let mut b = pool(true, &[2323, 2399]);
+        b.name = "B".into();
+        let state = state_with(vec![pool(true, &[2321, 2323]), b]);
+        let (bs1, _rx1) = station(&state, &[2321]).await;
+        let (_bs2, mut rx2) = station(&state, &[2323, 2399]).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        assert_eq!(group_txs(&drain(&mut rx2)).iter().map(|t| t.2).collect::<Vec<_>>(), vec![2323]);
+    }
+
+    /// Internal simulation: 10 stations, 25 radios spread over 6 groups, a
+    /// both-ways pool of 4 of them and a one-way pool. Every station gets
+    /// each call exactly once per group it has radios in, voice under the
+    /// right identifier, and every call ends cleanly.
+    #[tokio::test]
+    async fn pool_sim_10_stations_25_radios() {
+        let mut info = pool(false, &[9, 2330]);
+        info.name = "Info".into();
+        let state = state_with(vec![pool(true, &[2321, 2323, 2324, 264]), info]);
+        let groups = [2321u32, 2323, 2324, 264, 9, 2330];
+        let mut stations = Vec::new();
+        for s in 0..10usize {
+            // 2 or 3 radios per station (25 in all), each in one group.
+            let radios = if s < 5 { 3 } else { 2 };
+            let gs: Vec<u32> = (0..radios).map(|r| groups[(s + r * 2) % groups.len()]).collect();
+            let (id, rx) = station(&state, &gs).await;
+            let mut wanted: Vec<u32> = gs.clone();
+            wanted.sort();
+            wanted.dedup();
+            stations.push((id, rx, wanted));
+        }
+        for (talker_station, gssi) in [(0usize, 2321u32), (3, 264), (7, 9), (2, 2330)] {
+            for (_, rx, _) in stations.iter_mut() { drain(rx); }
+            let id = uuid::Uuid::new_v4();
+            let talker = stations[talker_station].0;
+            handle_packet(state.clone(), talker, protocol::build_group_tx(&id, 4000 + gssi, gssi, 0)).await;
+            let reached: Vec<u32> = std::iter::once(gssi).chain(crate::pools::targets_for(&state.pools.read().unwrap(), gssi).into_keys()).collect();
+            for _ in 0..3 { handle_packet(state.clone(), talker, voice(&id)).await; }
+            handle_packet(state.clone(), talker, protocol::build_call_cause(CALL_GROUP_IDLE, &id, 0)).await;
+            for (sid, rx, wanted) in stations.iter_mut() {
+                let got = drain(rx);
+                let mut dests: Vec<u32> = group_txs(&got).iter().map(|t| t.2).collect();
+                dests.sort();
+                let mut expect: Vec<u32> = wanted.iter().copied().filter(|g| reached.contains(g)).collect();
+                // The talker's station does not get its own group back.
+                if *sid == talker { expect.retain(|g| *g != gssi); }
+                assert_eq!(dests, expect, "station {sid} for a call on {gssi}");
+                let calls: HashSet<uuid::Uuid> = group_txs(&got).iter().map(|t| t.0).collect();
+                let frames = ids_of(&got, protocol::CLASS_FRAME, protocol::FRAME_TRAFFIC_CHANNEL);
+                assert_eq!(frames.len(), calls.len() * 3);
+                assert!(frames.iter().all(|f| calls.contains(f)));
+                let mut ended: Vec<uuid::Uuid> = ids_of(&got, protocol::CLASS_CALL_CONTROL, CALL_GROUP_IDLE);
+                ended.sort();
+                let mut c: Vec<uuid::Uuid> = calls.into_iter().collect();
+                c.sort();
+                assert_eq!(ended, c);
+            }
+            let inner = state.inner.read().await;
+            assert!(inner.calls.is_empty() && inner.pools.runs.is_empty() && inner.pools.legs.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_station_cannot_send_voice_into_a_leg() {
+        let state = state_with(vec![pool(true, &[2321, 2323])]);
+        let (bs1, mut rx1) = station(&state, &[2321]).await;
+        let (bs2, _rx2) = station(&state, &[2323]).await;
+        let id = uuid::Uuid::new_v4();
+        handle_packet(state.clone(), bs1, protocol::build_group_tx(&id, 4001, 2321, 0)).await;
+        let leg = *state.inner.read().await.pools.legs.keys().next().unwrap();
+        drain(&mut rx1);
+        handle_packet(state.clone(), bs2, voice(&leg)).await;
+        assert!(drain(&mut rx1).is_empty());
     }
 }

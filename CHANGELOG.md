@@ -2,6 +2,40 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.21.0 adds:
+
+- **Redesigned dashboard.** A new dashboard in the style of the FlowStation
+  one: sidebar with Monitor, Network, Integrations and System, light and dark
+  following the system, a tab bar on phones, status shown with text and not
+  by colour alone, help behind "?" buttons. Overview, Calls, SDS, Radios,
+  Stations & Cells, Routing, Roaming, Telemetry, Control and HA are native
+  pages; Map, SIP, SMS Center, Telemetry SDS and Settings open the classic
+  pages inside it. It is the default. `[dashboard] legacy_ui = true` serves
+  the classic dashboard at `/` instead; both stay reachable under `/classic`
+  and `/ui`.
+
+  ```toml
+  [dashboard]
+  legacy_ui = false
+  ```
+
+- **DGNA to several radios.** The Routing page assigns a group (with an
+  optional name of up to 15 characters) to many radios at once, or takes it
+  away again, each through the control link of the Basestation the radio is
+  registered on (`POST /api/dgna`, admins). The radios' answers come back
+  over telemetry and show per radio (`GET /api/radios`).
+- **Talkgroup pools.** `[[talkgroup_pools]]` connects talkgroups inside the
+  server: a call on one group is played 1:1 on the others, voice and over end
+  included, both ways or only from the first group. A group that already has
+  a call is joined when that over ends. Pools are switched on and off,
+  edited, added and deleted on the Routing page and apply without a restart
+  (`GET /api/pools`, `POST /api/pools/save`). See
+  [docs/Routing.md](docs/Routing.md).
+- **HA page.** Changes applied live (blacklist, pools) no longer show as
+  pending changes.
+- **Backward compatible.** Without `[[talkgroup_pools]]` routing is
+  unchanged; nothing new is sent to Basestations, terminals or peers.
+
 Version 1.20.0 adds:
 
 - **Server name.** `[dashboard] servername` (default `"Tetra Network Monitor"`)

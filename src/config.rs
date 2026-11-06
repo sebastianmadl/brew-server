@@ -53,6 +53,36 @@ pub struct Config {
     pub roaming: RoamingConfig,
     /// Announced cell changes between Basestations. See `HandoverConfig`.
     pub handover: HandoverConfig,
+    /// Talkgroup pools: groups whose calls are played on the other groups of
+    /// the pool as well. Edited live from the dashboard (no restart). See
+    /// `pools`.
+    pub talkgroup_pools: Vec<TalkgroupPoolConfig>,
+}
+
+/// `[[talkgroup_pools]]`: a named set of groups that are switched together
+/// inside this server. A call on one group of the pool is played 1:1 on the
+/// other groups, each as an ordinary group call on its own GSSI, so the radios
+/// see nothing unusual. Only this server's own connections get the copies
+/// (federation peers do not).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TalkgroupPoolConfig {
+    /// Name shown on the dashboard; unique among the pools.
+    pub name: String,
+    /// Switched on. An off pool is kept but does nothing.
+    pub enabled: bool,
+    /// `true`: a call on any group of the pool reaches all the others.
+    /// `false` (one way): only calls on the first group are copied, to the
+    /// rest.
+    pub both_ways: bool,
+    /// The groups (GSSI). With `both_ways = false` the first one is the source.
+    pub groups: Vec<u32>,
+}
+
+impl Default for TalkgroupPoolConfig {
+    fn default() -> Self {
+        Self { name: String::new(), enabled: true, both_ways: true, groups: Vec::new() }
+    }
 }
 
 /// `[roaming]`: what happens when a mobile station registers on one
@@ -438,6 +468,11 @@ pub struct DashboardConfig {
     pub servername: String,
     /// UI behavior toggles (currently just read-only/open mode).
     pub ui: DashboardUiConfig,
+    /// Serve the classic dashboard at `/` instead of the redesigned one
+    /// (sidebar layout, light and dark following the system, Routing page).
+    /// `false` (the default) serves the new one. Both stay reachable: the
+    /// classic dashboard under `/classic`, the new one under `/ui`.
+    pub legacy_ui: bool,
     pub tls: TlsConfig,
 }
 
@@ -451,6 +486,7 @@ impl Default for DashboardConfig {
             realm: "brew-server-dashboard".into(),
             servername: "Tetra Network Monitor".into(),
             ui: DashboardUiConfig::default(),
+            legacy_ui: false,
             tls: TlsConfig::default(),
         }
     }
@@ -805,6 +841,7 @@ impl Default for Config {
             ha: HaConfig::default(),
             roaming: RoamingConfig::default(),
             handover: HandoverConfig::default(),
+            talkgroup_pools: Vec::new(),
         }
     }
 }
