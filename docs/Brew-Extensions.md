@@ -1016,7 +1016,17 @@ groups that are not in the radio's own network:
 ```
 
 Without it, a radio's groups are in the radio's own network (a visitor's in
-its home network). brew-server: noted in the log, not routed yet.
+its home network).
+
+- A radio of the server's own network migrated onto a cell of a linked
+  network that attaches a group without an MNI is in the cell network's
+  group (TS 100 392-2 clause 14.2.3); the Basestation names that network
+  here. The server keeps the affiliation as that network's group (not its
+  own group of the same number), registers and affiliates the radio over the
+  link, and sends that network's calls on the group to the Basestation with
+  `SERVICE_CALL_NETWORK`.
+- brew-server: a visitor in a group of a third network (neither its home nor
+  the server's) is noted in the log only.
 
 ### 12b.4 `SERVICE_CALL_NETWORK` (0x23)
 
@@ -1034,7 +1044,16 @@ network than the server's own:
   Basestations with a visitor in it; the `GROUP_TX` carries that network's
   GSSI. Later overs of the call keep its group.
 - Without it a `GROUP_TX` is on the server's own group of that number (the
-  same GSSI may exist in two networks).
+  same GSSI may exist in two networks). A cell that broadcasts another
+  network's MNI must not play such a call as its own network's group: only
+  on the (V)GSSI of a migrated radio of the server's network that attached
+  it, else it drops it. The server, for its part, does not broadcast its own
+  group calls (`route_without_affiliations`, the no-affiliation fallback) to
+  a Basestation with the capability whose announced cells all carry another
+  MNI; such a Basestation gets them only through affiliations.
+- The other network may answer an over from here with `GROUP_IDLE` at once
+  (TetraPack does). The server still sends the rest of the over and its own
+  end there, so the call does not hang on the far side.
 
 For an individual call or SDS (before its `CALL_SETUP_REQUEST` or
 `CALL_SHORT_TRANSFER`, `uuid` = that call's or SDS's id), the networks of
@@ -1061,6 +1080,11 @@ the parties, each only where it is not the server's own network:
   goes once to that network; never back over a link, and the same calling /
   called pair a second time within 5 s is taken for a loop and refused. The
   SMS Center does not store such an SDS.
+- A party that is on the server itself is never sent round a link: a
+  visitor of the forwarding network, and one of the server's radios (or an
+  app) it registered in the visitor's network, are delivered here. The far
+  server would send the call back over the same connection, which a Brew
+  server does not do.
 
 ## 13. Implementation checklist
 
