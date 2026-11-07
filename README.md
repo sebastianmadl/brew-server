@@ -77,7 +77,7 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 - [Brew extensions](docs/Brew-Extensions.md) -- the protocol behind it, for other server and Basestation implementations
 - [Late entry](docs/Late-Entry.md) -- join running group calls mid-over
 - [Routing](docs/Routing.md) -- DGNA to several radios, talkgroup pools
-- [Multi Network](docs/Multi-Network.md) -- connect to other Brew networks and bridge talkgroups across them (visitors and calls across networks not yet tested on air)
+- [Multi Network](docs/Multi-Network.md) -- connect to other Brew networks and bridge talkgroups across them (visitors not yet tested on air)
 - [ISSI blacklist](docs/ISSI-Blacklist.md)
 - [ISSI allowlist](docs/ISSI-Allowlist.md) -- run a closed network: only listed ISSIs may communicate
 - [Basestation locations](docs/Basestation-Locations.md)
