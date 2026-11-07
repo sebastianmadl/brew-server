@@ -1035,8 +1035,32 @@ network than the server's own:
   GSSI. Later overs of the call keep its group.
 - Without it a `GROUP_TX` is on the server's own group of that number (the
   same GSSI may exist in two networks).
-- `calling` / `called` (MNIs of the parties of an individual call or SDS)
-  are reserved for individual calls and SDS between networks (later).
+
+For an individual call or SDS (before its `CALL_SETUP_REQUEST` or
+`CALL_SHORT_TRANSFER`, `uuid` = that call's or SDS's id), the networks of
+the parties, each only where it is not the server's own network:
+
+```json
+{"uuid":"…","calling":{"mcc":901,"mnc":1234},"called":{"mcc":901,"mnc":1234}}
+```
+
+- Station → server, `called`: the radio dialled a TSI of another network
+  (TS 100 392-2 table 14.39). The server delivers to a visitor of that
+  network on its own Basestations, else over its link to that network
+  (refused while the link is down). Without `called` the called ISSI is in
+  the server's own network: delivered here first, as without the
+  extension.
+- Server → station: before a call or SDS to a visitor, or from another
+  network to one of the server's own radios, so the Basestation can show
+  the calling party as a TSI. Only to Basestations with the capability.
+- An individual call or SDS that comes in over the server's link to network
+  X is taken only for a visitor from X or for one of the server's radios it
+  registered in X.
+- brew-server option "forward unknown targets" (per network, off by
+  default): a call or SDS from a Basestation that nobody on the server takes
+  goes once to that network; never back over a link, and the same calling /
+  called pair a second time within 5 s is taken for a loop and refused. The
+  SMS Center does not store such an SDS.
 
 ## 13. Implementation checklist
 
@@ -1062,7 +1086,8 @@ Server:
 - [ ] Optional: send `SERVICE_GROUP_ACCESS` (12.2) to capable Basestations.
 - [ ] Optional: answer `SERVICE_ISSI_CHECK` (12a.1).
 - [ ] Optional: `mni` (12b): visitor table, home registration, group calls
-      both ways with `SERVICE_CALL_NETWORK`.
+      both ways with `SERVICE_CALL_NETWORK`, individual calls and SDS by
+      `calling` / `called`.
 
 Basestation:
 

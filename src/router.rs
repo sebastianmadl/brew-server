@@ -449,9 +449,29 @@ async fn handle_sds_header(state: &Arc<AppState>, source: ClientId, id: uuid::Uu
     }
     let mut inner = state.inner.write().await;
     let mut targets = HashSet::new();
-    if let Some(sub) = inner.subscribers.get(&destination) { targets.insert(sub.client_id); }
-    if let Some(group_targets) = inner.group_clients.get(&destination) { targets.extend(group_targets.iter().copied()); }
+    // Multi Network: a party of another network goes where `visitors`
+    // decides (never stored by the SMS Center).
+    let mut note: Option<(ClientId, Vec<u8>)> = None;
+    let decided = crate::visitors::individual_route(state, &mut inner, source, id, source_issi, destination);
+    let multi_network = decided.is_some();
+    match decided {
+        Some(crate::visitors::Decision::Station(to, n)) => { targets.insert(to); note = n.map(|n| (to, n)); }
+        Some(crate::visitors::Decision::Link(link)) => { targets.insert(link); }
+        Some(crate::visitors::Decision::Refuse) => {}
+        None => {
+            if let Some(sub) = inner.subscribers.get(&destination) { targets.insert(sub.client_id); }
+            if let Some(group_targets) = inner.group_clients.get(&destination) { targets.extend(group_targets.iter().copied()); }
+        }
+    }
     targets.remove(&source);
+    // Nobody here: "forward unknown targets" of a linked network, if on.
+    let mut forwarded = false;
+    if targets.is_empty() && !multi_network && !inner.group_clients.contains_key(&destination) {
+        if let Some(link) = crate::visitors::forward_unknown(state, &mut inner, source, source_issi, destination) {
+            targets.insert(link);
+            forwarded = true;
+        }
+    }
     // Always remember the UUID -> source ISSI mapping so a following
     // SDS_TRANSFER can be attributed (and its position decoded) even when the
     // destination is not a registered Brew subscriber — position beacons are
@@ -460,6 +480,8 @@ async fn handle_sds_header(state: &Arc<AppState>, source: ClientId, id: uuid::Uu
     // GSSI with affiliated members) is kept for later delivery once the
     // SDS_TRANSFER carrying the payload arrives.
     let store_offline = !lip_only
+        && !multi_network
+        && !forwarded
         && targets.is_empty()
         && !inner.group_clients.contains_key(&destination)
         && state.sms_center.wants(destination);
@@ -479,9 +501,12 @@ async fn handle_sds_header(state: &Arc<AppState>, source: ClientId, id: uuid::Uu
         return;
     }
     let inner = state.inner.read().await;
-    let txs = targets.iter().filter_map(|cid| inner.clients.get(cid).map(|c| c.tx.clone())).collect::<Vec<_>>();
+    let txs = targets.iter().filter_map(|cid| inner.clients.get(cid).map(|c| (*cid, c.tx.clone()))).collect::<Vec<_>>();
     drop(inner);
-    for tx in txs { let _ = tx.send(raw.clone()); }
+    for (cid, tx) in txs {
+        if let Some((_, n)) = note.as_ref().filter(|(to, _)| *to == cid) { let _ = tx.send(n.clone()); }
+        let _ = tx.send(raw.clone());
+    }
     state.monitor.sds(id, source_issi, destination).await;
     info!(%source, uuid=%id, channel="brew", source_issi, destination, lip=sds_is_lip(&raw), target_count=targets.len(), "routed SDS header");
 }
@@ -692,7 +717,20 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
         reject_setup(state, source, id).await;
         return;
     }
-    let Some(target_client) = inner.subscribers.get(&destination).map(|s| s.client_id) else {
+    // Multi Network: a party of another network (named by the station, or a
+    // call that came in over a link) goes where `visitors` decides.
+    let mut note = None;
+    let decided = match crate::visitors::individual_route(state, &mut inner, source, id, source_issi, destination) {
+        Some(crate::visitors::Decision::Station(to, n)) => { note = n; Some(to) }
+        Some(crate::visitors::Decision::Link(link)) => Some(link),
+        Some(crate::visitors::Decision::Refuse) => {
+            drop(inner);
+            reject_setup(state, source, id).await;
+            return;
+        }
+        None => None,
+    };
+    let Some(target_client) = decided.or_else(|| inner.subscribers.get(&destination).map(|s| s.client_id)) else {
         drop(inner);
         // The destination is not a registered Brew subscriber. Before giving up,
         // offer it to the SIP subsystem: a voice route may bridge this TETRA
@@ -724,6 +762,18 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
         if bridged {
             state.monitor.call_started(id, "private", source_issi, destination, priority).await;
             info!(%source, uuid=%id, source_issi, destination, dialled = %dialled, mnemonic=?mnemonic, "routed private SETUP_REQUEST to SIP");
+        } else if let Some(link) = {
+            let mut inner = state.inner.write().await;
+            crate::visitors::forward_unknown(state, &mut inner, source, source_issi, destination)
+        } {
+            // Multi Network "forward unknown targets".
+            let mut inner = state.inner.write().await;
+            inner.calls.insert(id, ActiveCall { kind: CallKind::Private, owner: source, source_issi, destination, priority, peers: HashSet::from([link]), started_at: std::time::Instant::now(), last_activity_ms: ActiveCall::new_activity() });
+            let tx = inner.clients.get(&link).map(|c| (c.tx.clone(), c.forward_version()));
+            drop(inner);
+            if let Some((tx, version)) = tx { let _ = tx.send(protocol::adapt_to_version(&raw, version).into_owned()); }
+            state.monitor.call_started(id, "private", source_issi, destination, priority).await;
+            info!(%source, uuid=%id, source_issi, destination, "routed private SETUP_REQUEST to another network (unknown here)");
         } else {
             warn!(%source, uuid=%id, destination, dialled = %dialled, "private call destination not registered (no SIP route); rejected");
             reject_setup(state, source, id).await;
@@ -759,7 +809,10 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
     // AmbienceListen command that actually forces the radio to key its mic.
     let bts_username = ambience.then(|| inner.clients.get(&target_client).and_then(|c| c.username.clone())).flatten();
     drop(inner);
-    if let Some((tx, version)) = target { let _ = tx.send(protocol::adapt_to_version(&raw, version).into_owned()); }
+    if let Some((tx, version)) = target {
+        if let Some(n) = note { let _ = tx.send(n); }
+        let _ = tx.send(protocol::adapt_to_version(&raw, version).into_owned());
+    }
     let kind = if ambience { "ambience" } else { "private" };
     state.monitor.call_started(id, kind, source_issi, destination, priority).await;
     if ambience {

@@ -153,6 +153,35 @@ pub fn set_visitor(state: &AppState, slot: u8, issi: u32, present: bool) {
     }
 }
 
+/// Has the link to network `slot` registered `issi` there (one of this
+/// server's radios)?
+pub fn exported(state: &AppState, slot: u8, issi: u32) -> bool {
+    let reg = state.netlinks.lock();
+    let Some(name) = reg.slots.iter().find(|(_, s)| **s == slot).map(|(n, _)| n.clone()) else { return false };
+    reg.status.get(&name).and_then(|s| s.members.clone()).is_some_and(|e| export_lock(&e).have.contains_key(&issi))
+}
+
+/// Registers one of this server's radios in network `slot` (the caller of an
+/// individual call or SDS going there), as a Basestation would; only with
+/// `register_talkers`, and only if that network may have the ISSI (never
+/// export list, ISSI check: asked first, then left out this time). It is
+/// deregistered again at the next sync once its call is over.
+pub fn ensure_registered(state: &AppState, slot: u8, issi: u32) {
+    let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
+    let reg = state.netlinks.lock();
+    let Some(name) = reg.slots.iter().find(|(_, s)| **s == slot).map(|(n, _)| n.clone()) else { return };
+    if !cfg.networks.iter().any(|n| n.name == name && n.register_talkers && n.bridge_issi != issi) { return; }
+    let Some(status) = reg.status.get(&name) else { return };
+    let (Some(up), Some(members)) = (status.up.clone(), status.members.clone()) else { return };
+    let mut e = export_lock(&members);
+    if issi == 0 || issi > GSSI_MASK || e.have.contains_key(&issi) || e.visitors.contains(&issi) || e.have.len() >= MAX_TALKERS { return; }
+    match e.allow(issi, Instant::now()) {
+        Allow::Yes => { let _ = up.send(protocol::build_subscriber_message(protocol::SUB_REGISTER, issi, &[])); e.have.insert(issi, BTreeSet::new()); }
+        Allow::Ask => { let _ = up.send(build_check(&[issi])); e.asked(&[issi], Instant::now()); }
+        Allow::No => {}
+    }
+}
+
 /// Starts the links (called once the services run).
 pub async fn run(state: Arc<AppState>) {
     state.netlinks.lock().started = true;
@@ -613,6 +642,19 @@ fn is_group_tx(pkt: &[u8]) -> bool {
     pkt.first() == Some(&protocol::CLASS_CALL_CONTROL) && pkt.get(1) == Some(&protocol::CALL_GROUP_TX) && pkt.len() >= DEST_AT + 4
 }
 
+/// The start of an individual call or SDS (setup request, SDS header).
+fn is_individual_start(pkt: &[u8]) -> bool {
+    pkt.first() == Some(&protocol::CLASS_CALL_CONTROL)
+        && matches!(pkt.get(1), Some(&protocol::CALL_SETUP_REQUEST) | Some(&protocol::CALL_SHORT_TRANSFER))
+        && pkt.len() >= DEST_AT + 4
+}
+
+/// The end of an individual call.
+fn is_call_end(pkt: &[u8]) -> bool {
+    pkt.first() == Some(&protocol::CLASS_CALL_CONTROL)
+        && matches!(pkt.get(1), Some(&protocol::CALL_RELEASE) | Some(&protocol::CALL_SETUP_REJECT))
+}
+
 fn is_group_idle(pkt: &[u8]) -> bool {
     pkt.first() == Some(&protocol::CLASS_CALL_CONTROL) && pkt.get(1) == Some(&protocol::CALL_GROUP_IDLE)
 }
@@ -707,8 +749,14 @@ impl Outbound {
             set_call_id(&mut pkt, remote);
             return Some(pkt);
         }
+        // An individual call or SDS the router sends this way (Multi Network
+        // decided it, see `visitors::individual_route`): a new id there.
+        if is_individual_start(&pkt) && !ids.to_remote.contains_key(&local) {
+            let r = Uuid::new_v4();
+            ids.pair(local, r);
+        }
         let remote = *ids.to_remote.get(&local)?;
-        if is_group_idle(&pkt) { ids.forget_local(&local); }
+        if is_group_idle(&pkt) || is_call_end(&pkt) { ids.forget_local(&local); }
         set_call_id(&mut pkt, remote);
         Some(pkt)
     }
@@ -719,7 +767,15 @@ impl Inbound {
 
     /// The packet as the router gets it, or `None` if it is dropped.
     /// `bridged` says whether a group of that network is in a pool.
-    pub fn translate(&mut self, mut pkt: Vec<u8>, bridged: impl Fn(u32) -> bool) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    pub fn translate(&mut self, pkt: Vec<u8>, bridged: impl Fn(u32) -> bool) -> Option<Vec<u8>> {
+        self.translate_with(pkt, bridged, |_| false)
+    }
+
+    /// As [`Inbound::translate`]; `admit` says whether an individual call or
+    /// SDS to an ISSI may come in (a visitor from that network here, or one
+    /// of this server's radios registered there).
+    pub fn translate_with(&mut self, mut pkt: Vec<u8>, bridged: impl Fn(u32) -> bool, admit: impl Fn(u32) -> bool) -> Option<Vec<u8>> {
         if !is_call_or_frame(&pkt) { return None; }
         let remote = call_id(&pkt)?;
         let mut ids = ids_lock(&self.ids);
@@ -735,8 +791,13 @@ impl Inbound {
             set_call_id(&mut pkt, local);
             return Some(pkt);
         }
+        if is_individual_start(&pkt) && !ids.to_local.contains_key(&remote) {
+            if !admit(dest(&pkt)) { return None; }
+            let l = Uuid::new_v4();
+            ids.pair(l, remote);
+        }
         let local = *ids.to_local.get(&remote)?;
-        if is_group_idle(&pkt) { ids.forget_local(&local); }
+        if is_group_idle(&pkt) || is_call_end(&pkt) { ids.forget_local(&local); }
         set_call_id(&mut pkt, local);
         Some(pkt)
     }
@@ -862,7 +923,14 @@ async fn run_session(
                 let mut groups = bridged_groups(&pools, &name);
                 if is_group_tx(&data) { groups.extend(crate::visitors::groups_of(&*state.inner.read().await, slot)); }
                 let probe = (is_group_tx(&data) || is_group_idle(&data)).then(|| data.to_vec());
-                let p = inbound.translate(data.to_vec(), |g| groups.contains(&g));
+                // Individual calls and SDS only to a visitor from there or to
+                // one of our radios the link registered there.
+                let admitted: HashSet<u32> = if is_individual_start(&data) {
+                    let mut a = crate::visitors::issis_of(&*state.inner.read().await, slot);
+                    a.extend(export_lock(&talkers).have.keys().copied());
+                    a
+                } else { HashSet::new() };
+                let p = inbound.translate_with(data.to_vec(), |g| groups.contains(&g), |i| admitted.contains(&i));
                 if let Some(before) = probe { log_crossing(&name, "in", &before, p.as_deref()); }
                 if let Some(p) = p {
                     crate::router::handle_packet(state.clone(), id, p).await;
@@ -1046,6 +1114,7 @@ pub struct NetworkView {
     pub register_all: bool,
     pub export_stations: Vec<String>,
     pub never_export: Vec<u32>,
+    pub forward_unknown: bool,
     /// That network answers the ISSI check (a brew-server).
     pub checks: bool,
     /// Radios registered there by the link right now.
@@ -1092,7 +1161,7 @@ pub async fn snapshot(state: &AppState) -> MultiNetworkView {
             remote_host: n.remote_host.clone(), path: n.path.clone(), username: n.username.clone(),
             has_password: !n.password.is_empty(), user_agent: n.user_agent.clone(), bridge_issi: n.bridge_issi,
             register_talkers: n.register_talkers, register_all: n.register_all,
-            export_stations: n.export_stations.clone(), never_export: n.never_export.clone(),
+            export_stations: n.export_stations.clone(), never_export: n.never_export.clone(), forward_unknown: n.forward_unknown,
             checks: s.connected && s.members.as_ref().is_some_and(|e| export_lock(e).checks),
             exported: if s.connected { s.members.as_ref().map(|e| { let mut v: Vec<u32> = export_lock(e).have.keys().copied().collect(); v.sort_unstable(); v }).unwrap_or_default() } else { Vec::new() },
             conflicts: s.members.as_ref().map(|e| export_lock(e).conflicts.iter().cloned().collect()).unwrap_or_default(),
@@ -1787,6 +1856,167 @@ mod e2e {
         drop(st1);
         wait_until("visitor gone at Other", async || !other.inner.read().await.subscribers.contains_key(&4_000_001)).await;
         assert_eq!(main.inner.read().await.subscribers[&2_320_002].groups, HashSet::from([2321]), "our own 2320002 still there");
+    }
+
+    /// Next call control message of `kind` within `ms`, as (id, source, destination).
+    async fn next_call(ws: &mut Ws, kind: u8, ms: u64) -> Option<(Uuid, u32, u32)> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Ok(Some(Ok(msg))) = tokio::time::timeout(left, ws.next()).await else { return None };
+            if let Message::Binary(b) = msg {
+                if b.len() >= 18 && b[0] == protocol::CLASS_CALL_CONTROL && b[1] == kind {
+                    let (s, d) = if b.len() >= 26 { (u32::from_le_bytes(b[18..22].try_into().unwrap()), dest(&b)) } else { (0, 0) };
+                    return Some((call_id(&b).unwrap(), s, d));
+                }
+            }
+        }
+    }
+
+    fn accept(id: &Uuid) -> Message {
+        let mut p = vec![protocol::CLASS_CALL_CONTROL, protocol::CALL_SETUP_ACCEPT];
+        p.extend_from_slice(id.as_bytes());
+        Message::Binary(p.into())
+    }
+
+    fn setup(id: &Uuid, src: u32, dst: u32) -> Message {
+        Message::Binary(protocol::build_circular_call_setup(id, src, dst, 0).into())
+    }
+
+    #[tokio::test]
+    async fn individual_calls_and_sds_cross_networks() {
+        let (tp, tp_addr) = serve(base_config()).await;
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), mcc: 901, mnc: 1234, remote_host: tp_addr.to_string(), bridge_issi: 9_000_001, reconnect_interval_seconds: 5, ..Default::default()
+        });
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        wait_until("link up", async || main.inner.read().await.netlinks.len() == 1).await;
+        // 10 stations, 25 radios; stations 0 to 2 have the mni extension.
+        let mut stations = Vec::new();
+        let mut issi = 2_320_001;
+        for s in 0..10u32 {
+            let n = if s < 5 { 3 } else { 2 };
+            let radios: Vec<u32> = (0..n).map(|k| issi + k).collect();
+            issi += n;
+            let mut st = station(main_addr, &radios, &[2321]).await;
+            if s < 3 {
+                st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":9999,"cells":[],"capabilities":["mni"]}"#).into())).await.unwrap();
+                next_service(&mut st, protocol::SERVICE_NETWORKS, 2000).await.expect("networks");
+            }
+            stations.push(st);
+        }
+        wait_until("all radios registered", async || main.inner.read().await.subscribers.len() == 25).await;
+        let mut far = station(tp_addr, &[1234], &[909]).await;
+        // TetraPack's 2320005 visits station 0 (ours with that ISSI is on station 1).
+        stations[0].send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_005, "mcc": 901, "mnc": 1234}))).await.unwrap();
+        stations[0].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_005, &[]).into())).await.unwrap();
+        wait_until("visitor at TetraPack", async || tp.inner.read().await.subscribers.contains_key(&2_320_005)).await;
+
+        // TetraPack calls its radio: station 0 gets it, with both parties'
+        // network before it; our own 2320005 is not called.
+        let a = Uuid::new_v4();
+        far.send(setup(&a, 1234, 2_320_005)).await.unwrap();
+        let note = next_service(&mut stations[0], protocol::SERVICE_CALL_NETWORK, 2000).await.expect("party networks");
+        assert_eq!((note["calling"]["mnc"].as_u64(), note["called"]["mnc"].as_u64()), (Some(1234), Some(1234)));
+        let (a0, src, dst) = next_call(&mut stations[0], protocol::CALL_SETUP_REQUEST, 2000).await.expect("station 0 is called");
+        assert_eq!((src, dst), (1234, 2_320_005));
+        assert_eq!(note["uuid"], a0.to_string());
+        assert!(next_call(&mut stations[1], protocol::CALL_SETUP_REQUEST, 200).await.is_none(), "our own 2320005 is not called");
+        stations[0].send(accept(&a0)).await.unwrap();
+        assert_eq!(next_call(&mut far, protocol::CALL_SETUP_ACCEPT, 2000).await.map(|c| c.0), Some(a), "the answer goes back under TetraPack's id");
+        far.send(Message::Binary(protocol::build_call_cause(protocol::CALL_RELEASE, &a, 0).into())).await.unwrap();
+        assert_eq!(next_call(&mut stations[0], protocol::CALL_RELEASE, 2000).await.map(|c| c.0), Some(a0));
+
+        // One of ours dials a TetraPack TSI: the call goes there.
+        let b = Uuid::new_v4();
+        stations[2].send(svc(protocol::SERVICE_CALL_NETWORK, serde_json::json!({"uuid": b.to_string(), "called": {"mcc": 901, "mnc": 1234}}))).await.unwrap();
+        stations[2].send(setup(&b, 2_320_008, 1234)).await.unwrap();
+        let (bf, src, dst) = next_call(&mut far, protocol::CALL_SETUP_REQUEST, 2000).await.expect("TetraPack's radio is called");
+        assert_eq!((src, dst), (2_320_008, 1234));
+        far.send(accept(&bf)).await.unwrap();
+        assert_eq!(next_call(&mut stations[2], protocol::CALL_SETUP_ACCEPT, 2000).await.map(|c| c.0), Some(b));
+        stations[2].send(Message::Binary(protocol::build_call_cause(protocol::CALL_RELEASE, &b, 0).into())).await.unwrap();
+        assert!(next_call(&mut far, protocol::CALL_RELEASE, 2000).await.is_some());
+
+        // Without a network named, local first: our own 2320005.
+        let c = Uuid::new_v4();
+        stations[2].send(setup(&c, 2_320_008, 2_320_005)).await.unwrap();
+        assert!(next_call(&mut stations[1], protocol::CALL_SETUP_REQUEST, 2000).await.is_some_and(|x| x.0 == c));
+        assert!(next_call(&mut far, protocol::CALL_SETUP_REQUEST, 200).await.is_none());
+        stations[2].send(Message::Binary(protocol::build_call_cause(protocol::CALL_RELEASE, &c, 0).into())).await.unwrap();
+
+        // SDS both ways.
+        let d = Uuid::new_v4();
+        far.send(Message::Binary(protocol::build_short_transfer(&d, 1234, 2_320_005).into())).await.unwrap();
+        next_service(&mut stations[0], protocol::SERVICE_CALL_NETWORK, 2000).await.expect("SDS party networks");
+        assert!(next_call(&mut stations[0], protocol::CALL_SHORT_TRANSFER, 2000).await.is_some_and(|x| (x.1, x.2) == (1234, 2_320_005)));
+        let e = Uuid::new_v4();
+        stations[1].send(svc(protocol::SERVICE_CALL_NETWORK, serde_json::json!({"uuid": e.to_string(), "called": {"mcc": 901, "mnc": 1234}}))).await.unwrap();
+        stations[1].send(Message::Binary(protocol::build_short_transfer(&e, 2_320_004, 1234).into())).await.unwrap();
+        assert!(next_call(&mut far, protocol::CALL_SHORT_TRANSFER, 2000).await.is_some_and(|x| (x.1, x.2) == (2_320_004, 1234)));
+
+        // An unknown target is refused while "forward unknown targets" is
+        // off, and goes to TetraPack once it is on.
+        let f = Uuid::new_v4();
+        stations[3].send(setup(&f, 2_320_010, 1234)).await.unwrap();
+        assert_eq!(next_call(&mut stations[3], protocol::CALL_SETUP_REJECT, 2000).await.map(|x| x.0), Some(f));
+        let mut on = main.networks.read().unwrap().clone();
+        on.networks[0].forward_unknown = true;
+        if let Ok(mut live) = main.networks.write() { *live = on; }
+        reconcile(&main);
+        wait_until("link back", async || main.inner.read().await.netlinks.len() == 1).await;
+        let g = Uuid::new_v4();
+        stations[3].send(setup(&g, 2_320_010, 1234)).await.unwrap();
+        assert!(next_call(&mut far, protocol::CALL_SETUP_REQUEST, 2000).await.is_some_and(|x| (x.1, x.2) == (2_320_010, 1234)));
+    }
+
+    #[tokio::test]
+    async fn forwarding_an_unknown_target_to_this_same_server_stops_at_once() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut cfg = base_config();
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "Loop".into(), remote_host: addr.to_string(), register_talkers: false, forward_unknown: true, ..Default::default()
+        });
+        let state = Arc::new(AppState::new(cfg, "test.toml".into()).0);
+        let app = axum::Router::new()
+            .route("/brew", axum::routing::get(crate::server::brew_discovery))
+            .with_state(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await });
+        run(state.clone()).await;
+        wait_until("link up", async || state.inner.read().await.netlinks.len() == 1).await;
+        let mut a = station(addr, &[100], &[9]).await;
+        wait_until("radio", async || state.inner.read().await.subscribers.contains_key(&100)).await;
+        let id = Uuid::new_v4();
+        a.send(setup(&id, 100, 5555)).await.unwrap();
+        // Out over the link, back in as a station's call, not forwarded a
+        // second time: refused, and the refusal reaches the caller.
+        assert_eq!(next_call(&mut a, protocol::CALL_SETUP_REJECT, 3000).await.map(|x| x.0), Some(id));
+        wait_until("no call left", async || state.inner.read().await.calls.is_empty()).await;
+    }
+
+    #[test]
+    fn individual_calls_come_in_only_for_admitted_issis() {
+        let ids: SharedCallIds = Arc::default();
+        let (mut out, mut inb) = (Outbound::new(1, ids.clone()), Inbound::new(1, ids));
+        let remote = Uuid::new_v4();
+        let p = protocol::build_circular_call_setup(&remote, 1234, 2_320_001, 0);
+        assert!(inb.translate_with(p.clone(), |_| false, |i| i == 2_320_005).is_none(), "not ours to take");
+        let inside = inb.translate_with(protocol::build_circular_call_setup(&remote, 1234, 2_320_005, 0), |_| false, |i| i == 2_320_005).expect("a visitor");
+        let local = call_id(&inside).unwrap();
+        assert_ne!(local, remote, "a new id here");
+        // The answer goes back under the remote id, the release forgets it.
+        let back = out.translate(protocol::build_call_cause(protocol::CALL_RELEASE, &local, 0)).unwrap();
+        assert_eq!(call_id(&back), Some(remote));
+        assert!(out.translate(protocol::build_call_cause(protocol::CALL_RELEASE, &local, 0)).is_none());
+        // Our own setup going out gets a new id there.
+        let mine = Uuid::new_v4();
+        let sent = out.translate(protocol::build_short_transfer(&mine, 2_320_004, 1234)).unwrap();
+        assert_ne!(call_id(&sent), Some(mine));
     }
 
     #[tokio::test]

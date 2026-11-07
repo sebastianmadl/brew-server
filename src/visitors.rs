@@ -51,7 +51,16 @@ pub struct Visitors {
     /// Call id -> (station, alias): a `SERVICE_CALL_NETWORK` waiting for its
     /// `GROUP_TX`.
     calls: HashMap<Uuid, (ClientId, u32, Instant)>,
+    /// Call id -> (station, network slot): a `SERVICE_CALL_NETWORK` naming
+    /// the called party's network, waiting for its individual call / SDS.
+    called: HashMap<Uuid, (ClientId, u8, Instant)>,
+    /// (calling ISSI, called ISSI) -> when an unknown target was last handed
+    /// to another network: a second time within [`FORWARD_GUARD`] is a loop.
+    forwarded: HashMap<(u32, u32), Instant>,
 }
+
+/// Loop guard of "forward unknown targets" (as `fedroute::CALL_DEDUP_WINDOW`).
+pub const FORWARD_GUARD: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct Mni {
@@ -135,8 +144,23 @@ pub async fn handle_call_network(state: &AppState, source: ClientId, json: &str)
     #[derive(Deserialize)]
     struct G { gssi: u32, mcc: u16, mnc: u16 }
     #[derive(Deserialize)]
-    struct Msg { uuid: Uuid, group: Option<G> }
+    struct Msg { uuid: Uuid, group: Option<G>, called: Option<Mni> }
     let Ok(m) = serde_json::from_str::<Msg>(json) else { warn!(%source, json, "malformed call network message"); return };
+    // An individual call or SDS to a party of another network (TSI, TS 100
+    // 392-2 table 14.39).
+    if let Some(called) = m.called {
+        let slot = slot_of(state, called);
+        let mut inner = state.inner.write().await;
+        if !has_capability(&inner, source) { return; }
+        let now = Instant::now();
+        inner.visitors.called.retain(|_, (_, _, at)| now.duration_since(*at) < CALL_NOTE_FOR);
+        match slot {
+            Some(slot) if inner.visitors.called.len() < MAX_VISITORS => { inner.visitors.called.insert(m.uuid, (source, slot, now)); }
+            Some(_) => {}
+            None => debug!(%source, uuid = %m.uuid, mcc = called.mcc, mnc = called.mnc, "call network names this network or no linked one; routed here"),
+        }
+        return;
+    }
     let Some(g) = m.group else { return };
     if g.gssi == 0 || g.gssi > GSSI_MASK { return; }
     let slot = slot_of(state, Mni { mcc: g.mcc, mnc: g.mnc });
@@ -158,6 +182,106 @@ pub fn call_alias(inner: &mut Inner, source: ClientId, id: Uuid) -> Option<u32> 
         if station == source { return Some(a); }
     }
     inner.calls.get(&id).filter(|c| c.owner == source && split_alias(c.destination).is_some()).map(|c| c.destination)
+}
+
+/// Where Multi Network sends an individual call or SDS.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Decision {
+    /// To this station, with this `SERVICE_CALL_NETWORK` before it (if any).
+    Station(ClientId, Option<Vec<u8>>),
+    /// To the link of another network.
+    Link(ClientId),
+    /// Nowhere: refused.
+    Refuse,
+}
+
+/// `SERVICE_CALL_NETWORK` for an individual call or SDS to a station: the
+/// networks of the calling and called parties, only where they are not this
+/// server's own.
+pub fn build_party_network(id: &Uuid, calling: Option<Mni>, called: Option<Mni>) -> Vec<u8> {
+    let mut v = serde_json::json!({ "uuid": id.to_string() });
+    if let Some(m) = calling { v["calling"] = serde_json::json!({ "mcc": m.mcc, "mnc": m.mnc }); }
+    if let Some(m) = called { v["called"] = serde_json::json!({ "mcc": m.mcc, "mnc": m.mnc }); }
+    protocol::build_service(protocol::SERVICE_CALL_NETWORK, &v.to_string())
+}
+
+/// The network a radio on station `station` with `issi` belongs to, if it
+/// is a visitor.
+fn visitor_slot(inner: &Inner, station: ClientId, issi: u32) -> Option<u8> {
+    inner.visitors.of.get(&(station, issi)).copied()
+}
+
+/// Where an individual call or SDS (`id`, `calling` -> `called`) that came
+/// in over `source` goes, when Multi Network decides it; `None`: as without
+/// Multi Network (this server's own radios, SIP, SMS Center).
+///
+/// - Over the link of network X: to a visitor from X here, or to one of this
+///   server's radios that the link registered there; anything else is
+///   refused (that network sent it to an ISSI this server never gave it).
+/// - From a station that named the called party's network X
+///   (`SERVICE_CALL_NETWORK` with `called`): to a visitor from X here, else
+///   over the link to X (refused while it is down).
+pub fn individual_route(state: &AppState, inner: &mut Inner, source: ClientId, id: Uuid, calling: u32, called: u32) -> Option<Decision> {
+    let note_for = |inner: &Inner, to: ClientId, calling: Option<Mni>, called: Option<Mni>| {
+        has_capability(inner, to).then(|| build_party_network(&id, calling, called))
+    };
+    if let Some((&slot, _)) = inner.netlinks.iter().find(|(_, c)| **c == source) {
+        let mni = mni_of(state, slot);
+        if let Some(v) = inner.visitors.by_key.get(&(slot, called)) {
+            let to = v.station;
+            return Some(Decision::Station(to, note_for(inner, to, mni, mni)));
+        }
+        if netlink::exported(state, slot, called) {
+            if let Some(to) = inner.subscribers.get(&called).map(|s| s.client_id) {
+                return Some(Decision::Station(to, note_for(inner, to, mni, None)));
+            }
+        }
+        info!(network = slot, uuid = %id, calling, called, "multi network: individual call / SDS for an ISSI this server has not registered there refused");
+        return Some(Decision::Refuse);
+    }
+    let (station, slot, _) = inner.visitors.called.remove(&id)?;
+    if station != source { return None; }
+    let mni = mni_of(state, slot);
+    let calling_mni = visitor_slot(inner, source, calling).and_then(|s| mni_of(state, s));
+    if let Some(v) = inner.visitors.by_key.get(&(slot, called)) {
+        let to = v.station;
+        return Some(Decision::Station(to, note_for(inner, to, calling_mni, mni)));
+    }
+    match inner.netlinks.get(&slot).copied() {
+        Some(link) => {
+            // The caller should be known there, as a Basestation's radio is
+            // (not a visitor from that network: it is registered there).
+            if visitor_slot(inner, source, calling) != Some(slot) { netlink::ensure_registered(state, slot, calling); }
+            Some(Decision::Link(link))
+        }
+        None => {
+            info!(network = slot, uuid = %id, calling, called, "multi network: link to the called party's network is down; refused");
+            Some(Decision::Refuse)
+        }
+    }
+}
+
+/// "Forward unknown targets": an individual call or SDS from a station that
+/// nobody here takes goes once to the first linked network that has it
+/// switched on. Never from a link (so never back), and a second time for
+/// the same pair within [`FORWARD_GUARD`] is taken for a loop.
+pub fn forward_unknown(state: &AppState, inner: &mut Inner, source: ClientId, calling: u32, called: u32) -> Option<ClientId> {
+    if inner.clients.get(&source).is_none_or(|c| c.mode == ClientMode::Network) { return None; }
+    let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
+    if !cfg.enabled { return None; }
+    let slots = netlink::slots(state);
+    let link = cfg.networks.iter().filter(|n| n.enabled && n.forward_unknown)
+        .find_map(|n| slots.get(&n.name).and_then(|s| inner.netlinks.get(s).copied().map(|l| (l, *s))))?;
+    let now = Instant::now();
+    inner.visitors.forwarded.retain(|_, at| now.duration_since(*at) < FORWARD_GUARD);
+    if inner.visitors.forwarded.contains_key(&(calling, called)) {
+        warn!(calling, called, "multi network: unknown target came back within the loop guard; not forwarded again");
+        return None;
+    }
+    if inner.visitors.forwarded.len() < MAX_VISITORS { inner.visitors.forwarded.insert((calling, called), now); }
+    netlink::ensure_registered(state, link.1, calling);
+    info!(calling, called, network = link.1, "multi network: unknown target forwarded to another network");
+    Some(link.0)
 }
 
 /// Upstream channel of the link to network `slot`.

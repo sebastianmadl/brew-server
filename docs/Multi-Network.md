@@ -2,8 +2,8 @@
 
 brew-server can connect to other Brew networks (for example TetraPack or a
 neighbouring operator) and bridge talkgroups across them, and it takes radios of those networks on its
-stations (visitors, extension `mni`). Individual calls and SDS across
-networks come later.
+stations (visitors, extension `mni`), and carries individual calls and SDS
+across networks.
 
 ## How it works
 
@@ -78,7 +78,26 @@ networks come later.
 - The dashboard lists the visitors per network ("Visitors" on the Multi
   Network page).
 - Not yet: groups of a third network (`SERVICE_GROUP_NETWORK` is logged
-  only), individual calls and SDS to and from visitors (step 5).
+  only).
+
+## Individual calls and SDS across networks
+
+Delivered here first; to another network only when the target is known
+there or carries another network's MNI.
+
+| Target | Goes to |
+| --- | --- |
+| TSI of another network (the station names the called network, `SERVICE_CALL_NETWORK` `called`) | a visitor of that network here, else over the link to that network (refused while it is down); the caller is registered there first like a talker |
+| ISSI without a network, registered here | here, as before (a visitor dialling one means this network) |
+| ISSI without a network, not registered here | as before (SIP, SMS Center, refused); with `forward_unknown` on a network: once to that network |
+| from network X to a radio of ours the link registered there | its station |
+| from network X to a visitor from X | its station, with `SERVICE_CALL_NETWORK` (both parties' networks) before it |
+| from network X to anything else | refused |
+
+`forward_unknown` (per network, off by default) never sends back over the
+link a call came in on, and the same calling / called pair a second time
+within 5 s counts as a loop and is refused. Such an SDS is not stored by the
+SMS Center.
 - `mni` is offered only while Multi Network is on and has networks.
 
 The protocol is in [Brew-Extensions.md](Brew-Extensions.md) section 12b.
@@ -107,6 +126,7 @@ register_talkers = true   # register radios in bridged groups there
 register_all = false      # also all radios of mni stations / export_stations
 export_stations = ["bs-wien"]   # station logins for register_all
 never_export = [2320002]  # ISSIs that network has itself
+forward_unknown = false   # individual calls / SDS nobody here takes go there
 reconnect_interval_seconds = 15
 tls = true                # wss://, settings as for [[federation.peers]]
 # tls_ca_path, tls_server_name, tls_pinned_cert_path

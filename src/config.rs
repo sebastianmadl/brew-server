@@ -250,6 +250,9 @@ pub struct NetworkConfig {
     /// ISSIs never registered there (an ISSI that network has itself).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub never_export: Vec<u32>,
+    /// "Forward unknown targets": an individual call or SDS from a station
+    /// that nobody here takes goes once to this network (loop guard 5 s).
+    pub forward_unknown: bool,
     pub reconnect_interval_seconds: u64,
     /// TLS settings, as for `[[federation.peers]]`.
     pub tls: bool,
@@ -275,6 +278,7 @@ impl Default for NetworkConfig {
             register_all: false,
             export_stations: Vec::new(),
             never_export: Vec::new(),
+            forward_unknown: false,
             reconnect_interval_seconds: 15,
             tls: false,
             tls_ca_path: "/etc/ssl/certs/ca-certificates.crt".into(),
