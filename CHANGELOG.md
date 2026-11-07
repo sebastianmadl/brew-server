@@ -2,9 +2,9 @@
 
 All notable changes to brew-server, newest first.
 
-Unreleased (Multi Network, part 1) adds:
+Version 1.20.0 adds:
 
-- **Bridges to other Brew networks.** `[multi_network]` lists other networks
+- **Multi Network: bridges to other Brew networks (provisional, not yet fully tested on air).** `[multi_network]` lists other networks
   this server connects to itself, each over one outbound connection in plain
   Basestation mode (nothing new needed on the far server). The connection name
   (`user_agent`) is free text, e.g. `TMO-Austria Infra 1.0`. Credentials stay
@@ -21,26 +21,9 @@ Unreleased (Multi Network, part 1) adds:
   and those that came in over one the network they came from ("← TP"): live
   calls, Recent calls and Recent SDS, with a Network column when there is
   one to show. In memory only (the history file format is unchanged).
-- **ISSI allowlist.** A new `[allowlist]` section and a Settings panel for
-  running a closed network: with `enabled = true` only the listed ISSIs may
-  communicate through the server, and any other radio is barred exactly as a
-  blacklisted one is (no group transmissions, private calls or SDS; SS-AL, LIP
-  positions and emergency calls still pass, and it can still register so
-  dispatch can see it). Checked at the server for the whole network, whichever
-  Basestation the radio registers on; the blacklist still applies on top. The
-  list is kept but not enforced with `enabled = false` (the default), so it can
-  be built up before the network is closed; an enforced empty list is called
-  out at startup and on the Settings page. Edits apply live and are written to
-  the config file without a restart. Optional `kick_unknown` also kicks an
-  unlisted radio off its Basestation over the control channel. Log lines for a
-  dropped transmission now name the list that barred it. See
-  [docs/ISSI-Allowlist.md](docs/ISSI-Allowlist.md). Contributed by David
-  Harcus MM7FDM.
 - **Open dashboard fixed.** With `[dashboard.ui] open = true` a visitor who is not
   signed in got the login window every 5 s again (the new page asked the admin-only
   network list on every refresh). It is now asked only for admins.
-
-Version 1.20.0 adds:
 
 - **Server name.** `[dashboard] servername` (default `"Tetra Network Monitor"`)
   sets the main dashboard heading and the browser tab title of every
@@ -217,6 +200,24 @@ Version 1.20.0 adds:
   that were offered the matching extension; TetraPack, Brandmeister and older
   Basestations see no change. The messages are specified for other
   implementations in [docs/Brew-Extensions.md](docs/Brew-Extensions.md).
+
+Version 1.18.1 adds:
+
+- **ISSI allowlist.** A new `[allowlist]` section and a Settings panel for
+  running a closed network: with `enabled = true` only the listed ISSIs may
+  communicate through the server, and any other radio is barred exactly as a
+  blacklisted one is (no group transmissions, private calls or SDS; SS-AL, LIP
+  positions and emergency calls still pass, and it can still register so
+  dispatch can see it). Checked at the server for the whole network, whichever
+  Basestation the radio registers on; the blacklist still applies on top. The
+  list is kept but not enforced with `enabled = false` (the default), so it can
+  be built up before the network is closed; an enforced empty list is called
+  out at startup and on the Settings page. Edits apply live and are written to
+  the config file without a restart. Optional `kick_unknown` also kicks an
+  unlisted radio off its Basestation over the control channel. Log lines for a
+  dropped transmission now name the list that barred it. See
+  [docs/ISSI-Allowlist.md](docs/ISSI-Allowlist.md). Contributed by David
+  Harcus MM7FDM.
 
 Version 1.18.0 adds:
 
