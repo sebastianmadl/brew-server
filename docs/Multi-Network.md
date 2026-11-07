@@ -87,6 +87,9 @@ across networks.
 - Moving between this server's stations is invisible to the home network.
   Deregistration, or the station going away, deregisters it at home. When a
   link comes back, every visitor is registered there again.
+- A radio a station names first with another network and then with this
+  server's network (it registered there by ITSI attach, then migrated here)
+  leaves the other network: the server deregisters it there.
 - The dashboard lists the visitors per network ("Visitors" on the Multi
   Network page).
 - Not yet: groups of a third network (`SERVICE_GROUP_NETWORK` is logged

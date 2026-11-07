@@ -109,13 +109,16 @@ pub async fn handle_ms_network(state: &AppState, source: ClientId, json: &str) {
                 return;
             }
             info!(%source, issi = m.issi, mcc = m.mcc, mnc = m.mnc, slot, "multi network: radio from another network");
-            inner.visitors.of.insert((source, m.issi), slot);
+            if let Some(old) = inner.visitors.of.insert((source, m.issi), slot).filter(|old| *old != slot) {
+                leave_home_network(state, &mut inner, source, old, m.issi);
+            }
         }
         None => {
             // This server's own network, or a network it does not link to:
             // the radio is one of ours (rule 1).
-            if inner.visitors.of.remove(&(source, m.issi)).is_some() {
+            if let Some(old) = inner.visitors.of.remove(&(source, m.issi)) {
                 info!(%source, issi = m.issi, "multi network: radio is this network's again");
+                leave_home_network(state, &mut inner, source, old, m.issi);
             } else {
                 debug!(%source, issi = m.issi, mcc = m.mcc, mnc = m.mnc, "MS network names no linked network; radio is this network's");
             }
@@ -345,6 +348,18 @@ pub async fn handle_subscriber(state: &AppState, source: ClientId, msg: &Subscri
         _ => {}
     }
     true
+}
+
+/// A radio of `source` that was registered in network `slot` as a visitor
+/// now belongs elsewhere (it migrated, or registers with another identity):
+/// it leaves that network, so it is not reachable there and here at once.
+fn leave_home_network(state: &AppState, inner: &mut Inner, source: ClientId, slot: u8, issi: u32) {
+    if inner.visitors.by_key.get(&(slot, issi)).is_some_and(|v| v.station == source) {
+        inner.visitors.by_key.remove(&(slot, issi));
+        info!(%source, issi, slot, "multi network: visitor left its home network registration");
+        netlink::set_visitor(state, slot, issi, false);
+        send_up(state, slot, protocol::build_subscriber_message(SUB_DEREGISTER, issi, &[]));
+    }
 }
 
 /// A station went away: its visitors leave their home networks.

@@ -1772,6 +1772,39 @@ mod e2e {
         Message::Binary(protocol::build_service(kind, &v.to_string()).into())
     }
 
+    /// A radio registered at another network as a visitor that then names
+    /// this network (it migrated here, e.g. after its codeplug was changed
+    /// from ITSI attach to migration) leaves the other network: it must not
+    /// stay reachable there and here at once.
+    #[tokio::test]
+    async fn visitor_that_becomes_this_networks_radio_leaves_its_old_network() {
+        let (tp, tp_addr) = serve(base_config()).await;
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), mcc: 901, mnc: 1638, remote_host: tp_addr.to_string(), bridge_issi: 9_000_001, reconnect_interval_seconds: 5, ..Default::default()
+        });
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        wait_until("link up", async || main.inner.read().await.netlinks.len() == 1).await;
+        let mut st = station(main_addr, &[], &[]).await;
+        st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":1638,"cells":[],"capabilities":["mni"]}"#).into())).await.unwrap();
+        next_service(&mut st, protocol::SERVICE_NETWORKS, 2000).await.expect("SERVICE_NETWORKS");
+
+        // ITSI attach on a 1638 cell: a TetraPack radio.
+        st.send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_972, "mcc": 901, "mnc": 1638}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_972, &[]).into())).await.unwrap();
+        wait_until("visitor at TetraPack", async || tp.inner.read().await.subscribers.contains_key(&2_320_972)).await;
+
+        // The same radio migrates with its home 9999: one of ours now.
+        st.send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_972, "mcc": 901, "mnc": 9999}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_972, &[]).into())).await.unwrap();
+        wait_until("gone from TetraPack", async || !tp.inner.read().await.subscribers.contains_key(&2_320_972)).await;
+        wait_until("registered here", async || main.inner.read().await.subscribers.contains_key(&2_320_972)).await;
+        assert!(snapshot(&main).await.networks[0].visitors.is_empty());
+    }
+
     #[tokio::test]
     async fn visitors_register_at_home_and_take_part_in_its_group_calls() {
         let (tp, tp_addr) = serve(base_config()).await;
