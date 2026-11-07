@@ -230,6 +230,9 @@ Tested with two FlowStation Basestations (Pluto+ and SX1255, carriers 1528 /
   scan of the neighbour never showed), so the prepared path (forward
   registration, types 1 and 2) is covered by the unit tests and the
   simulation only.
+- Not yet tested on air: a multi-cell Basestation (several cells on one
+  FlowStation) as the source or target of a move between Basestations, and
+  calls between two radios across Basestations (`call-handoff`).
 
 ## Tests
 
