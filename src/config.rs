@@ -232,9 +232,12 @@ pub struct NetworkConfig {
     /// their calls here. 0: nothing is registered (only for a server that
     /// routes groups without affiliations).
     pub bridge_issi: u32,
-    /// Register a talker there (and affiliate it to the group) before its
-    /// first over goes out, the way a Basestation registers its radios
-    /// before they talk. Off: talkers are passed through unregistered.
+    /// Register radios there, the way a Basestation registers its radios: a
+    /// radio affiliated here to a group of a switched-on bridge pool is
+    /// registered there and affiliated to the pool's groups of that
+    /// network, and leaves them (deregistered) when it leaves here. A
+    /// talker not known that way is registered before its first over.
+    /// Off: talkers are passed through unregistered.
     pub register_talkers: bool,
     pub reconnect_interval_seconds: u64,
     /// TLS settings, as for `[[federation.peers]]`.

@@ -12,7 +12,7 @@ Unreleased (Multi Network, part 1) adds:
   (`[[talkgroup_pools.remote]]`, `network:GSSI` in the editor): a call is then
   heard across networks with the GSSI translated (TG 9 here, TG 909 there) and
   the talker ISSI passed on 1:1. A bridge ISSI is registered there and
-  affiliated to the bridged groups; a talker is registered there and affiliated to the group before its first over, like a Basestation does (`register_talkers`, default on). Answers in a running call cross as well; call identifiers are translated on each link. Nothing else crosses. New dashboard page
+  affiliated to the bridged groups; radios in a bridged group are registered there and affiliated to the group there while they are in it here, like a Basestation does (`register_talkers`, default on). Answers in a running call cross as well; call identifiers are translated on each link. Nothing else crosses. New dashboard page
   **Multi Network** (admins): main switch, this server's network and MNI, the other
   networks with link state, edited live without a restart. See
   [docs/Multi-Network.md](docs/Multi-Network.md).

@@ -23,11 +23,15 @@ station (migration) and individual calls or SDS across networks come later.
   affiliated to the bridged groups, so that network's server sends their
   calls here. With `bridge_issi = 0` nothing is registered (only for a server
   that routes groups without affiliations).
-- **Talkers are registered there** (`register_talkers`, default on): before
-  a talker's first over goes out, the link registers its ISSI in that network
-  and affiliates it to the group, as a Basestation does for its radios (a
-  server such as TetraPack does not show or route a talker it does not know).
-  They are deregistered when the link is stopped. Switch it off for a link
+- **Radios are registered there** (`register_talkers`, default on), as a
+  Basestation does for its radios (a server such as TetraPack does not show
+  or route a talker it does not know): a radio affiliated here to a group of
+  a switched-on bridge pool is registered in that network and affiliated to
+  the pool's group there (TG 9 here -> TG 909 there). When it leaves the
+  group here (or deregisters, or its station goes), it leaves there and is
+  deregistered, except while it is talking. A talker not known that way
+  (e.g. from a peer server) is registered before its first over. All of
+  them are deregistered when the link is stopped. Switch it off for a link
   to this same server (a loop test): there the registration would move the
   radio off its own station. There is no collision check yet: an ISSI that is
   registered in that network elsewhere is moved to this link.
@@ -99,9 +103,8 @@ listen to a group of another network on several groups here).
   `keepalive_timeout_seconds`.
 - A network that is used by a pool cannot be deleted or renamed; remove its
   groups from the pools first.
-- Registering all radios there ("register all ISSI", with a filter and a
-  collision check) is the next step; today only talkers are registered, on
-  their first over.
+- Registering all radios there, also those not in a bridged group ("register
+  all ISSI", with a filter and a collision check), is the next step.
 
 ## Standards
 

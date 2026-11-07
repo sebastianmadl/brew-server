@@ -98,6 +98,9 @@ struct LinkStatus {
     up: Option<mpsc::UnboundedSender<Vec<u8>>>,
     /// Groups the bridge ISSI is affiliated to there right now.
     affiliated: BTreeSet<u32>,
+    /// Radios this link registered there, with their groups there (only
+    /// with `register_talkers`).
+    members: Option<SharedTalkers>,
 }
 
 impl NetLinks {
@@ -181,10 +184,10 @@ async fn link_loop(state: Arc<AppState>, net: NetworkConfig, slot: u8, gen: u64,
         if stopped(&stop) { break; }
         info!(network = %net.name, remote_host = %net.remote_host, "multi network: connecting");
         match connect_and_run(&state, &net, slot, gen, &mut stop).await {
-            Ok(()) => set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; }),
+            Ok(()) => set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.members = None; }),
             Err(e) => {
                 warn!(network = %net.name, error = %format!("{e:#}"), "multi network: link failed");
-                set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.last_error = format!("{e:#}"); });
+                set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.members = None; s.last_error = format!("{e:#}"); });
             }
         }
         if stopped(&stop) { break; }
@@ -280,6 +283,97 @@ pub fn refresh_affiliations(state: &AppState) {
         let want = bridged_groups(&pools, &net.name);
         for msg in affiliation_changes(net.bridge_issi, &status.affiliated, &want) { let _ = up.send(msg); }
         if net.bridge_issi != 0 { status.affiliated = want; }
+    }
+}
+
+/// Radios to have registered in network `name`, with their groups there:
+/// every radio registered here (not over a peer or another network) that is
+/// affiliated to a local group of a switched-on pool bridging that network
+/// gets the pool's groups of that network. The bridge ISSI is left out.
+pub fn mirror<'a>(
+    pools: &[TalkgroupPoolConfig],
+    name: &str,
+    bridge_issi: u32,
+    radios: impl Iterator<Item = (u32, &'a HashSet<u32>)>,
+) -> HashMap<u32, BTreeSet<u32>> {
+    let bridges: Vec<(&[u32], Vec<u32>)> = pools.iter().filter(|p| p.enabled).filter_map(|p| {
+        let there: Vec<u32> = p.remote.iter().filter(|r| r.network == name).map(|r| r.gssi).collect();
+        (!there.is_empty() && !p.groups.is_empty()).then_some((p.groups.as_slice(), there))
+    }).collect();
+    let mut out: HashMap<u32, BTreeSet<u32>> = HashMap::new();
+    if bridges.is_empty() { return out; }
+    for (issi, groups) in radios {
+        if issi == 0 || issi > GSSI_MASK || issi == bridge_issi { continue; }
+        for (here, there) in &bridges {
+            if here.iter().any(|g| groups.contains(g)) {
+                out.entry(issi).or_default().extend(there.iter().copied());
+            }
+        }
+    }
+    out
+}
+
+/// Upstream messages that bring the radios registered there from `have` to
+/// `want`: new radios register and affiliate, radios that left every bridged
+/// group deregister, the rest affiliate / deaffiliate the difference. A
+/// radio in `keep` (talking right now) is not deregistered.
+pub fn member_changes(have: &mut HashMap<u32, BTreeSet<u32>>, want: &HashMap<u32, BTreeSet<u32>>, keep: &HashSet<u32>) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut issis: Vec<u32> = have.keys().chain(want.keys()).copied().collect();
+    issis.sort_unstable();
+    issis.dedup();
+    for issi in issis {
+        let empty = BTreeSet::new();
+        let w = want.get(&issi).unwrap_or(&empty);
+        match have.get_mut(&issi) {
+            None => {
+                if have.len() >= MAX_TALKERS { continue; }
+                out.push(protocol::build_subscriber_message(protocol::SUB_REGISTER, issi, &[]));
+                let groups: Vec<u32> = w.iter().copied().collect();
+                out.push(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, issi, &groups));
+                have.insert(issi, w.clone());
+            }
+            Some(_) if w.is_empty() => {
+                if keep.contains(&issi) { continue; }
+                out.push(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, issi, &[]));
+                have.remove(&issi);
+            }
+            Some(h) => {
+                out.extend(affiliation_changes(issi, h, w));
+                *h = w.clone();
+            }
+        }
+    }
+    out
+}
+
+/// After a registration, affiliation or pool change: every link that
+/// registers radios brings them in line with [`mirror`] (a radio joins a
+/// bridged group there while it is in the group here, and leaves when it
+/// leaves it here).
+pub async fn sync_members(state: &AppState) {
+    let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
+    if !cfg.enabled || !cfg.networks.iter().any(|n| n.enabled && n.register_talkers) { return; }
+    let pools = pools_now(state);
+    let (wants, talking) = {
+        let inner = state.inner.read().await;
+        let local = |c: &crate::state::ClientId| inner.clients.get(c).is_some_and(|c| matches!(c.mode, ClientMode::Terminal | ClientMode::Basestation));
+        let radios: Vec<(u32, &HashSet<u32>)> = inner.subscribers.iter()
+            .filter(|(_, s)| s.route.path.is_empty() && local(&s.client_id))
+            .map(|(i, s)| (*i, &s.groups)).collect();
+        let wants: Vec<(String, HashMap<u32, BTreeSet<u32>>)> = cfg.networks.iter()
+            .filter(|n| n.enabled && n.register_talkers)
+            .map(|n| (n.name.clone(), mirror(&pools, &n.name, n.bridge_issi, radios.iter().map(|(i, g)| (*i, *g)))))
+            .collect();
+        let talking: HashSet<u32> = inner.calls.values().map(|c| c.source_issi).collect();
+        (wants, talking)
+    };
+    let reg = state.netlinks.lock();
+    for (name, want) in wants {
+        let Some(status) = reg.status.get(&name) else { continue };
+        let (Some(up), Some(members)) = (status.up.clone(), status.members.clone()) else { continue };
+        let mut have = members.lock().unwrap_or_else(|e| e.into_inner());
+        for msg in member_changes(&mut have, &want, &talking) { let _ = up.send(msg); }
     }
 }
 
@@ -510,18 +604,21 @@ async fn run_session(
         let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_REGISTER, net.bridge_issi, &[]));
         for msg in affiliation_changes(net.bridge_issi, &BTreeSet::new(), &want) { let _ = up_tx.send(msg); }
     }
+    let talkers: SharedTalkers = Arc::default();
     set_status(state, &net.name, gen, |s| {
         s.connected = true;
         s.since_ms = crate::telemetry::now_ms();
         s.last_error.clear();
         s.up = Some(up_tx.clone());
         s.affiliated = if net.bridge_issi != 0 { want } else { BTreeSet::new() };
+        s.members = net.register_talkers.then(|| talkers.clone());
     });
+    // The radios already in bridged groups here join them there.
+    sync_members(state).await;
 
     let keepalive = Keepalive::from_config(&state.config.federation);
     let mut ping = keepalive.map(Keepalive::ping_timer);
     let ids: SharedCallIds = Arc::default();
-    let talkers: SharedTalkers = Arc::default();
     let mut outbound = Outbound::new(slot, ids.clone());
     if net.register_talkers { outbound = outbound.registering(talkers.clone(), net.bridge_issi); }
     let out_name = net.name.clone();
@@ -752,6 +849,33 @@ mod tests {
 
     fn group_tx(id: Uuid, src: u32, dst: u32) -> Vec<u8> {
         protocol::build_group_tx(&id, src, dst, 0)
+    }
+
+    #[test]
+    fn radios_in_a_bridged_group_join_its_group_over_there() {
+        let mut off = pool("Off", &[("TP", 911)]);
+        off.enabled = false;
+        off.groups = vec![9];
+        let pools = vec![pool("A", &[("TP", 909), ("Other", 1)]), off];
+        let (g9, g2, g10) = (HashSet::from([9]), HashSet::from([2]), HashSet::from([9, 2]));
+        let radios = vec![(100, &g9), (200, &g2), (300, &g10), (9_000_001, &g9)];
+        let m = mirror(&pools, "TP", 9_000_001, radios.into_iter());
+        assert_eq!(m, HashMap::from([(100, BTreeSet::from([909])), (300, BTreeSet::from([909]))]));
+    }
+
+    #[test]
+    fn member_changes_register_affiliate_and_deregister() {
+        let kinds = |v: &[Vec<u8>]| v.iter().map(|p| (p[1], u32::from_le_bytes(p[2..6].try_into().unwrap()))).collect::<Vec<_>>();
+        let mut have = HashMap::new();
+        let want = HashMap::from([(100, BTreeSet::from([909]))]);
+        assert_eq!(kinds(&member_changes(&mut have, &want, &HashSet::new())), vec![(protocol::SUB_REGISTER, 100), (protocol::SUB_AFFILIATE, 100)]);
+        assert!(member_changes(&mut have, &want, &HashSet::new()).is_empty());
+        let more = HashMap::from([(100, BTreeSet::from([909, 910]))]);
+        assert_eq!(kinds(&member_changes(&mut have, &more, &HashSet::new())), vec![(protocol::SUB_AFFILIATE, 100)]);
+        // Talking right now: stays until its over is done.
+        assert!(member_changes(&mut have, &HashMap::new(), &HashSet::from([100])).is_empty());
+        assert_eq!(kinds(&member_changes(&mut have, &HashMap::new(), &HashSet::new())), vec![(protocol::SUB_DEREGISTER, 100)]);
+        assert!(have.is_empty());
     }
 
     #[test]
@@ -1065,8 +1189,17 @@ mod e2e {
         wait_until("all radios registered", async || main.inner.read().await.subscribers.len() == 25).await;
         let agents: Vec<String> = tp.inner.read().await.client_agents.values().cloned().collect();
         assert!(agents.iter().any(|a| a == "TMO-Austria Infra 1.0"), "{agents:?}");
-        // Nothing of this server's registrations crossed.
-        assert!(!tp.inner.read().await.subscribers.contains_key(&2_320_001));
+        // The radios in TG 9 here are registered there and sit on TG 909
+        // (like a Basestation's radios); the others are not.
+        wait_until("TG 9 radios on TG 909 there", async || {
+            tp.inner.read().await.subscribers.get(&2_320_001).is_some_and(|s| s.groups == HashSet::from([909]))
+        }).await;
+        assert!(!tp.inner.read().await.subscribers.contains_key(&2_320_004), "a radio without TG 9 stays here");
+        // A radio leaving TG 9 here leaves TG 909 there and is deregistered.
+        stations[0].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_DEAFFILIATE, 2_320_003, &[9]).into())).await.unwrap();
+        wait_until("left TG 909 there", async || !tp.inner.read().await.subscribers.contains_key(&2_320_003)).await;
+        stations[0].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, 2_320_003, &[9]).into())).await.unwrap();
+        wait_until("back on TG 909 there", async || tp.inner.read().await.subscribers.get(&2_320_003).is_some_and(|s| s.groups.contains(&909))).await;
 
         // A radio on station 0 talks on TG 9: heard on TG 909 over there,
         // talker ISSI 1:1.

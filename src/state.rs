@@ -701,5 +701,7 @@ impl AppState {
             self.monitor.call_ended(uuid).await;
             if let Some(bridge) = &bridge { bridge.teardown_by_brew_call(uuid).await; }
         }
+        // Its radios leave the bridged groups of other networks too.
+        crate::netlink::sync_members(self).await;
     }
 }

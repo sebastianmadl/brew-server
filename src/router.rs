@@ -1131,6 +1131,8 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
     if registered {
         subscriber_registered(state, msg.issi);
     }
+    // Bridged groups: the radio joins or leaves them in the other networks.
+    crate::netlink::sync_members(state).await;
 }
 
 /// An ISSI (re)registered somewhere on the Brew network -- here or at a peer

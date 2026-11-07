@@ -129,6 +129,7 @@ pub async fn apply(state: &Arc<AppState>, mut pools: Vec<TalkgroupPoolConfig>, b
     crate::netlink::validate(&networks, &pools)?;
     if let Ok(mut live) = state.pools.write() { *live = pools.clone(); }
     crate::netlink::refresh_affiliations(state);
+    crate::netlink::sync_members(state).await;
     tracing::warn!(count = pools.len(), by, "talkgroup pools changed");
     let cfg = state.config_snapshot();
     crate::CONFIG_WRITE_APPLIED_LIVE.store(true, std::sync::atomic::Ordering::SeqCst);
