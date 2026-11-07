@@ -40,7 +40,7 @@ The extensions use:
 | --- | --- | --- |
 | `CLASS_SUBSCRIBER` | `0xf0` | `SUB_REGISTER` (1), `SUB_REREGISTER` (2), `SUB_DEREGISTER` (0), `SUB_AFFILIATE` (8): unchanged. A registration on B is what moves a radio. |
 | `CLASS_CALL_CONTROL` | `0xf1` | `GROUP_TX` (2), `GROUP_IDLE` (3), `CALL_RELEASE` (10) with its cause byte, `SIMPLEX_GRANTED` (12), `SIMPLEX_IDLE` (13): unchanged. |
-| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1F` and `0x24`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
+| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x24`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
 
 Routing stays as in Brew: one routing entry per ISSI, the newest registration
 wins, and a registration keeps the ISSI's group affiliations.
@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check, mni
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -66,6 +66,8 @@ X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, cal
 - A Basestation sends an extension message only when the header names its
   extension. No header (TetraPack, Brandmeister, older servers): it sends none.
 - A server may offer a subset; each extension below names what it needs.
+- brew-server offers `mni` only while Multi Network is switched on and has
+  networks configured.
 
 ### 3.2 Basestation capability: `capabilities` in `SERVICE_BTS_INFO`
 
@@ -81,6 +83,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `call-handoff` | hands a local call between two of its radios to the network, and joins a network call of two of its radios locally (section 8.5) | `call-handoff` (FlowStation: together with `call-restore`, not on multi-cell stations yet) |
 | `cell-directory` | wants `SERVICE_CELL_DIRECTORY` (section 5.3) | `cell-directory` (FlowStation: on its own, also on multi-cell stations) |
 | `group-access` | refuses group attachments and requests to talk itself, from `SERVICE_GROUP_ACCESS` (section 12) | `group-access` (FlowStation: on its own, also on multi-cell stations) |
+| `mni` | takes radios of other networks and tells the server their network (section 12b) | `mni` |
 
 ### 3.3 Summary
 
@@ -98,6 +101,10 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
 | `0x1E` | `SERVICE_CALL_HANDOFF` | server → A → server | `call-handoff` | A: `call-handoff` |
 | `0x1F` | `SERVICE_GROUP_ACCESS` | server → Basestation | `group-access` | `group-access` |
+| `0x20` | `SERVICE_NETWORKS` | server → Basestation | `mni` | `mni` |
+| `0x21` | `SERVICE_MS_NETWORK` | Basestation → server | `mni` | `mni` |
+| `0x22` | `SERVICE_GROUP_NETWORK` | Basestation → server | `mni` | `mni` |
+| `0x23` | `SERVICE_CALL_NETWORK` | both | `mni` | `mni` |
 | `0x24` | `SERVICE_ISSI_CHECK` | Basestation → server → Basestation | `issi-check` | – |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
@@ -949,6 +956,88 @@ At most 256 ISSIs per message. The server answers with the same type:
   asker relies on a never-export list and on noticing the same ISSI talking
   there (brew-server shows both on the Multi Network page).
 
+## 12b. Multi Network (`mni`)
+
+A Basestation with radios from other networks (migration, TS 100 392-2
+clause 16.4.1.1 case b)) tells its server which network an ISSI or a GSSI
+belongs to. Without such a statement everything is in the server's own
+network, as without the extension. The server keeps a radio of another
+network (a visitor) apart from its own radios, keyed by network and ISSI, and
+passes its registration and calls on to its home network. Nothing here is
+defined by ETSI: it is all inside the SwMI. A network is named by its MNI
+(MCC 10 bits, MNC 14 bits, clause 18.4.2.1 table 18.17).
+
+All four messages need the `mni` offer and the `mni` capability. Unknown
+fields are ignored, so later versions can add some.
+
+### 12b.1 `SERVICE_NETWORKS` (0x20)
+
+Server → Basestation, after its `SERVICE_BTS_INFO` and on every change (a
+network added, removed, switched, a link up or down):
+
+```json
+{"this":{"mcc":901,"mnc":9999},"networks":[{"mcc":901,"mnc":1234,"name":"TetraPack","up":true}]}
+```
+
+`this` is the server's own network. Never credentials. A Basestation should
+accept a migrating radio only from a network in the last list that is `up`,
+and refuse the others (clause 16.4.1.1 b), cause "Migration not supported",
+table 16.81).
+
+### 12b.2 `SERVICE_MS_NETWORK` (0x21)
+
+Basestation → server, right before the `SUB_REGISTER` of a radio of another
+network:
+
+```json
+{"issi":2320972,"mcc":901,"mnc":1234}
+```
+
+- `issi` is the radio's own ISSI (from the second U-LOCATION UPDATE DEMAND),
+  not the (V)ASSI it uses in the visited cell (clause 16.4.7.1).
+- From then on, every subscriber message of this connection for this ISSI is
+  about the visitor, until the connection deregisters it. The server's own
+  radio with the same ISSI is not affected.
+- An MNI that is the server's own, or one it has no link to, makes the radio
+  one of the server's own (as without the message).
+- The server registers the visitor in its home network and forwards its
+  affiliations, deaffiliations and deregistration there. A visitor that
+  registers on another Basestation of the same server moves there; the home
+  network sees nothing of it. When a Basestation disconnects, its visitors
+  are deregistered at home.
+
+### 12b.3 `SERVICE_GROUP_NETWORK` (0x22)
+
+Basestation → server, before a `SUB_REGISTER` / `SUB_AFFILIATE`, only for
+groups that are not in the radio's own network:
+
+```json
+{"issi":2320972,"groups":[{"gssi":9,"mcc":901,"mnc":9999}]}
+```
+
+Without it, a radio's groups are in the radio's own network (a visitor's in
+its home network). brew-server: noted in the log, not routed yet.
+
+### 12b.4 `SERVICE_CALL_NETWORK` (0x23)
+
+Both directions, right before the `GROUP_TX` of a call on a group of another
+network than the server's own:
+
+```json
+{"uuid":"…","group":{"gssi":909,"mcc":901,"mnc":1234}}
+```
+
+- Station → server: a visitor talks on a group of its home network. The
+  server sends the call to that network and to the Basestations of the other
+  visitors in the group (and into talkgroup pools that bridge it).
+- Server → station: a call of another network's group, sent only to
+  Basestations with a visitor in it; the `GROUP_TX` carries that network's
+  GSSI. Later overs of the call keep its group.
+- Without it a `GROUP_TX` is on the server's own group of that number (the
+  same GSSI may exist in two networks).
+- `calling` / `called` (MNIs of the parties of an individual call or SDS)
+  are reserved for individual calls and SDS between networks (later).
+
 ## 13. Implementation checklist
 
 Server:
@@ -972,6 +1061,8 @@ Server:
       and send `SERVICE_CELL_DIRECTORY` (5.3) to capable Basestations.
 - [ ] Optional: send `SERVICE_GROUP_ACCESS` (12.2) to capable Basestations.
 - [ ] Optional: answer `SERVICE_ISSI_CHECK` (12a.1).
+- [ ] Optional: `mni` (12b): visitor table, home registration, group calls
+      both ways with `SERVICE_CALL_NETWORK`.
 
 Basestation:
 

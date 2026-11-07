@@ -155,7 +155,10 @@ fn busy(inner: &Inner, gssi: u32, origin: Uuid) -> bool {
 /// leg on a group of another network goes to that network's link only.
 fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> {
     if crate::netlink::split_alias(gssi).is_some() {
-        return crate::netlink::link_for(inner, gssi).into_iter().collect();
+        // That network's link, and the stations with its visitors in the group.
+        let mut t = crate::visitors::targets(inner, gssi);
+        t.extend(crate::netlink::link_for(inner, gssi));
+        return t;
     }
     let mut targets = if state.config.route_without_affiliations {
         inner.clients.keys().copied().collect::<HashSet<_>>()
@@ -171,6 +174,18 @@ fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> 
 
 type Out = Vec<(mpsc::UnboundedSender<Vec<u8>>, Vec<u8>)>;
 
+/// Queues `header` for connection `c`: a station gets a group of another
+/// network as that group's own GSSI with its network before it (`mni`).
+fn push_to(state: &AppState, c: &crate::state::Client, header: &[u8], out: &mut Out) {
+    if c.mode == ClientMode::Network {
+        out.push((c.tx.clone(), protocol::adapt_to_version(header, c.forward_version()).into_owned()));
+        return;
+    }
+    for p in crate::visitors::for_station(state, header) {
+        out.push((c.tx.clone(), protocol::adapt_to_version(&p, c.forward_version()).into_owned()));
+    }
+}
+
 /// Announces talker `source_issi` on leg `leg` (group `gssi`) to everyone
 /// the leg reaches but `except`, and makes the leg a copy again (owned by
 /// the pool).
@@ -181,7 +196,7 @@ fn reannounce_leg(state: &AppState, inner: &mut Inner, leg: Uuid, gssi: u32, sou
     let header = protocol::build_group_tx(&leg, source_issi, gssi, priority);
     for cid in &peers {
         if let Some(c) = inner.clients.get(cid) {
-            out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
+            push_to(state, c, &header, out);
         }
     }
     if let Some(call) = inner.calls.get_mut(&leg) {
@@ -208,7 +223,7 @@ fn announce_answer(state: &AppState, inner: &mut Inner, origin: Uuid, leg: Uuid,
         let header = protocol::build_group_tx(&origin, source_issi, gssi, priority);
         for cid in &audience {
             if let Some(c) = inner.clients.get(cid) {
-                out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
+                push_to(state, c, &header, out);
             }
         }
         call.touch();
@@ -230,7 +245,7 @@ fn start_leg(state: &AppState, inner: &mut Inner, origin: Uuid, gssi: u32, out: 
     let header = protocol::build_group_tx(&leg, run.source_issi, gssi, run.priority);
     for cid in &peers {
         if let Some(c) = inner.clients.get(cid) {
-            out.push((c.tx.clone(), protocol::adapt_to_version(&header, c.forward_version()).into_owned()));
+            push_to(state, c, &header, out);
         }
     }
     inner.calls.insert(leg, ActiveCall {

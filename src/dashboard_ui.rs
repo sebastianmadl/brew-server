@@ -889,7 +889,7 @@ R.multinet=()=>{
     return `<tr${n.enabled?'':' class="off"'}><td><button class="tog" role="switch" aria-checked="${n.enabled}" aria-label="Network ${esc(n.name)} on" onclick="toggleNet(${i})"></button></td>
      <td><b>${esc(n.name)}</b><div class="mut" style="font-size:12px">MNI ${mni(n.mcc,n.mnc)}</div></td><td>${st}</td>
      <td><code>${esc(n.remote_host)}${esc(n.path)}</code>${n.tls?' <span class="chip">TLS</span>':''}<div class="mut" style="font-size:12px">login ${esc(n.username)||'—'} · as “${esc(n.user_agent||M.default_user_agent)}”</div></td>
-     <td>${n.bridge_issi||'<span class="mut">—</span>'}${n.register_talkers&&n.connected?`<div class="mut" style="font-size:12px">${n.exported.length} radio${n.exported.length===1?'':'s'} registered there${n.register_all?' (all)':''}${n.checks?' · ISSIs checked':''}</div>`:''}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
+     <td>${n.bridge_issi||'<span class="mut">—</span>'}${n.register_talkers&&n.connected?`<div class="mut" style="font-size:12px">${n.exported.length} radio${n.exported.length===1?'':'s'} registered there${n.register_all?' (all)':''}${n.checks?' · ISSIs checked':''}</div>`:''}${n.visitors.length?`<div class="mut" style="font-size:12px">${n.visitors.length} visitor${n.visitors.length===1?'':'s'} here</div>`:''}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
      <td style="white-space:nowrap"><button class="btn" onclick="editNet(${i})">Edit</button><button class="btn danger" onclick="delNet(${i})">Delete</button></td></tr>`;}).join('');
   return `<div class="card"><div class="ch"><h2>This server</h2>${helpBtn('mnself')}<span class="sp"></span><label style="display:flex;gap:8px;align-items:center;font-size:13px"><button class="tog" role="switch" aria-checked="${M.enabled}" aria-label="Multi Network on" onclick="toggleMn()"></button>Multi Network ${M.enabled?'on':'off'}</label><button class="btn" onclick="editSelf()">Edit</button></div>
    <div class="row"><div class="rm"><div class="rt">${esc(M.name)||'<span class="mut">no name</span>'}</div><div class="rs">MNI (MCC/MNC) ${mni(M.mcc,M.mnc)}</div></div></div>
@@ -897,8 +897,16 @@ R.multinet=()=>{
   <div class="card"><div class="ch"><h2>Other networks</h2><span class="cnt">${M.networks.length}</span>${helpBtn('mnnets')}<span class="sp"></span><button class="btn pri" onclick="editNet(-1)">${ic('plus')}New network</button></div>
    ${helpNote('mnnets','This server connects to each network itself, as one Basestation with the login that network gave you, and introduces itself with the connection name you choose (empty: brew-server and its version). The login stays on this server; stations never get it. What crosses is set by the talkgroup pools on the <a data-go="routing" href="#routing">Routing</a> page: put a group of a network into a pool as <code>network:GSSI</code> (e.g. TG 9 here and TetraPack:909 there) and the pool becomes a bridge; the talker\'s ISSI is passed on 1:1. The bridge ISSI is registered in that network and listens to the bridged groups so its server sends their calls here. Changes apply at once, only a changed network reconnects, no restart.')}
    ${M.networks.length?`<div class="tw"><table><thead><tr><th style="width:52px">On</th><th>Network</th><th>Link</th><th>Server</th><th>Bridge ISSI</th><th>Bridged groups</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No other networks yet.</div>'}
-   ${msgDiv('net-msg')}</div>${conflictCard(M)}`;
+   ${msgDiv('net-msg')}</div>${visitorCard(M)}${conflictCard(M)}`;
 };
+// Radios of other networks on this server's stations (extension mni).
+function visitorCard(M){
+  const l=M.networks.flatMap(n=>n.visitors.map(v=>({...v,net:n.name})));
+  if(!l.length)return '';
+  return `<div class="card"><div class="ch"><h2>Visitors</h2><span class="cnt">${l.length}</span>${helpBtn('mnvis')}</div>
+   ${helpNote('mnvis','Radios of another network on a station of this server. The station says which network a radio comes from (stations with Multi Network, extension mni); this server registers it in its home network with its groups, so its home network\'s group calls reach it here and its calls on those groups go there. A radio with the same ISSI in this network is not affected.')}
+   <div class="tw"><table><thead><tr><th>Network</th><th>ISSI</th><th>Station</th><th>Groups there</th><th>Since</th></tr></thead><tbody>${l.map(v=>`<tr><td>${esc(v.net)}</td><td class="m">${v.issi}</td><td>${esc(v.station)}</td><td>${v.groups.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td><td class="m">${tmd(v.since_ms)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
 // ISSI collisions the links saw (newest first), with a never-export button.
 function conflictCard(M){
   const l=M.networks.flatMap((n,i)=>n.conflicts.map(c=>({...c,i,net:n.name,never:n.never_export.includes(c.issi)}))).sort((a,b)=>b.at_ms-a.at_ms);

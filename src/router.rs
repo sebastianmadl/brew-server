@@ -176,6 +176,15 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_BLACKLIST_CMD => {
             crate::blacklist::handle_command(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_NETWORK => {
+            crate::visitors::handle_ms_network(&state, source, &svc.json_data).await;
+        }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_GROUP_NETWORK => {
+            crate::visitors::handle_group_network(&state, source, &svc.json_data).await;
+        }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_CALL_NETWORK => {
+            crate::visitors::handle_call_network(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_ISSI_CHECK => {
             crate::netlink::handle_issi_check(&state, source, &svc.json_data).await;
         }
@@ -215,8 +224,19 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
     }
 }
 
-async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid, payload: CallPayload, raw: Vec<u8>) {
-    let CallPayload::GroupTransmission(gt) = payload else { return };
+async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid, payload: CallPayload, mut raw: Vec<u8>) {
+    let CallPayload::GroupTransmission(mut gt) = payload else { return };
+    // A visitor's call on a group of its home network (`SERVICE_CALL_NETWORK`
+    // before it): routed as that network's group (an alias).
+    let visitor_call = {
+        let mut inner = state.inner.write().await;
+        crate::visitors::call_alias(&mut inner, source, id)
+    };
+    if let Some(a) = visitor_call {
+        gt.destination = a;
+        if raw.len() >= 26 { raw[22..26].copy_from_slice(&a.to_le_bytes()); }
+    }
+    let visitor_call = visitor_call.is_some();
     let emergency = is_emergency_call(state, gt.source, gt.priority).await;
     if state.is_blocked(gt.source) && !emergency {
         info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX from a blacklisted ISSI dropped");
@@ -230,7 +250,7 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
     // A group of another network (an alias, see `netlink`) is only ever
     // started by that network's own link; nothing else may send into it.
     let bridged = crate::netlink::split_alias(gt.destination).is_some();
-    if bridged && crate::netlink::link_for(&inner, gt.destination) != Some(source) {
+    if bridged && !visitor_call && crate::netlink::link_for(&inner, gt.destination) != Some(source) {
         warn!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, "GROUP_TX on another network's group from a connection that is not its link dropped");
         return;
     }
@@ -280,10 +300,13 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         }
     }
 
-    // A call that came in over a link to another network reaches this
-    // server's stations only through the legs of its pools.
+    // A call on another network's group reaches this server's stations
+    // only through the legs of its pools and where a visitor from that
+    // network is in the group; a visitor's call goes to its home network.
     let mut targets = if bridged {
-        HashSet::new()
+        let mut t = crate::visitors::targets(&inner, gt.destination);
+        if visitor_call { t.extend(crate::netlink::link_for(&inner, gt.destination)); }
+        t
     } else if state.config.route_without_affiliations {
         inner.clients.keys().copied().collect::<HashSet<_>>()
     } else {
@@ -329,7 +352,8 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
     targets.remove(&source);
     // A link to another network only carries the calls of its bridged
     // groups (pool legs), never this server's own group calls.
-    targets.retain(|c| inner.clients.get(c).is_none_or(|c| c.mode != ClientMode::Network));
+    let home_link = if visitor_call { crate::netlink::link_for(&inner, gt.destination) } else { None };
+    targets.retain(|c| Some(*c) == home_link || inner.clients.get(c).is_none_or(|c| c.mode != ClientMode::Network));
     inner.group_floor.insert(gt.destination, id);
     inner.calls.insert(id, ActiveCall {
         kind: CallKind::Group,
@@ -355,11 +379,16 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
     let raised = (emergency && gt.priority < EMERGENCY_PRIORITY).then(|| with_emergency_priority(&raw));
     let txs = targets.iter().filter_map(|cid| inner.clients.get(cid).map(|c| {
         let raise = raised.is_some() && (inner.consoles.contains(cid) || c.mode == ClientMode::Peer);
-        (c.tx.clone(), c.forward_version(), raise)
+        (c.tx.clone(), c.forward_version(), raise, c.mode == ClientMode::Network)
     })).collect::<Vec<_>>();
     drop(inner);
-    for (tx, version, raise) in txs {
+    for (tx, version, raise, link) in txs {
         let packet = if raise { raised.as_deref().unwrap_or(&raw) } else { &raw };
+        if bridged && !link {
+            // A station: the group's own GSSI, with its network before it.
+            for p in crate::visitors::for_station(state, packet) { let _ = tx.send(protocol::adapt_to_version(&p, version).into_owned()); }
+            continue;
+        }
         let _ = tx.send(protocol::adapt_to_version(packet, version).into_owned());
     }
     if let Some(old) = preempted {
@@ -990,6 +1019,9 @@ fn late_entry(inner: &mut Inner, client: ClientId, groups: &HashSet<u32>) -> Vec
 }
 
 async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: SubscriberMessage) {
+    // A radio of another network (extension `mni`): kept apart, passed on
+    // to its home network.
+    if crate::visitors::handle_subscriber(state, source, &msg).await { return; }
     let mut inner = state.inner.write().await;
     if inner.fed.links.contains_key(&source) {
         // A loop-safe link carries registrations as route adverts only.

@@ -577,6 +577,9 @@ pub async fn handle_bts_info(state: &Arc<AppState>, source: ClientId, json: &str
     for (to, packet) in crate::group_access::updates(state, &inner, Some(source)) {
         if let Some(client) = inner.clients.get(&to) { let _ = client.tx.send(packet); }
     }
+    drop(inner);
+    // And the networks it may take radios from (extension `mni`).
+    crate::visitors::announce(state, Some(source)).await;
 }
 
 fn directory_entries(inner: &crate::state::Inner) -> Vec<DirectoryEntry> {

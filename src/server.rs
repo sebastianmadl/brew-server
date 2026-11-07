@@ -308,6 +308,7 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
             let requested = parts.headers.get(header::SEC_WEBSOCKET_PROTOCOL).and_then(|v| v.to_str().ok()).unwrap_or_default();
             debug!(requested_subprotocol=requested, mode=mode.as_str(), seed_version=?seed_version.map(ConnVersion::as_u8), loop_safe=fed_neighbour.is_some(), "WebSocket upgrade request");
             let protocol = state.config.websocket_subprotocol.clone();
+            let state_mn_enabled = state.networks.read().map(|c| c.enabled && !c.networks.is_empty()).unwrap_or(false);
             let mut response = ws.protocols([protocol])
                 .on_upgrade(move |socket| client_session(state, socket, mode, seed_version, remote_addr, username, fed_neighbour, console, agent))
                 .into_response();
@@ -315,7 +316,10 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
                 // Tells a Basestation which Brew extensions it may use here;
                 // one that sees no such header (TetraPack, Brandmeister) sends
                 // none of them.
-                response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, HeaderValue::from_static(crate::carriers::EXTENSIONS));
+                // `mni` only while Multi Network is on (its main switch).
+                let mni_on = state_mn_enabled;
+                let offer = if mni_on { format!("{}, {}", crate::carriers::EXTENSIONS, crate::visitors::CAPABILITY) } else { crate::carriers::EXTENSIONS.to_owned() };
+                if let Ok(v) = HeaderValue::from_str(&offer) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
             }
             if fed_neighbour.is_some() {
                 // Accepting: the dialling side only switches to loop-safe mode

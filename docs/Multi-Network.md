@@ -1,9 +1,9 @@
 # Multi Network: bridges to other Brew networks
 
 brew-server can connect to other Brew networks (for example TetraPack or a
-neighbouring operator) and bridge talkgroups across them. This is part 1 of
-the Multi Network plan: talkgroup bridges. Radios of other networks on a
-station (migration) and individual calls or SDS across networks come later.
+neighbouring operator) and bridge talkgroups across them, and it takes radios of those networks on its
+stations (visitors, extension `mni`). Individual calls and SDS across
+networks come later.
 
 ## How it works
 
@@ -55,6 +55,33 @@ station (migration) and individual calls or SDS across networks come later.
 - Networks are edited live (dashboard page **Multi Network**, admins only).
   Only a network whose settings changed reconnects; no restart. An empty
   password on save keeps the saved one.
+
+## Visitors (extension `mni`)
+
+- A station with Multi Network (it announces the `mni` capability; FlowStation
+  from Multi Network step 7) gets `SERVICE_NETWORKS`: this server's MNI and
+  the linked networks with their state, never credentials. It takes a radio
+  of such a network by migration (TS 100 392-2 clause 16.4.1.1 b)) and says
+  so with `SERVICE_MS_NETWORK` before the radio's `SUB_REGISTER`.
+- Such a visitor is kept apart from this server's radios (key: network and
+  ISSI), so the same ISSI in both networks works. This server registers it
+  in its home network over the link and forwards its group affiliations
+  there, so its home network sends the calls of its groups here.
+- A group call of the home network on such a group reaches the stations with
+  a visitor in it, as that network's GSSI with `SERVICE_CALL_NETWORK` before
+  it. A visitor talking on a home group (station sends `SERVICE_CALL_NETWORK`)
+  goes to its home network, to the other visitors in the group and into a
+  talkgroup pool that bridges the group.
+- Moving between this server's stations is invisible to the home network.
+  Deregistration, or the station going away, deregisters it at home. When a
+  link comes back, every visitor is registered there again.
+- The dashboard lists the visitors per network ("Visitors" on the Multi
+  Network page).
+- Not yet: groups of a third network (`SERVICE_GROUP_NETWORK` is logged
+  only), individual calls and SDS to and from visitors (step 5).
+- `mni` is offered only while Multi Network is on and has networks.
+
+The protocol is in [Brew-Extensions.md](Brew-Extensions.md) section 12b.
 
 ## Config
 

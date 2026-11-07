@@ -208,6 +208,8 @@ pub struct Inner {
     /// Links to other networks that are up: bridge slot -> connection (see
     /// `netlink`).
     pub netlinks: HashMap<u8, ClientId>,
+    /// Radios of other networks on this server's stations (see `visitors`).
+    pub visitors: crate::visitors::Visitors,
 }
 
 impl Inner {
@@ -701,7 +703,9 @@ impl AppState {
             self.monitor.call_ended(uuid).await;
             if let Some(bridge) = &bridge { bridge.teardown_by_brew_call(uuid).await; }
         }
-        // Its radios leave the bridged groups of other networks too.
+        // Its radios leave the bridged groups of other networks too, and its
+        // visitors leave their home networks.
+        crate::visitors::station_gone(self, &mut *self.inner.write().await, id);
         crate::netlink::sync_members(self).await;
     }
 }

@@ -19,6 +19,7 @@ mod ha;
 mod ha_repl;
 mod monitor;
 mod netlink;
+mod visitors;
 mod pools;
 mod position;
 mod protocol;

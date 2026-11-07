@@ -168,6 +168,15 @@ pub const SERVICE_CELL_DIRECTORY: u8 = 0x1D;
 /// announced the `group-access` capability (see `group_access::updates`).
 pub const SERVICE_GROUP_ACCESS: u8 = 0x1F;
 
+/// `CLASS_SERVICE` types of the `mni` extension (Multi Network, see
+/// `visitors` and docs/Brew-Extensions.md 12b): this server's network and the
+/// linked ones (server -> station), the network of a radio, of groups, and
+/// of a call (both ways).
+pub const SERVICE_NETWORKS: u8 = 0x20;
+pub const SERVICE_MS_NETWORK: u8 = 0x21;
+pub const SERVICE_GROUP_NETWORK: u8 = 0x22;
+pub const SERVICE_CALL_NETWORK: u8 = 0x23;
+
 /// `CLASS_SERVICE` type a server's Multi Network link sends (as a
 /// Basestation) to a server that offered `issi-check`, asking whether ISSIs
 /// are in use there before registering them (`{"query":[..]}`); the server

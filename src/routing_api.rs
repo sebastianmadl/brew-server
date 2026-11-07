@@ -147,7 +147,7 @@ pub async fn pools_put(State(state): State<Arc<AppState>>, Json(pools): Json<Vec
 /// `GET /api/networks` (admins): Multi Network, the other networks and the
 /// state of their links (never a password).
 pub async fn networks_get(State(state): State<Arc<AppState>>) -> Json<crate::netlink::MultiNetworkView> {
-    Json(crate::netlink::snapshot(&state))
+    Json(crate::netlink::snapshot(&state).await)
 }
 
 /// `POST /api/networks/save` (admins): the whole `[multi_network]` section,

@@ -49,7 +49,7 @@ const MAX_NAME: usize = 40;
 const MAX_USER_AGENT: usize = 80;
 /// Bits of a GSSI; the slot sits above them.
 const GSSI_BITS: u32 = 24;
-const GSSI_MASK: u32 = 0xFF_FFFF;
+pub const GSSI_MASK: u32 = 0xFF_FFFF;
 
 /// Internal address of group `gssi` of the network in `slot`.
 pub fn alias(slot: u8, gssi: u32) -> u32 {
@@ -130,6 +130,29 @@ pub fn slots(state: &AppState) -> HashMap<String, u8> {
     state.netlinks.slots(&cfg)
 }
 
+/// Upstream channel of the connected link to network `slot`.
+pub fn up_for_slot(state: &AppState, slot: u8) -> Option<mpsc::UnboundedSender<Vec<u8>>> {
+    let reg = state.netlinks.lock();
+    let name = reg.slots.iter().find(|(_, s)| **s == slot)?.0.clone();
+    reg.status.get(&name).and_then(|s| s.up.clone())
+}
+
+/// Names of the networks whose link is up.
+pub fn connected(state: &AppState) -> HashSet<String> {
+    state.netlinks.lock().status.iter().filter(|(_, s)| s.connected).map(|(n, _)| n.clone()).collect()
+}
+
+/// Notes that `issi` is (or is no longer) a visitor from network `slot`, so
+/// the link does not register it there as one of this server's talkers.
+pub fn set_visitor(state: &AppState, slot: u8, issi: u32, present: bool) {
+    let reg = state.netlinks.lock();
+    let Some(name) = reg.slots.iter().find(|(_, s)| **s == slot).map(|(n, _)| n.clone()) else { return };
+    if let Some(e) = reg.status.get(&name).and_then(|s| s.members.clone()) {
+        let mut e = export_lock(&e);
+        if present { e.visitors.insert(issi); } else { e.visitors.remove(&issi); }
+    }
+}
+
 /// Starts the links (called once the services run).
 pub async fn run(state: Arc<AppState>) {
     state.netlinks.lock().started = true;
@@ -190,6 +213,7 @@ async fn link_loop(state: Arc<AppState>, net: NetworkConfig, slot: u8, gen: u64,
                 set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.last_error = format!("{e:#}"); });
             }
         }
+        crate::visitors::announce(&state, None).await;
         if stopped(&stop) { break; }
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
@@ -478,6 +502,9 @@ pub struct Export {
     pending: HashMap<u32, Instant>,
     /// Newest first, at most [`MAX_CONFLICTS`].
     pub conflicts: VecDeque<Conflict>,
+    /// Visitors from that network on this server's stations: they are that
+    /// network's radios, registered there by `visitors`, not as talkers.
+    pub visitors: HashSet<u32>,
     /// Last conflict per ISSI (rate limit).
     last_conflict: HashMap<u32, Instant>,
 }
@@ -639,6 +666,7 @@ impl Outbound {
             if let Some((slot, gssi)) = split_alias(dest(&pkt)) {
                 if slot == self.slot && talker != 0 && talker <= GSSI_MASK && talker != self.bridge_issi {
                     let mut e = export_lock(talkers);
+                    if e.visitors.contains(&talker) { drop(e); return self.translate(pkt).into_iter().collect(); }
                     if !e.have.contains_key(&talker) && e.have.len() < MAX_TALKERS {
                         match e.allow(talker, Instant::now()) {
                             Allow::Yes => {
@@ -759,8 +787,15 @@ async fn run_session(
         s.affiliated = if net.bridge_issi != 0 { want } else { BTreeSet::new() };
         s.members = Some(talkers.clone());
     });
-    // The radios already in bridged groups here join them there.
+    // The radios already in bridged groups here join them there, and the
+    // visitors from that network register there again.
+    {
+        let inner = state.inner.read().await;
+        export_lock(&talkers).visitors = crate::visitors::issis_of(&inner, slot);
+        for msg in crate::visitors::registrations(&inner, slot) { let _ = up_tx.send(msg); }
+    }
     sync_members(state).await;
+    crate::visitors::announce(state, None).await;
 
     let keepalive = Keepalive::from_config(&state.config.federation);
     let mut ping = keepalive.map(Keepalive::ping_timer);
@@ -824,7 +859,8 @@ async fn run_session(
                     }
                 }
                 let pools = pools_now(state);
-                let groups = bridged_groups(&pools, &name);
+                let mut groups = bridged_groups(&pools, &name);
+                if is_group_tx(&data) { groups.extend(crate::visitors::groups_of(&*state.inner.read().await, slot)); }
                 let probe = (is_group_tx(&data) || is_group_idle(&data)).then(|| data.to_vec());
                 let p = inbound.translate(data.to_vec(), |g| groups.contains(&g));
                 if let Some(before) = probe { log_crossing(&name, "in", &before, p.as_deref()); }
@@ -980,6 +1016,7 @@ pub async fn apply(state: &Arc<AppState>, mut cfg: MultiNetworkConfig, by: &str)
     if let Ok(mut live) = state.networks.write() { *live = cfg.clone(); }
     warn!(count = cfg.networks.len(), enabled = cfg.enabled, by, "multi network: networks changed");
     reconcile(state);
+    crate::visitors::announce(state, None).await;
     let snapshot = state.config_snapshot();
     crate::CONFIG_WRITE_APPLIED_LIVE.store(true, std::sync::atomic::Ordering::SeqCst);
     let saved = crate::dashboard::save_config(state, &snapshot).await;
@@ -1014,6 +1051,8 @@ pub struct NetworkView {
     /// Radios registered there by the link right now.
     pub exported: Vec<u32>,
     pub conflicts: Vec<Conflict>,
+    /// Radios of that network on this server's stations (extension `mni`).
+    pub visitors: Vec<crate::visitors::VisitorView>,
     pub reconnect_interval_seconds: u64,
     pub tls: bool,
     pub tls_server_name: String,
@@ -1037,10 +1076,14 @@ pub struct MultiNetworkView {
 }
 
 /// The networks with the state of their links, for `/api/networks`.
-pub fn snapshot(state: &AppState) -> MultiNetworkView {
+pub async fn snapshot(state: &AppState) -> MultiNetworkView {
     let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
     let pools = pools_now(state);
     let slots = state.netlinks.slots(&cfg);
+    let visitors: HashMap<u8, Vec<crate::visitors::VisitorView>> = {
+        let inner = state.inner.read().await;
+        slots.values().map(|s| (*s, crate::visitors::view(&inner, *s))).collect()
+    };
     let reg = state.netlinks.lock();
     let networks = cfg.networks.iter().map(|n| {
         let s = reg.status.get(&n.name).cloned().unwrap_or_default();
@@ -1053,6 +1096,7 @@ pub fn snapshot(state: &AppState) -> MultiNetworkView {
             checks: s.connected && s.members.as_ref().is_some_and(|e| export_lock(e).checks),
             exported: if s.connected { s.members.as_ref().map(|e| { let mut v: Vec<u32> = export_lock(e).have.keys().copied().collect(); v.sort_unstable(); v }).unwrap_or_default() } else { Vec::new() },
             conflicts: s.members.as_ref().map(|e| export_lock(e).conflicts.iter().cloned().collect()).unwrap_or_default(),
+            visitors: slots.get(&n.name).and_then(|s| visitors.get(s)).cloned().unwrap_or_default(),
             reconnect_interval_seconds: n.reconnect_interval_seconds, tls: n.tls,
             tls_server_name: n.tls_server_name.clone(),
             tls_ca_path: n.tls_ca_path.display().to_string(),
@@ -1532,7 +1576,7 @@ mod e2e {
             tp.inner.read().await.client_agents.values().any(|a| a == "TMO-Austria Infra 2.0")
         }).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(snapshot(&main).networks[0].connected, "the new link shows as connected");
+        assert!(snapshot(&main).await.networks[0].connected, "the new link shows as connected");
 
         // The main switch off ends every link, on brings them back.
         let mut main_off = main.networks.read().unwrap().clone();
@@ -1542,7 +1586,7 @@ mod e2e {
         wait_until("main switch off: link gone", async || main.inner.read().await.netlinks.is_empty()).await;
         wait_until("main switch off: bridge gone there", async || !tp.inner.read().await.subscribers.contains_key(&9_000_001)).await;
         wait_until("main switch off: talkers gone there", async || !tp.inner.read().await.subscribers.contains_key(&2_320_001)).await;
-        assert!(!snapshot(&main).networks[0].connected);
+        assert!(!snapshot(&main).await.networks[0].connected);
         if let Ok(mut live) = main.networks.write() { live.enabled = true; }
         reconcile(&main);
         wait_until("main switch on: link back", async || !main.inner.read().await.netlinks.is_empty()).await;
@@ -1595,8 +1639,8 @@ mod e2e {
         // taken one stays (asked: taken), the listed one too; no radio of
         // another station goes.
         wait_until("free radio exported", async || tp.inner.read().await.subscribers.get(&2_320_001).is_some_and(|s| s.groups.is_empty())).await;
-        wait_until("conflict noted", async || snapshot(&main).networks[0].conflicts.iter().any(|c| c.issi == 2_320_002)).await;
-        let view = snapshot(&main);
+        wait_until("conflict noted", async || snapshot(&main).await.networks[0].conflicts.iter().any(|c| c.issi == 2_320_002)).await;
+        let view = snapshot(&main).await;
         assert!(view.networks[0].checks, "the far brew-server answers the ISSI check");
         assert_eq!(view.networks[0].exported, vec![2_320_001]);
         {
@@ -1609,7 +1653,140 @@ mod e2e {
         // there: noted as a conflict (all a server that cannot be asked
         // shows).
         far.send(Message::Binary(protocol::build_group_tx(&Uuid::new_v4(), 2_320_001, 909, 0).into())).await.unwrap();
-        wait_until("talker conflict noted", async || snapshot(&main).networks[0].conflicts.iter().any(|c| c.issi == 2_320_001)).await;
+        wait_until("talker conflict noted", async || snapshot(&main).await.networks[0].conflicts.iter().any(|c| c.issi == 2_320_001)).await;
+    }
+
+    /// Next `CLASS_SERVICE` message of `kind` within `ms`, as JSON.
+    async fn next_service(ws: &mut Ws, kind: u8, ms: u64) -> Option<serde_json::Value> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Ok(Some(Ok(msg))) = tokio::time::timeout(left, ws.next()).await else { return None };
+            if let Message::Binary(b) = msg {
+                if b.len() > 2 && b[0] == protocol::CLASS_SERVICE && b[1] == kind {
+                    let text = String::from_utf8_lossy(&b[2..]).trim_end_matches('\0').to_string();
+                    return serde_json::from_str(&text).ok();
+                }
+            }
+        }
+    }
+
+    fn svc(kind: u8, v: serde_json::Value) -> Message {
+        Message::Binary(protocol::build_service(kind, &v.to_string()).into())
+    }
+
+    #[tokio::test]
+    async fn visitors_register_at_home_and_take_part_in_its_group_calls() {
+        let (tp, tp_addr) = serve(base_config()).await;
+        let (other, other_addr) = serve(base_config()).await;
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), mcc: 901, mnc: 1234, remote_host: tp_addr.to_string(), bridge_issi: 9_000_001, reconnect_interval_seconds: 5, ..Default::default()
+        });
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "Other".into(), mcc: 901, mnc: 5555, remote_host: other_addr.to_string(), bridge_issi: 9_000_002, reconnect_interval_seconds: 5, ..Default::default()
+        });
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        wait_until("both links up", async || main.inner.read().await.netlinks.len() == 2).await;
+
+        // 10 stations, 25 radios of this network on TG 2321; stations 0
+        // and 1 have the mni extension.
+        let mut stations = Vec::new();
+        let mut issi = 2_320_001;
+        for s in 0..10u32 {
+            let n = if s < 5 { 3 } else { 2 };
+            let radios: Vec<u32> = (0..n).map(|k| issi + k).collect();
+            issi += n;
+            let mut st = station(main_addr, &radios, &[2321]).await;
+            if s < 2 {
+                st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":9999,"cells":[],"capabilities":["mni"]}"#).into())).await.unwrap();
+                // It learns the networks it may take radios from.
+                let nets = next_service(&mut st, protocol::SERVICE_NETWORKS, 2000).await.expect("SERVICE_NETWORKS");
+                assert_eq!(nets["this"]["mnc"], 9999);
+                assert_eq!(nets["networks"].as_array().unwrap().len(), 2);
+            }
+            stations.push(st);
+        }
+        wait_until("all radios registered", async || main.inner.read().await.subscribers.len() == 25).await;
+        let mut far = station(tp_addr, &[1234], &[909]).await;
+
+        // A radio of TetraPack with the same ISSI as one of ours (2320002)
+        // comes to station 0, one of "Other" to station 1.
+        stations[0].send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_002, "mcc": 901, "mnc": 1234}))).await.unwrap();
+        stations[0].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_002, &[]).into())).await.unwrap();
+        stations[0].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, 2_320_002, &[909]).into())).await.unwrap();
+        stations[1].send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 4_000_001, "mcc": 901, "mnc": 5555}))).await.unwrap();
+        stations[1].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 4_000_001, &[]).into())).await.unwrap();
+        stations[1].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, 4_000_001, &[77]).into())).await.unwrap();
+        // Each is registered in its home network with its groups...
+        wait_until("visitor at TetraPack", async || tp.inner.read().await.subscribers.get(&2_320_002).is_some_and(|s| s.groups.contains(&909))).await;
+        wait_until("visitor at Other", async || other.inner.read().await.subscribers.get(&4_000_001).is_some_and(|s| s.groups.contains(&77))).await;
+        // ...and our own 2320002 is untouched.
+        {
+            let inner = main.inner.read().await;
+            assert_eq!(inner.subscribers.len(), 25);
+            assert_eq!(inner.subscribers[&2_320_002].groups, HashSet::from([2321]));
+            assert!(!inner.subscribers.contains_key(&4_000_001));
+        }
+        assert_eq!(snapshot(&main).await.networks[0].visitors.iter().map(|v| v.issi).collect::<Vec<_>>(), vec![2_320_002]);
+
+        // A station without the extension cannot make a visitor.
+        stations[2].send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_007, "mcc": 901, "mnc": 1234}))).await.unwrap();
+        stations[2].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REREGISTER, 2_320_007, &[]).into())).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!tp.inner.read().await.subscribers.contains_key(&2_320_007));
+
+        // TetraPack's radio talks on 909: heard on station 0 only, as 909
+        // with its network before it.
+        let call = Uuid::new_v4();
+        far.send(Message::Binary(protocol::build_group_tx(&call, 1234, 909, 0).into())).await.unwrap();
+        let note = next_service(&mut stations[0], protocol::SERVICE_CALL_NETWORK, 2000).await.expect("call network before the call");
+        assert_eq!((note["group"]["gssi"].as_u64(), note["group"]["mnc"].as_u64()), (Some(909), Some(1234)));
+        let (id0, src, dst) = next_group_tx(&mut stations[0], 2000).await.expect("station 0 hears 909");
+        assert_eq!((src, dst), (1234, 909));
+        assert_eq!(note["uuid"], id0.to_string());
+        for (s, st) in stations.iter_mut().enumerate().skip(1) {
+            assert!(next_group_tx(st, 100).await.is_none(), "station {s} has no visitor on 909");
+        }
+        far.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call, 0).into())).await.unwrap();
+        wait_until("call ended", async || main.inner.read().await.calls.is_empty()).await;
+
+        // The visitor talks on its home group 909: heard at TetraPack.
+        let v_call = Uuid::new_v4();
+        stations[0].send(svc(protocol::SERVICE_CALL_NETWORK, serde_json::json!({"uuid": v_call.to_string(), "group": {"gssi": 909, "mcc": 901, "mnc": 1234}}))).await.unwrap();
+        stations[0].send(Message::Binary(protocol::build_group_tx(&v_call, 2_320_002, 909, 0).into())).await.unwrap();
+        let (_, src, dst) = next_group_tx(&mut far, 2000).await.expect("TetraPack hears the visitor");
+        assert_eq!((src, dst), (2_320_002, 909));
+        assert!(next_group_tx(&mut stations[3], 200).await.is_none(), "not a call on our own TG 909");
+        stations[0].send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &v_call, 0).into())).await.unwrap();
+        wait_until("visitor call ended", async || main.inner.read().await.calls.is_empty()).await;
+
+        // It moves to station 1: TetraPack sees nothing of it, its calls
+        // now reach station 1.
+        stations[1].send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_002, "mcc": 901, "mnc": 1234}))).await.unwrap();
+        stations[1].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_002, &[]).into())).await.unwrap();
+        let tp_slot = slots(&main)["TP"];
+        wait_until("visitor moved", async || {
+            let inner = main.inner.read().await;
+            inner.visitors.by_key.get(&(tp_slot, 2_320_002)).map(|v| v.station) == Some(inner.subscribers[&2_320_004].client_id)
+        }).await;
+        let call2 = Uuid::new_v4();
+        far.send(Message::Binary(protocol::build_group_tx(&call2, 1234, 909, 0).into())).await.unwrap();
+        assert!(next_group_tx(&mut stations[1], 2000).await.is_some_and(|(_, s, d)| (s, d) == (1234, 909)));
+        assert!(next_group_tx(&mut stations[0], 200).await.is_none(), "station 0 has no visitor any more");
+        far.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &call2, 0).into())).await.unwrap();
+
+        // Deregistered: gone at TetraPack. Station 1 goes away: its other
+        // visitor leaves "Other".
+        stations[1].send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, 2_320_002, &[]).into())).await.unwrap();
+        wait_until("visitor gone at TetraPack", async || !tp.inner.read().await.subscribers.contains_key(&2_320_002)).await;
+        let st1 = stations.remove(1);
+        drop(st1);
+        wait_until("visitor gone at Other", async || !other.inner.read().await.subscribers.contains_key(&4_000_001)).await;
+        assert_eq!(main.inner.read().await.subscribers[&2_320_002].groups, HashSet::from([2321]), "our own 2320002 still there");
     }
 
     #[tokio::test]
