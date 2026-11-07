@@ -16,6 +16,9 @@ Unreleased (Multi Network, part 1) adds:
   **Multi Network** (admins): main switch, this server's network and MNI, the other
   networks with link state, edited live without a restart. See
   [docs/Multi-Network.md](docs/Multi-Network.md).
+- **Open dashboard fixed.** With `[dashboard.ui] open = true` a visitor who is not
+  signed in got the login window every 5 s again (the new page asked the admin-only
+  network list on every refresh). It is now asked only for admins.
 
 Version 1.20.0 adds:
 

@@ -559,7 +559,10 @@ async function refreshSlow(){
   if(document.body.classList.contains('locked'))return;
   const tasks=[getJ('/api/connections').then(v=>D.conn=v),getJ('/api/telemetry').then(v=>D.tele=v),getJ('/api/radios').then(v=>D.radios=v),
     getJ('/api/ha').then(v=>D.ha=v),getJ('/api/whoami').then(v=>{const was=D.who.admin,first=!D.whoLoaded;D.who=v;D.whoLoaded=true;
-      if(was!==v.admin&&PG[UI.page][4])show(UI.page);else if(first&&PG[UI.page][5]&&!v.admin&&!v.need_login)openLogin(false);})];
+      if(was!==v.admin&&PG[UI.page][4])show(UI.page);else if(first&&PG[UI.page][5]&&!v.admin&&!v.need_login)openLogin(false);
+      // Admin-only route: asking it without a login answers 401 and opens the login window,
+      // so an open (read-only) dashboard would get it every 5 s. Ask only once whoami says admin.
+      if(v.admin)return getJ('/api/networks').then(n=>D.nets=n).catch(()=>{});})];
   if(UI.page==='radios')tasks.push(getJ('/api/registrations').then(v=>D.regs=v));
   if(UI.page==='accounts'&&D.who.admin)tasks.push(getJ('/api/accounts').then(v=>D.acc=v));
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
@@ -567,8 +570,6 @@ async function refreshSlow(){
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
-  // Admins only; asked every time, since the login state may still be loading.
-  tasks.push(getJ('/api/networks').then(v=>D.nets=v).catch(()=>{}));
   await Promise.allSettled(tasks);
   chrome();render();
 }
@@ -1185,3 +1186,22 @@ setInterval(refreshFast,2000);setInterval(refreshSlow,5000);
 setInterval(()=>{if(UI.page==='overview'||UI.page==='calls')render();},1000);
 </script>
 </body></html>"##;
+
+#[cfg(test)]
+mod tests {
+    use super::PAGE_HTML;
+
+    /// The polls must not ask admin-only routes for a visitor who is not signed in: their 401
+    /// opens the login window, so an open (read-only) dashboard would show it every 5 s.
+    #[test]
+    fn polls_ask_admin_routes_only_for_admins() {
+        let start = PAGE_HTML.find("async function refreshSlow(){").expect("refreshSlow");
+        let body = &PAGE_HTML[start..];
+        let body = &body[..body.find("\n}\n").expect("end of refreshSlow")];
+        for route in ["'/api/networks'", "'/api/accounts'", "'/api/control'", "'/api/config/"] {
+            for line in body.lines().filter(|l| l.contains(&format!("getJ({route}"))) {
+                assert!(line.contains(".admin"), "{route} polled without an admin check: {line}");
+            }
+        }
+    }
+}
