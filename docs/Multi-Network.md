@@ -101,8 +101,15 @@ across networks.
   set, are routed as before.
 - The dashboard lists the visitors per network ("Visitors" on the Multi
   Network page).
-- Not yet: groups of a third network (`SERVICE_GROUP_NETWORK` is logged
-  only).
+- A radio of this server's network migrated onto a cell of a linked network
+  that attaches a group there without an MNI is in that network's group (TS
+  100 392-2 clause 14.2.3). The station names it with `SERVICE_GROUP_NETWORK`
+  before the affiliation; the server keeps the affiliation as that network's
+  group (not this server's group of the same number), registers and
+  affiliates the radio there, and that network's calls on the group reach the
+  station (with `SERVICE_CALL_NETWORK`; the cell plays them on the GSSI).
+- Not yet: a visitor in a group of a third network (`SERVICE_GROUP_NETWORK`
+  is logged only).
 
 ## Individual calls and SDS across networks
 

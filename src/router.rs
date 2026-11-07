@@ -1139,6 +1139,7 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
             // (and nobody else's DEREGISTER is passed on to peers).
             let Some(sub) = old.as_ref().filter(|o| o.client_id == source) else { return };
             info!(%source, issi=msg.issi, mode=sub.mode.as_str(), "subscriber deregistered");
+            crate::visitors::forget_foreign(&mut inner, source, Some(msg.issi));
             if sub.mode == ClientMode::Terminal { ms_reg_event = Some("deregister"); }
             None
         }
@@ -1149,6 +1150,13 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
                 None => local(&mut inner, HashSet::new()),
             };
             for gssi in &msg.groups {
+                // A group of a linked network (Multi Network): kept as its alias.
+                let a = crate::visitors::group_alias(&inner, source, msg.issi, *gssi);
+                if a != *gssi {
+                    sub.groups.insert(a);
+                    info!(%source, issi=msg.issi, gssi, alias=a, "subscriber affiliated to a group of a linked network");
+                    continue;
+                }
                 if !state.group_permits(*gssi, msg.issi) {
                     info!(%source, issi=msg.issi, gssi, "affiliation not recorded: the group does not admit this ISSI (group_access)");
                     continue;
@@ -1161,7 +1169,8 @@ async fn handle_subscriber(state: &Arc<AppState>, source: ClientId, msg: Subscri
         SUB_DEAFFILIATE => {
             let Some(mut sub) = old.clone().filter(|o| o.client_id == source) else { return };
             for gssi in &msg.groups {
-                sub.groups.remove(gssi);
+                let a = crate::visitors::group_alias(&inner, source, msg.issi, *gssi);
+                sub.groups.remove(&a);
                 info!(%source, issi=msg.issi, gssi, "subscriber deaffiliated");
             }
             Some(sub)

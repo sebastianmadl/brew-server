@@ -57,6 +57,11 @@ pub struct Visitors {
     /// (calling ISSI, called ISSI) -> when an unknown target was last handed
     /// to another network: a second time within [`FORWARD_GUARD`] is a loop.
     forwarded: HashMap<(u32, u32), Instant>,
+    /// (station, ISSI, GSSI) -> network slot: a group of a linked network
+    /// that one of this server's radios (migrated onto a cell of that
+    /// network) attached, as `SERVICE_GROUP_NETWORK` said. Its affiliation is
+    /// kept as that network's group (an alias), see [`group_alias`].
+    foreign: HashMap<(ClientId, u32, u32), u8>,
 }
 
 /// Loop guard of "forward unknown targets" (as `fedroute::CALL_DEDUP_WINDOW`).
@@ -139,16 +144,30 @@ pub async fn handle_ms_network(state: &AppState, source: ClientId, json: &str) {
 }
 
 /// `SERVICE_GROUP_NETWORK` (0x22): groups of a radio that are in another
-/// network than the radio's own. Not routed yet; noted in the log.
+/// network than the radio's own. A group of a linked network attached by
+/// one of this server's radios (it migrated onto a cell of that network and
+/// attached the group without an MNI, TS 100 392-2 clause 14.2.3) is that
+/// network's group: its affiliation that follows is kept as the alias and
+/// mirrored there, so that network's calls on it reach the radio. Other
+/// cases (a visitor in a third network's group) are noted in the log only.
 pub async fn handle_group_network(state: &AppState, source: ClientId, json: &str) {
     #[derive(Deserialize)]
     struct G { gssi: u32, mcc: u16, mnc: u16 }
     #[derive(Deserialize)]
     struct Msg { issi: u32, groups: Vec<G> }
     let Ok(m) = serde_json::from_str::<Msg>(json) else { warn!(%source, json, "malformed group network message"); return };
-    let inner = state.inner.read().await;
+    let mut inner = state.inner.write().await;
     if !has_capability(&inner, source) { return; }
+    let visitor = inner.visitors.of.contains_key(&(source, m.issi));
     for g in m.groups {
+        if g.gssi == 0 || g.gssi > GSSI_MASK { continue; }
+        if let (false, Some(slot)) = (visitor, slot_of(state, Mni { mcc: g.mcc, mnc: g.mnc })) {
+            if inner.visitors.foreign.len() < MAX_VISITORS || inner.visitors.foreign.contains_key(&(source, m.issi, g.gssi)) {
+                info!(%source, issi = m.issi, gssi = g.gssi, mcc = g.mcc, mnc = g.mnc, slot, "multi network: radio of this network in a group of a linked network");
+                inner.visitors.foreign.insert((source, m.issi, g.gssi), slot);
+            }
+            continue;
+        }
         warn!(%source, issi = m.issi, gssi = g.gssi, mcc = g.mcc, mnc = g.mnc, "multi network: group of a third network not supported yet, ignored");
     }
 }
@@ -187,6 +206,19 @@ pub async fn handle_call_network(state: &AppState, source: ClientId, json: &str)
     if inner.visitors.calls.len() < MAX_VISITORS {
         inner.visitors.calls.insert(m.uuid, (source, alias(slot, g.gssi), now));
     }
+}
+
+/// The group a station's radio affiliates to: the alias of a linked
+/// network's group if `SERVICE_GROUP_NETWORK` named it (see
+/// [`handle_group_network`]), else the GSSI itself.
+pub fn group_alias(inner: &Inner, source: ClientId, issi: u32, gssi: u32) -> u32 {
+    inner.visitors.foreign.get(&(source, issi, gssi)).map_or(gssi, |slot| alias(*slot, gssi))
+}
+
+/// A radio left its station (deregistered, or the station went away): its
+/// groups of linked networks are forgotten.
+pub fn forget_foreign(inner: &mut Inner, source: ClientId, issi: Option<u32>) {
+    inner.visitors.foreign.retain(|(s, i, _), _| *s != source || issi.is_some_and(|x| x != *i));
 }
 
 /// The group of a `GROUP_TX` from `source`: the other network's group (an
@@ -377,6 +409,7 @@ fn leave_home_network(state: &AppState, inner: &mut Inner, source: ClientId, slo
 /// A station went away: its visitors leave their home networks.
 pub fn station_gone(state: &AppState, inner: &mut Inner, id: ClientId) {
     inner.visitors.of.retain(|(station, _), _| *station != id);
+    forget_foreign(inner, id, None);
     inner.visitors.calls.retain(|_, (station, _, _)| *station != id);
     let gone: Vec<(u8, u32)> = inner.visitors.by_key.iter().filter(|(_, v)| v.station == id).map(|(k, _)| *k).collect();
     for (slot, issi) in gone {
@@ -404,7 +437,10 @@ pub fn registrations(inner: &Inner, slot: u8) -> Vec<Vec<u8>> {
 
 /// Groups of network `slot` that some visitor here is in.
 pub fn groups_of(inner: &Inner, slot: u8) -> BTreeSet<u32> {
-    inner.visitors.by_key.iter().filter(|((s, _), _)| *s == slot).flat_map(|(_, v)| v.groups.iter().copied()).collect()
+    let mut g: BTreeSet<u32> = inner.visitors.by_key.iter().filter(|((s, _), _)| *s == slot).flat_map(|(_, v)| v.groups.iter().copied()).collect();
+    // Groups of that network this server's radios are in (see `group_alias`).
+    g.extend(inner.group_clients.keys().filter_map(|a| split_alias(*a)).filter(|(s, _)| *s == slot).map(|(_, x)| x));
+    g
 }
 
 /// ISSIs of the visitors of network `slot`.
@@ -412,13 +448,16 @@ pub fn issis_of(inner: &Inner, slot: u8) -> HashSet<u32> {
     inner.visitors.by_key.keys().filter(|(s, _)| *s == slot).map(|(_, i)| *i).collect()
 }
 
-/// Stations with a visitor in group `alias` (another network's group).
+/// Stations with a visitor in group `alias` (another network's group), or
+/// with a radio of this network affiliated to it (see `group_alias`).
 pub fn targets(inner: &Inner, a: u32) -> HashSet<ClientId> {
     let Some((slot, gssi)) = split_alias(a) else { return HashSet::new() };
-    inner.visitors.by_key.iter()
+    let mut t: HashSet<ClientId> = inner.visitors.by_key.iter()
         .filter(|((s, _), v)| *s == slot && v.groups.contains(&gssi))
         .map(|(_, v)| v.station)
-        .collect()
+        .collect();
+    t.extend(inner.group_clients.get(&a).into_iter().flatten().copied());
+    t
 }
 
 /// `SERVICE_CALL_NETWORK` for a station: call `id` is on group `gssi` of

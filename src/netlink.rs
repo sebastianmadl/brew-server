@@ -419,6 +419,7 @@ pub async fn sync_members(state: &AppState) {
     let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
     if !cfg.enabled || !cfg.networks.iter().any(|n| n.enabled && n.register_talkers) { return; }
     let pools = pools_now(state);
+    let slots = state.netlinks.slots(&cfg);
     let (wants, talking) = {
         let inner = state.inner.read().await;
         let local = |c: &crate::state::ClientId| inner.clients.get(c).is_some_and(|c| matches!(c.mode, ClientMode::Terminal | ClientMode::Basestation));
@@ -436,6 +437,17 @@ pub async fn sync_members(state: &AppState) {
             .filter(|n| n.enabled && n.register_talkers)
             .map(|n| {
                 let mut want = mirror(&pools, &n.name, n.bridge_issi, radios.iter().map(|(i, g)| (*i, *g)));
+                // Groups of that network the radios attached themselves (a
+                // radio migrated onto a cell of that network, see
+                // `visitors::group_alias`).
+                if let Some(&slot) = slots.get(&n.name) {
+                    for (issi, groups) in &radios {
+                        if *issi == 0 || *issi > GSSI_MASK || *issi == n.bridge_issi { continue; }
+                        for (s, g) in groups.iter().filter_map(|a| split_alias(*a)) {
+                            if s == slot { want.entry(*issi).or_default().insert(g); }
+                        }
+                    }
+                }
                 if n.register_all {
                     for (issi, sub) in inner.subscribers.iter() {
                         if *issi == 0 || *issi > GSSI_MASK || *issi == n.bridge_issi || !sub.route.path.is_empty() { continue; }
@@ -1833,6 +1845,46 @@ mod e2e {
         wait_until("gone from TetraPack", async || !tp.inner.read().await.subscribers.contains_key(&2_320_972)).await;
         wait_until("registered here", async || main.inner.read().await.subscribers.contains_key(&2_320_972)).await;
         assert!(snapshot(&main).await.networks[0].visitors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrated_radio_in_a_group_of_the_cells_network_hears_that_network() {
+        // Field 2026-11-07: the MTP (home 9999) migrated onto the 1638 cell
+        // attached TetraPack groups; they were ignored there and kept as
+        // groups of this network here.
+        let (tp, tp_addr) = serve(base_config()).await;
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), mcc: 901, mnc: 1638, remote_host: tp_addr.to_string(), bridge_issi: 9_000_001, reconnect_interval_seconds: 5, ..Default::default()
+        });
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        wait_until("link up", async || main.inner.read().await.netlinks.len() == 1).await;
+        let mut st = station(main_addr, &[], &[]).await;
+        st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":1638,"cells":[{"carrier":1530,"carrier_ext":268,"location_area":1}],"capabilities":["mni"]}"#).into())).await.unwrap();
+        next_service(&mut st, protocol::SERVICE_NETWORKS, 2000).await.expect("SERVICE_NETWORKS");
+        st.send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_972, "mcc": 901, "mnc": 9999}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_972, &[]).into())).await.unwrap();
+        st.send(svc(protocol::SERVICE_GROUP_NETWORK, serde_json::json!({"issi": 2_320_972, "groups": [{"gssi": 2324, "mcc": 901, "mnc": 1638}]}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, 2_320_972, &[2324]).into())).await.unwrap();
+
+        // Registered and in TG 2324 at TetraPack, not in this network's 2324.
+        wait_until("in 2324 at TetraPack", async || tp.inner.read().await.subscribers.get(&2_320_972).is_some_and(|s| s.groups.contains(&2324))).await;
+        assert!(!main.inner.read().await.group_clients.get(&2324).is_some_and(|c| !c.is_empty()));
+
+        // A call of TetraPack on 2324 reaches the station, as group 2324.
+        let mut far = station(tp_addr, &[2_329_001], &[2324]).await;
+        let id = Uuid::new_v4();
+        far.send(Message::Binary(protocol::build_group_tx(&id, 2_329_001, 2324, 0).into())).await.unwrap();
+        let (_, talker, gssi) = next_group_tx(&mut st, 3000).await.expect("TetraPack's call on the station");
+        assert_eq!((talker, gssi), (2_329_001, 2324));
+
+        // Leaving the group leaves it there.
+        st.send(svc(protocol::SERVICE_GROUP_NETWORK, serde_json::json!({"issi": 2_320_972, "groups": [{"gssi": 2324, "mcc": 901, "mnc": 1638}]}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_DEAFFILIATE, 2_320_972, &[2324]).into())).await.unwrap();
+        wait_until("left 2324 at TetraPack", async || !tp.inner.read().await.subscribers.get(&2_320_972).is_some_and(|s| s.groups.contains(&2324))).await;
     }
 
     #[tokio::test]
