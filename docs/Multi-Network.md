@@ -9,8 +9,8 @@ across networks.
 > 2026-11-07): links to other networks, bridge pools, individual (duplex)
 > calls and SDS across networks, visitors (radios of other networks on a
 > station, `mni`) and a radio of this network migrated onto a cell of the
-> linked network, in that network's groups. Not yet on air: a visitor from a
-> third network (neither the station's nor this server's).
+> linked network, in that network's groups, and a visitor from a third
+> network (901/1234) migrating onto a station.
 
 ## How it works
 
