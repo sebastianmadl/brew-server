@@ -179,6 +179,10 @@ listen to a group of another network on several groups here).
 - A call crossing a link gets its own call identifier on the other side, so
   a copy that comes back (e.g. a test with a server linked to itself) is
   never mixed up with the call it came from.
+- A group call from here that the other network ends at once (TetraPack
+  answers some overs with GROUP_IDLE) keeps its identifiers until this
+  side's own end has gone over, so the rest of the over and the end still
+  reach that network instead of leaving the call hanging there.
 - The pool rules apply unchanged (one talker per group, a group with its own
   call joins after it, legs end with the call).
 - The discovery path is used exactly as configured (TetraPack needs

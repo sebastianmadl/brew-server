@@ -480,17 +480,21 @@ pub async fn sync_members(state: &AppState) {
 pub struct CallIds {
     to_remote: HashMap<Uuid, Uuid>,
     to_local: HashMap<Uuid, Uuid>,
+    /// Group calls started here and sent over (local ids): only this side's
+    /// own end closes them, see `Inbound::translate_with`.
+    ours: HashSet<Uuid>,
 }
 
 impl CallIds {
     fn pair(&mut self, local: Uuid, remote: Uuid) {
-        if self.to_remote.len() >= MAX_CALLS { self.to_remote.clear(); self.to_local.clear(); }
+        if self.to_remote.len() >= MAX_CALLS { self.to_remote.clear(); self.to_local.clear(); self.ours.clear(); }
         self.to_remote.insert(local, remote);
         self.to_local.insert(remote, local);
     }
 
     fn forget_local(&mut self, local: &Uuid) {
         if let Some(r) = self.to_remote.remove(local) { self.to_local.remove(&r); }
+        self.ours.remove(local);
     }
 }
 
@@ -744,7 +748,7 @@ impl Outbound {
             set_dest(&mut pkt, gssi);
             let remote = match ids.to_remote.get(&local) {
                 Some(r) => *r,
-                None => { let r = Uuid::new_v4(); ids.pair(local, r); r }
+                None => { let r = Uuid::new_v4(); ids.pair(local, r); ids.ours.insert(local); r }
             };
             set_call_id(&mut pkt, remote);
             return Some(pkt);
@@ -797,7 +801,15 @@ impl Inbound {
             ids.pair(l, remote);
         }
         let local = *ids.to_local.get(&remote)?;
-        if is_group_idle(&pkt) || is_call_end(&pkt) { ids.forget_local(&local); }
+        // That network ending a group call that started here (TetraPack
+        // answers some overs with GROUP_IDLE at once): the ids stay paired
+        // until this side's own end has gone over, else that end and the
+        // voice never reach it and the call hangs there.
+        if is_group_idle(&pkt) && ids.ours.contains(&local) {
+            info!(uuid=%local, "multi network: the other network ended a call of ours; its end from here still goes over");
+        } else if is_group_idle(&pkt) || is_call_end(&pkt) {
+            ids.forget_local(&local);
+        }
         set_call_id(&mut pkt, local);
         Some(pkt)
     }
@@ -1382,6 +1394,24 @@ mod tests {
         // The same call coming back as our own id (a loop) is a new call here.
         let looped = inb.translate(group_tx(leg, 2320972, 909), |_| true).unwrap();
         assert_ne!(call_id(&looped), Some(leg));
+    }
+
+    #[test]
+    fn a_call_of_ours_ended_over_there_still_sends_its_voice_and_end() {
+        // Field 2026-11-07: TetraPack answered an over from here with
+        // GROUP_IDLE at once; the ids were dropped, so the rest of the over
+        // and its end never went there and the call hung on Brandmeister.
+        let ids: SharedCallIds = Arc::default();
+        let (mut out, mut inb) = (Outbound::new(1, ids.clone()), Inbound::new(1, ids));
+        let leg = Uuid::new_v4();
+        let remote = gtx(&out.translate(group_tx(leg, 2320972, alias(1, 2324))).unwrap()).0;
+        let theirs = inb.translate(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &remote, 0), |_| true).unwrap();
+        assert_eq!(call_id(&theirs), Some(leg));
+        assert_eq!(call_id(&out.translate(protocol::build_dtmf_frame(&leg, 1)).unwrap()), Some(remote));
+        let end = protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &leg, 0);
+        assert_eq!(call_id(&out.translate(end).unwrap()), Some(remote));
+        // Our end closes it.
+        assert!(out.translate(protocol::build_dtmf_frame(&leg, 1)).is_none());
     }
 
     fn pool(name: &str, remote: &[(&str, u32)]) -> TalkgroupPoolConfig {
