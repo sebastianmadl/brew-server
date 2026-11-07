@@ -286,13 +286,27 @@ pub fn individual_route(state: &AppState, inner: &mut Inner, source: ClientId, i
         info!(network = slot, uuid = %id, calling, called, "multi network: individual call / SDS for an ISSI this server has not registered there refused");
         return Some(Decision::Refuse);
     }
-    let (station, slot, _) = inner.visitors.called.remove(&id)?;
+    let Some((station, slot, _)) = inner.visitors.called.remove(&id) else {
+        return forwarded_to_visitor(state, inner, source, calling, called)
+            .map(|(to, slot)| Decision::Station(to, note_for(inner, to, None, mni_of(state, slot))));
+    };
     if station != source { return None; }
     let mni = mni_of(state, slot);
     let calling_mni = visitor_slot(inner, source, calling).and_then(|s| mni_of(state, s));
     if let Some(v) = inner.visitors.by_key.get(&(slot, called)) {
         let to = v.station;
         return Some(Decision::Station(to, note_for(inner, to, calling_mni, mni)));
+    }
+    // A radio of ours the link registered in that network ("register all",
+    // a talker): its station here. Over the link it would come back the
+    // same way, and the far server does not send a call back to the
+    // connection it came from (field check 2026-11-07: the MTP as a
+    // TetraPack radio calling the app got "party not available").
+    if netlink::exported(state, slot, called) {
+        if let Some(to) = inner.subscribers.get(&called).filter(|s| s.route.path.is_empty()).map(|s| s.client_id) {
+            info!(network = slot, uuid = %id, calling, called, "multi network: called party is one of ours registered in that network; delivered here");
+            return Some(Decision::Station(to, note_for(inner, to, calling_mni, None)));
+        }
     }
     match inner.netlinks.get(&slot).copied() {
         Some(link) => {
@@ -306,6 +320,25 @@ pub fn individual_route(state: &AppState, inner: &mut Inner, source: ClientId, i
             Some(Decision::Refuse)
         }
     }
+}
+
+/// A party nobody here takes that "forward unknown targets" would hand to
+/// a linked network, while that network's radio with this ISSI is a visitor
+/// on one of this server's stations: delivered to it directly. Sent over
+/// the link it would come back the same way, and the far server does not
+/// send a call back to the connection it came from (field check
+/// 2026-11-07: the app calling the MTP registered as a TetraPack radio).
+fn forwarded_to_visitor(state: &AppState, inner: &Inner, source: ClientId, calling: u32, called: u32) -> Option<(ClientId, u8)> {
+    if inner.subscribers.contains_key(&called) || inner.group_clients.contains_key(&called) { return None; }
+    if visitor_slot(inner, source, calling).is_some() { return None; }
+    if inner.clients.get(&source).is_none_or(|c| c.mode == ClientMode::Network) { return None; }
+    let cfg = state.networks.read().map(|c| c.clone()).unwrap_or_default();
+    if !cfg.enabled { return None; }
+    let slots = netlink::slots(state);
+    let slot = cfg.networks.iter().filter(|n| n.enabled && n.forward_unknown).find_map(|n| slots.get(&n.name).copied())?;
+    let to = inner.visitors.by_key.get(&(slot, called))?.station;
+    info!(calling, called, network = slot, "multi network: unknown target is a visitor of the forwarding network here; delivered to its station");
+    Some((to, slot))
 }
 
 /// "Forward unknown targets": an individual call or SDS from a station that

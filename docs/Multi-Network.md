@@ -118,9 +118,9 @@ there or carries another network's MNI.
 
 | Target | Goes to |
 | --- | --- |
-| TSI of another network (the station names the called network, `SERVICE_CALL_NETWORK` `called`) | a visitor of that network here, else over the link to that network (refused while it is down); the caller is registered there first like a talker |
+| TSI of another network (the station names the called network, `SERVICE_CALL_NETWORK` `called`) | a visitor of that network here; one of this server's radios the link registered there: its station here; else over the link to that network (refused while it is down); the caller is registered there first like a talker |
 | ISSI without a network, registered here | here, as before (a visitor dialling one means this network) |
-| ISSI without a network, not registered here | as before (SIP, SMS Center, refused); with `forward_unknown` on a network: once to that network |
+| ISSI without a network, not registered here | as before (SIP, SMS Center, refused); with `forward_unknown` on a network: a visitor of that network here with this ISSI, else once to that network |
 | from network X to a radio of ours the link registered there | its station |
 | from network X to a visitor from X | its station, with `SERVICE_CALL_NETWORK` (both parties' networks) before it |
 | from network X to anything else | refused |
@@ -128,7 +128,20 @@ there or carries another network's MNI.
 `forward_unknown` (per network, off by default) never sends back over the
 link a call came in on, and the same calling / called pair a second time
 within 5 s counts as a loop and is refused. Such an SDS is not stored by the
-SMS Center.
+SMS Center. A party that is here (a visitor, or one of this server's radios
+registered there) is never sent round the link: the far server would send
+it back over the same connection, which a Brew server does not do.
+
+A visitor that dials a bare ISSI reaches a party of its own network (the
+cell's network, TS 100 392-2 clause 14.2.3); to reach a radio or the app of
+this server's network it has to dial the full TSI.
+
+Switching networks by cell: with one radio and one home identity, the cell
+it uses decides the network it talks in (field check 2026-11-07, home
+901/9999, this server linked to TetraPack): on a 901/9999 cell it is this
+server's radio; on a 901/1638 cell it migrates and its groups are
+TetraPack / Brandmeister groups over the link (or it is a TetraPack radio
+there with ITSI attach). Bridge pools work in both cases.
 - `mni` is offered only while Multi Network is on and has networks.
 
 The protocol is in [Brew-Extensions.md](Brew-Extensions.md) section 12b.

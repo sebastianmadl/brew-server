@@ -2154,6 +2154,49 @@ mod e2e {
     }
 
     #[tokio::test]
+    async fn an_unknown_target_that_is_a_visitor_here_is_not_sent_round_the_link() {
+        // Field 2026-11-07: the app called the MTP registered here as a
+        // TetraPack radio; forwarded to TetraPack it bounced and was refused.
+        let (_tp, tp_addr) = serve(base_config()).await;
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), mcc: 901, mnc: 1638, remote_host: tp_addr.to_string(), bridge_issi: 9_000_001, reconnect_interval_seconds: 5, forward_unknown: true, register_talkers: true, ..Default::default()
+        });
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        wait_until("link up", async || main.inner.read().await.netlinks.len() == 1).await;
+        let mut st = station(main_addr, &[], &[]).await;
+        st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":1638,"cells":[],"capabilities":["mni"]}"#).into())).await.unwrap();
+        next_service(&mut st, protocol::SERVICE_NETWORKS, 2000).await.expect("SERVICE_NETWORKS");
+        st.send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_972, "mcc": 901, "mnc": 1638}))).await.unwrap();
+        st.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_972, &[]).into())).await.unwrap();
+        let mut app = station(main_addr, &[2_320_997], &[]).await;
+        wait_until("visitor and app", async || {
+            let i = main.inner.read().await;
+            i.subscribers.contains_key(&2_320_997) && i.visitors.by_key.contains_key(&(1, 2_320_972))
+        }).await;
+
+        let id = Uuid::new_v4();
+        app.send(setup(&id, 2_320_997, 2_320_972)).await.unwrap();
+        assert!(next_call(&mut st, protocol::CALL_SETUP_REQUEST, 2000).await.is_some_and(|x| (x.0, x.1, x.2) == (id, 2_320_997, 2_320_972)));
+        let sds = Uuid::new_v4();
+        app.send(Message::Binary(protocol::build_short_transfer(&sds, 2_320_997, 2_320_972).into())).await.unwrap();
+        assert!(next_call(&mut st, protocol::CALL_SHORT_TRANSFER, 2000).await.is_some_and(|x| x.0 == sds));
+
+        // The other way: the visitor dials the app's ISSI, a party of its
+        // network (clause 14.2.3), and the app is registered there by this
+        // server: delivered here, not sent round TetraPack.
+        // (TetraPack here is a brew-server: asked first, then registered.)
+        wait_until("app registered there", async || { ensure_registered(&main, 1, 2_320_997); exported(&main, 1, 2_320_997) }).await;
+        let back = Uuid::new_v4();
+        st.send(svc(protocol::SERVICE_CALL_NETWORK, serde_json::json!({"uuid": back.to_string(), "called": {"mcc": 901, "mnc": 1638}, "calling": {"mcc": 901, "mnc": 1638}}))).await.unwrap();
+        st.send(setup(&back, 2_320_972, 2_320_997)).await.unwrap();
+        assert!(next_call(&mut app, protocol::CALL_SETUP_REQUEST, 2000).await.is_some_and(|x| (x.0, x.1, x.2) == (back, 2_320_972, 2_320_997)));
+    }
+
+    #[tokio::test]
     async fn forwarding_an_unknown_target_to_this_same_server_stops_at_once() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
