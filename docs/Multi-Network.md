@@ -43,7 +43,10 @@ across networks.
   also every radio of a station with Multi Network (a Basestation announcing
   the `mni` capability, see step 4) or named in `export_stations` (station
   logins) is registered there, in a bridged group or not. The app (Terminal
-  mode) and radios from peers or other networks are never exported.
+  mode) and radios from peers or other networks are never exported. So the
+  app is registered there only while it is in a bridged group or making a
+  call over there itself; a radio of that network reaches it by individual
+  call or SDS only then (field check 2026-11-07).
 - **ISSI collisions**: a radio is registered there only if that network may
   have its ISSI. A brew-server there (it offers `issi-check`) is asked first
   (`SERVICE_ISSI_CHECK`, docs/Brew-Extensions.md 12a); a taken ISSI is not
