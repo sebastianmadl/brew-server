@@ -239,6 +239,17 @@ pub struct NetworkConfig {
     /// talker not known that way is registered before its first over.
     /// Off: talkers are passed through unregistered.
     pub register_talkers: bool,
+    /// "Register all": also register there every radio of a station with
+    /// the `mni` capability or named in `export_stations`, in a bridged
+    /// group or not (needs `register_talkers`). The app and radios from
+    /// peers or other networks are never exported.
+    pub register_all: bool,
+    /// Station logins whose radios "register all" exports as well.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub export_stations: Vec<String>,
+    /// ISSIs never registered there (an ISSI that network has itself).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub never_export: Vec<u32>,
     pub reconnect_interval_seconds: u64,
     /// TLS settings, as for `[[federation.peers]]`.
     pub tls: bool,
@@ -261,6 +272,9 @@ impl Default for NetworkConfig {
             user_agent: String::new(),
             bridge_issi: 0,
             register_talkers: true,
+            register_all: false,
+            export_stations: Vec::new(),
+            never_export: Vec::new(),
             reconnect_interval_seconds: 15,
             tls: false,
             tls_ca_path: "/etc/ssl/certs/ca-certificates.crt".into(),

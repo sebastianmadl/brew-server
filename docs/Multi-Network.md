@@ -33,8 +33,20 @@ station (migration) and individual calls or SDS across networks come later.
   (e.g. from a peer server) is registered before its first over. All of
   them are deregistered when the link is stopped. Switch it off for a link
   to this same server (a loop test): there the registration would move the
-  radio off its own station. There is no collision check yet: an ISSI that is
-  registered in that network elsewhere is moved to this link.
+  radio off its own station.
+- **Register all** (`register_all`, off by default, needs `register_talkers`):
+  also every radio of a station with Multi Network (a Basestation announcing
+  the `mni` capability, see step 4) or named in `export_stations` (station
+  logins) is registered there, in a bridged group or not. The app (Terminal
+  mode) and radios from peers or other networks are never exported.
+- **ISSI collisions**: a radio is registered there only if that network may
+  have its ISSI. A brew-server there (it offers `issi-check`) is asked first
+  (`SERVICE_ISSI_CHECK`, docs/Brew-Extensions.md 12a); a taken ISSI is not
+  registered and shows up as a conflict. Another server cannot be asked:
+  `never_export` lists ISSIs that are never registered there, and when a
+  radio there talks with an ISSI this server has registered there, that
+  shows up as a conflict too (dashboard: "ISSI conflicts", with a "Never
+  export" button).
 - **Nothing else crosses**, in either direction: no other registrations, no
   services, no calls on groups that are not bridged. A station cannot send
   into another network by itself.
@@ -64,7 +76,10 @@ username = "1234567"      # Basestation login there
 password = "secret"
 user_agent = "TMO-Austria Infra 1.0"
 bridge_issi = 9000001     # ISSI of the bridge in that network, 0 = none
-register_talkers = true   # register talkers there before their first over
+register_talkers = true   # register radios in bridged groups there
+register_all = false      # also all radios of mni stations / export_stations
+export_stations = ["bs-wien"]   # station logins for register_all
+never_export = [2320002]  # ISSIs that network has itself
 reconnect_interval_seconds = 15
 tls = true                # wss://, settings as for [[federation.peers]]
 # tls_ca_path, tls_server_name, tls_pinned_cert_path
@@ -103,8 +118,8 @@ listen to a group of another network on several groups here).
   `keepalive_timeout_seconds`.
 - A network that is used by a pool cannot be deleted or renamed; remove its
   groups from the pools first.
-- Registering all radios there, also those not in a bridged group ("register
-  all ISSI", with a filter and a collision check), is the next step.
+- Stations announce the `mni` capability only from step 7 on (FlowStation);
+  until then "register all" exports the stations listed in `export_stations`.
 
 ## Standards
 

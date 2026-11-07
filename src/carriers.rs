@@ -32,8 +32,9 @@ pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 /// (`SERVICE_CALL_HANDOFF`, see `call_restore`) and
 /// `cell-directory` (`SERVICE_CELL_DIRECTORY`, to a Basestation that also names
 /// it in its capabilities, see `directory_updates`) and `group-access`
-/// (`SERVICE_GROUP_ACCESS`, likewise, see `group_access::updates`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access";
+/// (`SERVICE_GROUP_ACCESS`, likewise, see `group_access::updates`) and
+/// `issi-check` (`SERVICE_ISSI_CHECK` answers, see `netlink`).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check";
 
 /// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`) for
 /// `SERVICE_CELL_DIRECTORY`.
@@ -871,7 +872,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY, crate::group_access::CAPABILITY]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY, crate::group_access::CAPABILITY, crate::netlink::EXT_ISSI_CHECK]);
     }
 
     #[test]

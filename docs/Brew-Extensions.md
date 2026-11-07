@@ -40,7 +40,7 @@ The extensions use:
 | --- | --- | --- |
 | `CLASS_SUBSCRIBER` | `0xf0` | `SUB_REGISTER` (1), `SUB_REREGISTER` (2), `SUB_DEREGISTER` (0), `SUB_AFFILIATE` (8): unchanged. A registration on B is what moves a radio. |
 | `CLASS_CALL_CONTROL` | `0xf1` | `GROUP_TX` (2), `GROUP_IDLE` (3), `CALL_RELEASE` (10) with its cause byte, `SIMPLEX_GRANTED` (12), `SIMPLEX_IDLE` (13): unchanged. |
-| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1F`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
+| `CLASS_SERVICE` | `0xf4` | All new messages, types `0x14` to `0x1F` and `0x24`. `0x10` to `0x13` are taken (RSSI, emergency, blacklist command, blacklist). |
 
 Routing stays as in Brew: one routing entry per ISSI, the newest registration
 wins, and a registration keeps the ISSI's group affiliations.
@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -98,6 +98,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
 | `0x1E` | `SERVICE_CALL_HANDOFF` | server → A → server | `call-handoff` | A: `call-handoff` |
 | `0x1F` | `SERVICE_GROUP_ACCESS` | server → Basestation | `group-access` | `group-access` |
+| `0x24` | `SERVICE_ISSI_CHECK` | Basestation → server → Basestation | `issi-check` | – |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
 reselection), and add the others one by one; each is independent except where
@@ -915,6 +916,39 @@ Basestation:
 - The rules are per group, so a multi-cell Basestation applies them on
   every cell.
 
+## 12a. ISSI check (`issi-check`)
+
+Used by a server that connects to another Brew network as a Basestation
+(brew-server Multi Network, `docs/Multi-Network.md`): before it registers one
+of its own radios there, it asks whether that ISSI is in use there, so the
+registration does not take the ISSI away from a radio of that network ("the
+newest registration wins"). `0x20` to `0x23` are kept for the `mni`
+extension (later).
+
+### 12a.1 `SERVICE_ISSI_CHECK` (0x24)
+
+Basestation → server, only when the server offered `issi-check`:
+
+```json
+{"query":[2320001,2320002]}
+```
+
+At most 256 ISSIs per message. The server answers with the same type:
+
+```json
+{"taken":[2320002],"free":[2320001]}
+```
+
+- Taken: registered on that server by any other connection (also learnt from
+  a peer server). An ISSI registered by the asking connection itself is free.
+- The asker registers only free ISSIs; it may ask a taken one again later
+  (brew-server: after 5 minutes) and an unanswered one after 10 s.
+- The answer is advice at that moment: a radio that registers there later
+  still wins the ISSI.
+- Without the extension (TetraPack, Brandmeister) nothing can be asked; the
+  asker relies on a never-export list and on noticing the same ISSI talking
+  there (brew-server shows both on the Multi Network page).
+
 ## 13. Implementation checklist
 
 Server:
@@ -937,6 +971,7 @@ Server:
 - [ ] Optional: keep the optional cell fields of `SERVICE_BTS_INFO` (5.1.1)
       and send `SERVICE_CELL_DIRECTORY` (5.3) to capable Basestations.
 - [ ] Optional: send `SERVICE_GROUP_ACCESS` (12.2) to capable Basestations.
+- [ ] Optional: answer `SERVICE_ISSI_CHECK` (12a.1).
 
 Basestation:
 

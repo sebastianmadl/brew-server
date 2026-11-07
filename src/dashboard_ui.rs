@@ -889,7 +889,7 @@ R.multinet=()=>{
     return `<tr${n.enabled?'':' class="off"'}><td><button class="tog" role="switch" aria-checked="${n.enabled}" aria-label="Network ${esc(n.name)} on" onclick="toggleNet(${i})"></button></td>
      <td><b>${esc(n.name)}</b><div class="mut" style="font-size:12px">MNI ${mni(n.mcc,n.mnc)}</div></td><td>${st}</td>
      <td><code>${esc(n.remote_host)}${esc(n.path)}</code>${n.tls?' <span class="chip">TLS</span>':''}<div class="mut" style="font-size:12px">login ${esc(n.username)||'—'} · as “${esc(n.user_agent||M.default_user_agent)}”</div></td>
-     <td>${n.bridge_issi||'<span class="mut">—</span>'}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
+     <td>${n.bridge_issi||'<span class="mut">—</span>'}${n.register_talkers&&n.connected?`<div class="mut" style="font-size:12px">${n.exported.length} radio${n.exported.length===1?'':'s'} registered there${n.register_all?' (all)':''}${n.checks?' · ISSIs checked':''}</div>`:''}</td><td>${n.bridged.map(g=>`<span class="tg">${g}</span>`).join(' ')||'<span class="mut">none</span>'}</td>
      <td style="white-space:nowrap"><button class="btn" onclick="editNet(${i})">Edit</button><button class="btn danger" onclick="delNet(${i})">Delete</button></td></tr>`;}).join('');
   return `<div class="card"><div class="ch"><h2>This server</h2>${helpBtn('mnself')}<span class="sp"></span><label style="display:flex;gap:8px;align-items:center;font-size:13px"><button class="tog" role="switch" aria-checked="${M.enabled}" aria-label="Multi Network on" onclick="toggleMn()"></button>Multi Network ${M.enabled?'on':'off'}</label><button class="btn" onclick="editSelf()">Edit</button></div>
    <div class="row"><div class="rm"><div class="rt">${esc(M.name)||'<span class="mut">no name</span>'}</div><div class="rs">MNI (MCC/MNC) ${mni(M.mcc,M.mnc)}</div></div></div>
@@ -897,9 +897,18 @@ R.multinet=()=>{
   <div class="card"><div class="ch"><h2>Other networks</h2><span class="cnt">${M.networks.length}</span>${helpBtn('mnnets')}<span class="sp"></span><button class="btn pri" onclick="editNet(-1)">${ic('plus')}New network</button></div>
    ${helpNote('mnnets','This server connects to each network itself, as one Basestation with the login that network gave you, and introduces itself with the connection name you choose (empty: brew-server and its version). The login stays on this server; stations never get it. What crosses is set by the talkgroup pools on the <a data-go="routing" href="#routing">Routing</a> page: put a group of a network into a pool as <code>network:GSSI</code> (e.g. TG 9 here and TetraPack:909 there) and the pool becomes a bridge; the talker\'s ISSI is passed on 1:1. The bridge ISSI is registered in that network and listens to the bridged groups so its server sends their calls here. Changes apply at once, only a changed network reconnects, no restart.')}
    ${M.networks.length?`<div class="tw"><table><thead><tr><th style="width:52px">On</th><th>Network</th><th>Link</th><th>Server</th><th>Bridge ISSI</th><th>Bridged groups</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No other networks yet.</div>'}
-   ${msgDiv('net-msg')}</div>`;
+   ${msgDiv('net-msg')}</div>${conflictCard(M)}`;
 };
-const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,register_talkers:n.register_talkers!==false,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
+// ISSI collisions the links saw (newest first), with a never-export button.
+function conflictCard(M){
+  const l=M.networks.flatMap((n,i)=>n.conflicts.map(c=>({...c,i,net:n.name,never:n.never_export.includes(c.issi)}))).sort((a,b)=>b.at_ms-a.at_ms);
+  if(!l.length)return '';
+  return `<div class="card"><div class="ch"><h2>ISSI conflicts</h2><span class="cnt">${l.length}</span>${helpBtn('mnconf')}</div>
+   ${helpNote('mnconf','An ISSI of this server that the other network has as well. A brew-server there is asked before a radio is registered (taken: not registered). Other servers cannot be asked: a radio there talking with an ISSI this server has registered there shows up here. Put such an ISSI on the never-export list of that network.')}
+   <div class="tw"><table><thead><tr><th>Time</th><th>Network</th><th>ISSI</th><th>What</th><th></th></tr></thead><tbody>${l.slice(0,100).map(c=>`<tr><td class="m">${tmd(c.at_ms)}</td><td>${esc(c.net)}</td><td>${issiCell(c.issi)}</td><td>${esc(c.what)}</td><td>${c.never?'<span class="mut">never exported</span>':`<button class="btn" onclick="neverNet(${c.i},${c.issi})">Never export</button>`}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+function neverNet(i,issi){const c=mnPlain();const n=c.networks[i];if(!n.never_export.includes(issi))n.never_export.push(issi);saveNets(c,`${issi} is never registered in ${n.name} now.`);}
+const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,register_talkers:n.register_talkers!==false,register_all:!!n.register_all,export_stations:[...(n.export_stations||[])],never_export:[...(n.never_export||[])],reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
 const mnPlain=()=>({enabled:D.nets.enabled,name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
 async function saveNets(cfg,okText,sheet){
   const m=sheet?$('sheet-msg'):null;if(m){m.className='msg mut';m.textContent='Saving…';}
@@ -919,7 +928,7 @@ function editSelf(){const M=D.nets;
   $('scrim').classList.add('on');setTimeout(()=>$('ms-name').focus(),30);}
 function saveSelf(){const c=mnPlain();c.name=v('ms-name').trim();c.mcc=+v('ms-mcc')||0;c.mnc=+v('ms-mnc')||0;saveNets(c,'Saved.',true);}
 function editNet(i){
-  const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,register_talkers:true,reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
+  const n=i>=0?netPlain(D.nets.networks[i]):{name:'',enabled:true,mcc:0,mnc:0,remote_host:'',path:'/brew',username:'',password:'',user_agent:'',bridge_issi:0,register_talkers:true,register_all:false,export_stations:[],never_export:[],reconnect_interval_seconds:15,tls:false,tls_server_name:'',tls_ca_path:'/etc/ssl/certs/ca-certificates.crt',tls_pinned_cert_path:''};
   const hasPw=i>=0&&D.nets.networks[i].has_password;
   const hp=splitHost(n.remote_host);
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit network':'New network'}</h3></div><div class="sb">
@@ -931,6 +940,9 @@ function editNet(i){
    ${fld('ne-ua','Connection name (how this server introduces itself there)',n.user_agent,'maxlength="80" placeholder="'+esc(D.nets.default_user_agent)+'"')}
    ${fld('ne-issi','Bridge ISSI in that network (0 = none)',n.bridge_issi,'inputmode="numeric"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-reg" aria-checked="${n.register_talkers}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Register radios there (those in a bridged group here, like a base station)</label>
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-all" aria-checked="${n.register_all}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Register all: also every radio of stations with Multi Network (mni) or listed below</label>
+   ${fld('ne-exp','Also export the radios of these stations (logins, comma separated)',n.export_stations.join(', '),'autocomplete="off"')}
+   ${fld('ne-never','Never register these ISSIs there (comma separated)',n.never_export.join(', '),'autocomplete="off" inputmode="numeric"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-tls" aria-checked="${n.tls}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> TLS (wss://)</label>
    ${fld('ne-sni','TLS server name (empty: host)',n.tls_server_name)}
    ${fld('ne-pin','Pinned certificate file (self-signed server, empty: off)',n.tls_pinned_cert_path)}
@@ -948,7 +960,8 @@ function saveNet(i){
   const remote_host=host?(host.includes(':')?'['+host+']':host)+':'+port:'';
   const c=mnPlain();const old=i>=0?c.networks[i]:{reconnect_interval_seconds:15,tls_ca_path:'/etc/ssl/certs/ca-certificates.crt'};
   const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host,path:v('ne-path').trim()||'/brew',
-    username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,register_talkers:$('ne-reg').getAttribute('aria-checked')==='true',
+    username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,register_talkers:$('ne-reg').getAttribute('aria-checked')==='true',register_all:$('ne-all').getAttribute('aria-checked')==='true',
+    export_stations:v('ne-exp').split(',').map(x=>x.trim()).filter(Boolean),never_export:v('ne-never').split(/[\s,]+/).filter(Boolean).map(Number),
     tls:$('ne-tls').getAttribute('aria-checked')==='true',tls_server_name:v('ne-sni').trim(),tls_pinned_cert_path:v('ne-pin').trim(),
     enabled:$('ne-on').getAttribute('aria-checked')==='true'});
   if(i>=0)c.networks[i]=n;else c.networks.push(n);

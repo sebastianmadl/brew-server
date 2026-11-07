@@ -168,6 +168,12 @@ pub const SERVICE_CELL_DIRECTORY: u8 = 0x1D;
 /// announced the `group-access` capability (see `group_access::updates`).
 pub const SERVICE_GROUP_ACCESS: u8 = 0x1F;
 
+/// `CLASS_SERVICE` type a server's Multi Network link sends (as a
+/// Basestation) to a server that offered `issi-check`, asking whether ISSIs
+/// are in use there before registering them (`{"query":[..]}`); the server
+/// answers with the same type (`{"taken":[..],"free":[..]}`). See `netlink`.
+pub const SERVICE_ISSI_CHECK: u8 = 0x24;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());

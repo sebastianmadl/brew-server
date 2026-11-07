@@ -89,4 +89,4 @@ one LAN. See [docs/High-Availability.md](docs/High-Availability.md).
 ## Credits
 
 - Joaquin EA5GVK
-- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions, dashboard redesign, Routing page and talkgroup pools, login and accounts pages, ISSI and GSSI directory, group access and RX only (`group-access`)
+- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions, dashboard redesign, Routing page and talkgroup pools, login and accounts pages, ISSI and GSSI directory, group access and RX only (`group-access`), Multi Network (bridges to other networks, `issi-check`)

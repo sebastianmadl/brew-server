@@ -34,9 +34,9 @@ use crate::protocol::{self, ConnVersion};
 use crate::state::{AppState, Client, ClientId, ClientMode};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -100,7 +100,7 @@ struct LinkStatus {
     affiliated: BTreeSet<u32>,
     /// Radios this link registered there, with their groups there (only
     /// with `register_talkers`).
-    members: Option<SharedTalkers>,
+    members: Option<SharedExport>,
 }
 
 impl NetLinks {
@@ -184,10 +184,10 @@ async fn link_loop(state: Arc<AppState>, net: NetworkConfig, slot: u8, gen: u64,
         if stopped(&stop) { break; }
         info!(network = %net.name, remote_host = %net.remote_host, "multi network: connecting");
         match connect_and_run(&state, &net, slot, gen, &mut stop).await {
-            Ok(()) => set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.members = None; }),
+            Ok(()) => set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; }),
             Err(e) => {
                 warn!(network = %net.name, error = %format!("{e:#}"), "multi network: link failed");
-                set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.members = None; s.last_error = format!("{e:#}"); });
+                set_status(&state, &net.name, gen, |s| { s.connected = false; s.up = None; s.last_error = format!("{e:#}"); });
             }
         }
         if stopped(&stop) { break; }
@@ -228,16 +228,19 @@ async fn connect_and_run(state: &Arc<AppState>, net: &NetworkConfig, slot: u8, g
         request.headers_mut().insert("X-Brew-Version", protocol::BREW_PROTOCOL_VERSION.to_string().parse()?);
         request.headers_mut().insert("Sec-WebSocket-Protocol", "brew".parse()?);
         let stream = federation::dial(&peer, tls.as_ref()).await?;
-        let (ws, _resp) = tokio_tungstenite::client_async(request, stream).await?;
-        anyhow::Ok((ws, remote_addr))
+        let (ws, resp) = tokio_tungstenite::client_async(request, stream).await?;
+        // A brew-server there answers the ISSI check.
+        let checks = resp.headers().get(crate::carriers::X_BREW_EXTENSIONS).and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.split(',').any(|x| x.trim() == EXT_ISSI_CHECK));
+        anyhow::Ok((ws, remote_addr, checks))
     };
-    let (ws, remote_addr) = tokio::select! {
+    let (ws, remote_addr, checks) = tokio::select! {
         r = tokio::time::timeout(federation::DIAL_TIMEOUT, dial) => r
             .map_err(|_| anyhow::anyhow!("timed out after {}s connecting", federation::DIAL_TIMEOUT.as_secs()))??,
         _ = stop.changed() => return Ok(()),
     };
     info!(network = %net.name, slot, "multi network: link up");
-    run_session(state, net, slot, gen, ws, remote_addr, stop).await;
+    run_session(state, net, slot, gen, ws, (remote_addr, checks), stop).await;
     Ok(())
 }
 
@@ -313,6 +316,14 @@ pub fn mirror<'a>(
     out
 }
 
+/// Does "register all" of network `n` export the radios of this station?
+/// A Basestation with the `mni` capability or named in `export_stations`;
+/// never a Terminal (the app), a peer or another network's link.
+pub fn exports_station(n: &NetworkConfig, mode: ClientMode, login: Option<&str>, capabilities: &[String]) -> bool {
+    mode == ClientMode::Basestation
+        && (capabilities.iter().any(|c| c == CAPABILITY_MNI) || login.is_some_and(|l| n.export_stations.iter().any(|s| s == l)))
+}
+
 /// Upstream messages that bring the radios registered there from `have` to
 /// `want`: new radios register and affiliate, radios that left every bridged
 /// group deregister, the rest affiliate / deaffiliate the difference. A
@@ -361,9 +372,25 @@ pub async fn sync_members(state: &AppState) {
         let radios: Vec<(u32, &HashSet<u32>)> = inner.subscribers.iter()
             .filter(|(_, s)| s.route.path.is_empty() && local(&s.client_id))
             .map(|(i, s)| (*i, &s.groups)).collect();
+        // Radios of the stations "register all" exports: a station with the
+        // `mni` capability or one named in `export_stations`; never the
+        // app (Terminal mode) or radios from peers or other networks.
+        let exporting = |n: &NetworkConfig, c: &crate::state::ClientId| inner.clients.get(c).is_some_and(|cl| {
+            let caps = inner.carriers.info(*c).map(|i| i.capabilities.as_slice()).unwrap_or_default();
+            exports_station(n, cl.mode, cl.username.as_deref(), caps)
+        });
         let wants: Vec<(String, HashMap<u32, BTreeSet<u32>>)> = cfg.networks.iter()
             .filter(|n| n.enabled && n.register_talkers)
-            .map(|n| (n.name.clone(), mirror(&pools, &n.name, n.bridge_issi, radios.iter().map(|(i, g)| (*i, *g)))))
+            .map(|n| {
+                let mut want = mirror(&pools, &n.name, n.bridge_issi, radios.iter().map(|(i, g)| (*i, *g)));
+                if n.register_all {
+                    for (issi, sub) in inner.subscribers.iter() {
+                        if *issi == 0 || *issi > GSSI_MASK || *issi == n.bridge_issi || !sub.route.path.is_empty() { continue; }
+                        if exporting(n, &sub.client_id) { want.entry(*issi).or_default(); }
+                    }
+                }
+                (n.name.clone(), want)
+            })
             .collect();
         let talking: HashSet<u32> = inner.calls.values().map(|c| c.source_issi).collect();
         (wants, talking)
@@ -372,8 +399,22 @@ pub async fn sync_members(state: &AppState) {
     for (name, want) in wants {
         let Some(status) = reg.status.get(&name) else { continue };
         let (Some(up), Some(members)) = (status.up.clone(), status.members.clone()) else { continue };
-        let mut have = members.lock().unwrap_or_else(|e| e.into_inner());
-        for msg in member_changes(&mut have, &want, &talking) { let _ = up.send(msg); }
+        let mut e = export_lock(&members);
+        let now = Instant::now();
+        // An ISSI not registered there yet goes only if that network may
+        // have it: never-export list, and the ISSI check where offered.
+        let mut ask = Vec::new();
+        let want: HashMap<u32, BTreeSet<u32>> = want.into_iter().filter(|(issi, _)| match e.allow(*issi, now) {
+            Allow::Yes => true,
+            Allow::No => false,
+            Allow::Ask => { if ask.len() < MAX_CHECK { ask.push(*issi); } false }
+        }).collect();
+        if !ask.is_empty() {
+            e.asked(&ask, now);
+            let _ = up.send(build_check(&ask));
+        }
+        let Export { have, .. } = &mut *e;
+        for msg in member_changes(have, &want, &talking) { let _ = up.send(msg); }
     }
 }
 
@@ -417,12 +458,101 @@ pub struct Outbound {
     ids: SharedCallIds,
     /// Talkers registered over there by this link, with their groups
     /// (`None` = talkers are not registered).
-    talkers: Option<SharedTalkers>,
+    talkers: Option<SharedExport>,
     bridge_issi: u32,
 }
 
-/// Talkers a link registered in the other network (ISSI -> groups).
-pub type SharedTalkers = Arc<std::sync::Mutex<HashMap<u32, BTreeSet<u32>>>>;
+/// What a link exports into the other network: the radios it registered
+/// there, the answers of that network's ISSI check and the conflicts seen.
+#[derive(Debug, Default)]
+pub struct Export {
+    /// Radios registered there by this link, with their groups there.
+    pub have: HashMap<u32, BTreeSet<u32>>,
+    /// That network answers `SERVICE_ISSI_CHECK` (offered `issi-check`).
+    pub checks: bool,
+    /// ISSIs never registered there (`never_export`).
+    pub never: HashSet<u32>,
+    /// Check answers: taken there (true) or free, and when.
+    verdict: HashMap<u32, (bool, Instant)>,
+    /// Asked, no answer yet.
+    pending: HashMap<u32, Instant>,
+    /// Newest first, at most [`MAX_CONFLICTS`].
+    pub conflicts: VecDeque<Conflict>,
+    /// Last conflict per ISSI (rate limit).
+    last_conflict: HashMap<u32, Instant>,
+}
+
+/// One ISSI collision seen on a link, for the dashboard.
+#[derive(Debug, Clone, Serialize)]
+pub struct Conflict {
+    pub issi: u32,
+    pub at_ms: u64,
+    pub what: String,
+}
+
+/// May a link register `issi` there?
+#[derive(Debug, PartialEq, Eq)]
+pub enum Allow { Yes, No, Ask }
+
+/// A "taken" answer is asked again after this long.
+const TAKEN_FOR: Duration = Duration::from_secs(300);
+/// An unanswered check is asked again after this long.
+const PENDING_FOR: Duration = Duration::from_secs(10);
+const MAX_CONFLICTS: usize = 50;
+/// Most ISSIs one `SERVICE_ISSI_CHECK` asks about.
+pub const MAX_CHECK: usize = 256;
+
+impl Export {
+    pub fn allow(&self, issi: u32, now: Instant) -> Allow {
+        if self.never.contains(&issi) { return Allow::No; }
+        if !self.checks || self.have.contains_key(&issi) { return Allow::Yes; }
+        match self.verdict.get(&issi) {
+            Some((false, _)) => Allow::Yes,
+            Some((true, at)) if now.duration_since(*at) < TAKEN_FOR => Allow::No,
+            _ if self.pending.get(&issi).is_some_and(|at| now.duration_since(*at) < PENDING_FOR) => Allow::No,
+            _ => Allow::Ask,
+        }
+    }
+
+    fn asked(&mut self, issis: &[u32], now: Instant) {
+        for i in issis { self.pending.insert(*i, now); }
+    }
+
+    /// Takes in a check answer; returns the ISSIs found taken.
+    pub fn answered(&mut self, taken: &[u32], free: &[u32], now: Instant) -> Vec<u32> {
+        for i in free { self.pending.remove(i); self.verdict.insert(*i, (false, now)); }
+        for i in taken { self.pending.remove(i); self.verdict.insert(*i, (true, now)); }
+        if self.verdict.len() > 4 * MAX_TALKERS { self.verdict.retain(|_, (_, at)| now.duration_since(*at) < TAKEN_FOR); }
+        taken.to_vec()
+    }
+
+    /// Notes a conflict (at most one a minute per ISSI).
+    pub fn conflict(&mut self, issi: u32, what: String, now: Instant) -> bool {
+        if self.last_conflict.get(&issi).is_some_and(|at| now.duration_since(*at) < Duration::from_secs(60)) { return false; }
+        self.last_conflict.insert(issi, now);
+        if self.last_conflict.len() > MAX_TALKERS { self.last_conflict.retain(|_, at| now.duration_since(*at) < Duration::from_secs(60)); }
+        self.conflicts.push_front(Conflict { issi, at_ms: crate::telemetry::now_ms(), what });
+        self.conflicts.truncate(MAX_CONFLICTS);
+        true
+    }
+}
+
+pub type SharedExport = Arc<std::sync::Mutex<Export>>;
+
+fn export_lock(e: &SharedExport) -> std::sync::MutexGuard<'_, Export> {
+    e.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `SERVICE_ISSI_CHECK` question: `{"query":[issi,..]}`.
+pub fn build_check(issis: &[u32]) -> Vec<u8> {
+    protocol::build_service(protocol::SERVICE_ISSI_CHECK, &serde_json::json!({ "query": issis }).to_string())
+}
+
+/// Extension a server offers when it answers `SERVICE_ISSI_CHECK`.
+pub const EXT_ISSI_CHECK: &str = "issi-check";
+/// Station capability (`SERVICE_BTS_INFO`) of a station with the `mni`
+/// extension: "register all" exports its radios.
+pub const CAPABILITY_MNI: &str = "mni";
 
 /// Bound on the talkers a link keeps registered.
 const MAX_TALKERS: usize = 1024;
@@ -492,7 +622,7 @@ impl Outbound {
     pub fn new(slot: u8, ids: SharedCallIds) -> Self { Self { slot, ids, talkers: None, bridge_issi: 0 } }
 
     /// Also register talkers over there before their first over.
-    pub fn registering(mut self, talkers: SharedTalkers, bridge_issi: u32) -> Self {
+    pub fn registering(mut self, talkers: SharedExport, bridge_issi: u32) -> Self {
         self.talkers = Some(talkers);
         self.bridge_issi = bridge_issi;
         self
@@ -508,12 +638,20 @@ impl Outbound {
             let talker = src(&pkt);
             if let Some((slot, gssi)) = split_alias(dest(&pkt)) {
                 if slot == self.slot && talker != 0 && talker <= GSSI_MASK && talker != self.bridge_issi {
-                    let mut t = talkers.lock().unwrap_or_else(|e| e.into_inner());
-                    if !t.contains_key(&talker) && t.len() < MAX_TALKERS {
-                        out.push(protocol::build_subscriber_message(protocol::SUB_REGISTER, talker, &[]));
-                        t.insert(talker, BTreeSet::new());
+                    let mut e = export_lock(talkers);
+                    if !e.have.contains_key(&talker) && e.have.len() < MAX_TALKERS {
+                        match e.allow(talker, Instant::now()) {
+                            Allow::Yes => {
+                                out.push(protocol::build_subscriber_message(protocol::SUB_REGISTER, talker, &[]));
+                                e.have.insert(talker, BTreeSet::new());
+                            }
+                            // Asked first; the talker passes unregistered
+                            // until the answer says it is free there.
+                            Allow::Ask => { out.push(build_check(&[talker])); e.asked(&[talker], Instant::now()); }
+                            Allow::No => {}
+                        }
                     }
-                    if let Some(groups) = t.get_mut(&talker) {
+                    if let Some(groups) = e.have.get_mut(&talker) {
                         if groups.insert(gssi) {
                             out.push(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, talker, &[gssi]));
                         }
@@ -582,7 +720,8 @@ async fn run_session(
     slot: u8,
     gen: u64,
     ws: tokio_tungstenite::WebSocketStream<Box<dyn federation::PeerIo>>,
-    remote_addr: Option<std::net::SocketAddr>,
+    // Remote address, and whether that server answers the ISSI check.
+    (remote_addr, checks): (Option<std::net::SocketAddr>, bool),
     stop: &mut watch::Receiver<bool>,
 ) {
     let id = Uuid::new_v4();
@@ -604,14 +743,21 @@ async fn run_session(
         let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_REGISTER, net.bridge_issi, &[]));
         for msg in affiliation_changes(net.bridge_issi, &BTreeSet::new(), &want) { let _ = up_tx.send(msg); }
     }
-    let talkers: SharedTalkers = Arc::default();
+    let talkers: SharedExport = Arc::default();
+    {
+        let mut e = export_lock(&talkers);
+        e.checks = checks;
+        e.never = net.never_export.iter().copied().collect();
+    }
     set_status(state, &net.name, gen, |s| {
+        // Conflicts seen before stay on the dashboard.
+        if let Some(old) = &s.members { export_lock(&talkers).conflicts = export_lock(old).conflicts.clone(); }
         s.connected = true;
         s.since_ms = crate::telemetry::now_ms();
         s.last_error.clear();
         s.up = Some(up_tx.clone());
         s.affiliated = if net.bridge_issi != 0 { want } else { BTreeSet::new() };
-        s.members = net.register_talkers.then(|| talkers.clone());
+        s.members = Some(talkers.clone());
     });
     // The radios already in bridged groups here join them there.
     sync_members(state).await;
@@ -649,6 +795,7 @@ async fn run_session(
         let _ = ws_tx.close().await;
     });
 
+    let ours = ids.clone();
     let mut inbound = Inbound::new(slot, ids);
     let name = net.name.clone();
     loop {
@@ -663,6 +810,19 @@ async fn run_session(
         };
         match item {
             Ok(Message::Binary(data)) => {
+                if data.len() > 2 && data[0] == protocol::CLASS_SERVICE && data[1] == protocol::SERVICE_ISSI_CHECK {
+                    if checked(&name, &talkers, &data[2..]) { sync_members(state).await; }
+                    continue;
+                }
+                // The same ISSI talking over there while this link has it
+                // registered there: two radios with one ISSI.
+                if is_group_tx(&data) && call_id(&data).is_some_and(|c| !ids_lock(&ours).to_local.contains_key(&c)) {
+                    let talker = src(&data);
+                    let mut e = export_lock(&talkers);
+                    if e.have.contains_key(&talker) && e.conflict(talker, format!("talked in {name} while registered there from here (same ISSI twice?)"), Instant::now()) {
+                        warn!(network = %name, issi = talker, "multi network: ISSI {talker} talks in {name} while this server has it registered there");
+                    }
+                }
                 let pools = pools_now(state);
                 let groups = bridged_groups(&pools, &name);
                 let probe = (is_group_tx(&data) || is_group_idle(&data)).then(|| data.to_vec());
@@ -680,7 +840,7 @@ async fn run_session(
     // Deregister the bridge ISSI on a deliberate stop (best effort).
     // Deregister the talkers it registered there, too.
     if stopped(stop) {
-        let registered: Vec<u32> = talkers.lock().map(|t| t.keys().copied().collect()).unwrap_or_default();
+        let registered: Vec<u32> = export_lock(&talkers).have.keys().copied().collect();
         for issi in &registered {
             let _ = up_tx.send(protocol::build_subscriber_message(protocol::SUB_DEREGISTER, *issi, &[]));
         }
@@ -697,6 +857,48 @@ async fn run_session(
     }
     state.cleanup_client(id).await;
     info!(network = %name, "multi network: link closed");
+}
+
+/// A `SERVICE_ISSI_CHECK` answer on a link (`{"taken":[..],"free":[..]}`):
+/// noted, taken ISSIs as conflicts. True if a sync should follow.
+fn checked(name: &str, export: &SharedExport, body: &[u8]) -> bool {
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default)]
+    struct Answer { taken: Vec<u32>, free: Vec<u32> }
+    let text = String::from_utf8_lossy(body);
+    let Ok(a) = serde_json::from_str::<Answer>(text.trim_end_matches('\0')) else {
+        warn!(network = %name, "multi network: malformed ISSI check answer");
+        return false;
+    };
+    let now = Instant::now();
+    let mut e = export_lock(export);
+    for issi in e.answered(&a.taken, &a.free, now) {
+        if e.conflict(issi, format!("already registered in {name}, not exported"), now) {
+            warn!(network = %name, issi, "multi network: ISSI {issi} is taken in {name}, not registered there");
+        }
+    }
+    !a.free.is_empty()
+}
+
+/// Remote side of `SERVICE_ISSI_CHECK` (`issi-check`): a Basestation (here:
+/// another server's link) asks whether ISSIs are in use here. Taken = an
+/// ISSI registered here by any other connection, also learnt from a peer.
+pub async fn handle_issi_check(state: &AppState, source: ClientId, json: &str) {
+    #[derive(serde::Deserialize)]
+    struct Query { query: Vec<u32> }
+    let Ok(q) = serde_json::from_str::<Query>(json) else {
+        debug!(%source, "ISSI check without a query ignored");
+        return;
+    };
+    let inner = state.inner.read().await;
+    let (mut taken, mut free) = (Vec::new(), Vec::new());
+    for issi in q.query.into_iter().take(MAX_CHECK) {
+        if inner.subscribers.get(&issi).is_some_and(|s| s.client_id != source) { taken.push(issi) } else { free.push(issi) }
+    }
+    info!(%source, taken = taken.len(), free = free.len(), "ISSI check answered");
+    if let Some(c) = inner.clients.get(&source) {
+        let _ = c.tx.send(protocol::build_service(protocol::SERVICE_ISSI_CHECK, &serde_json::json!({ "taken": taken, "free": free }).to_string()));
+    }
 }
 
 /// The connection that carries calls to group `alias` of another network,
@@ -721,6 +923,14 @@ pub fn validate(cfg: &MultiNetworkConfig, pools: &[TalkgroupPoolConfig]) -> Resu
             return Err(format!("network '{name}': the server needs a port (host:port, e.g. {}:443)", n.remote_host.trim()));
         }
         if n.bridge_issi > GSSI_MASK { return Err(format!("network '{name}': {} is not a valid ISSI (0 to 16777215)", n.bridge_issi)); }
+        if n.never_export.len() > MAX_TALKERS { return Err(format!("network '{name}': at most {MAX_TALKERS} ISSIs never to export")); }
+        if let Some(bad) = n.never_export.iter().find(|i| **i == 0 || **i > GSSI_MASK) {
+            return Err(format!("network '{name}': {bad} is not a valid ISSI to never export (1 to 16777215)"));
+        }
+        if n.export_stations.len() > 64 { return Err(format!("network '{name}': at most 64 stations to export")); }
+        if let Some(bad) = n.export_stations.iter().find(|s| s.is_empty() || s.len() > 64 || s.chars().any(char::is_control)) {
+            return Err(format!("network '{name}': station login {bad:?} must be 1 to 64 characters"));
+        }
         if !valid_user_agent(n.user_agent.trim()) {
             return Err(format!("network '{name}': the connection name may only use plain characters (no umlauts), up to {MAX_USER_AGENT}"));
         }
@@ -796,6 +1006,14 @@ pub struct NetworkView {
     pub user_agent: String,
     pub bridge_issi: u32,
     pub register_talkers: bool,
+    pub register_all: bool,
+    pub export_stations: Vec<String>,
+    pub never_export: Vec<u32>,
+    /// That network answers the ISSI check (a brew-server).
+    pub checks: bool,
+    /// Radios registered there by the link right now.
+    pub exported: Vec<u32>,
+    pub conflicts: Vec<Conflict>,
     pub reconnect_interval_seconds: u64,
     pub tls: bool,
     pub tls_server_name: String,
@@ -830,7 +1048,12 @@ pub fn snapshot(state: &AppState) -> MultiNetworkView {
             name: n.name.clone(), slot: slots.get(&n.name).copied().unwrap_or(0), enabled: n.enabled, mcc: n.mcc, mnc: n.mnc,
             remote_host: n.remote_host.clone(), path: n.path.clone(), username: n.username.clone(),
             has_password: !n.password.is_empty(), user_agent: n.user_agent.clone(), bridge_issi: n.bridge_issi,
-            register_talkers: n.register_talkers, reconnect_interval_seconds: n.reconnect_interval_seconds, tls: n.tls,
+            register_talkers: n.register_talkers, register_all: n.register_all,
+            export_stations: n.export_stations.clone(), never_export: n.never_export.clone(),
+            checks: s.connected && s.members.as_ref().is_some_and(|e| export_lock(e).checks),
+            exported: if s.connected { s.members.as_ref().map(|e| { let mut v: Vec<u32> = export_lock(e).have.keys().copied().collect(); v.sort_unstable(); v }).unwrap_or_default() } else { Vec::new() },
+            conflicts: s.members.as_ref().map(|e| export_lock(e).conflicts.iter().cloned().collect()).unwrap_or_default(),
+            reconnect_interval_seconds: n.reconnect_interval_seconds, tls: n.tls,
             tls_server_name: n.tls_server_name.clone(),
             tls_ca_path: n.tls_ca_path.display().to_string(),
             tls_pinned_cert_path: n.tls_pinned_cert_path.display().to_string(),
@@ -849,6 +1072,43 @@ mod tests {
 
     fn group_tx(id: Uuid, src: u32, dst: u32) -> Vec<u8> {
         protocol::build_group_tx(&id, src, dst, 0)
+    }
+
+    #[test]
+    fn register_all_exports_only_stations_with_mni_or_named() {
+        let mut n = net("TP");
+        n.export_stations = vec!["bs-wien".into()];
+        let mni = vec!["handover-v1".to_string(), "mni".to_string()];
+        assert!(exports_station(&n, ClientMode::Basestation, Some("other"), &mni));
+        assert!(exports_station(&n, ClientMode::Basestation, Some("bs-wien"), &[]));
+        assert!(!exports_station(&n, ClientMode::Basestation, Some("other"), &[]));
+        assert!(!exports_station(&n, ClientMode::Basestation, None, &[]));
+        assert!(!exports_station(&n, ClientMode::Terminal, Some("bs-wien"), &mni), "the app is never exported");
+        assert!(!exports_station(&n, ClientMode::Peer, Some("bs-wien"), &mni));
+        assert!(!exports_station(&n, ClientMode::Network, Some("bs-wien"), &mni));
+    }
+
+    #[test]
+    fn export_asks_once_and_keeps_the_answer() {
+        let now = Instant::now();
+        let mut e = Export { checks: true, never: HashSet::from([7]), ..Default::default() };
+        assert_eq!(e.allow(7, now), Allow::No, "never export");
+        assert_eq!(e.allow(100, now), Allow::Ask);
+        e.asked(&[100, 200], now);
+        assert_eq!(e.allow(100, now), Allow::No, "waiting for the answer");
+        assert_eq!(e.allow(100, now + PENDING_FOR), Allow::Ask, "no answer: asked again");
+        assert_eq!(e.answered(&[200], &[100], now), vec![200]);
+        assert_eq!(e.allow(100, now), Allow::Yes);
+        assert_eq!(e.allow(200, now), Allow::No, "taken there");
+        assert_eq!(e.allow(200, now + TAKEN_FOR), Allow::Ask, "taken is asked again later");
+        // A server that cannot be asked: everything but the list.
+        let plain = Export { never: HashSet::from([7]), ..Default::default() };
+        assert_eq!((plain.allow(100, now), plain.allow(7, now)), (Allow::Yes, Allow::No));
+        // Conflicts: newest first, one a minute per ISSI.
+        assert!(e.conflict(200, "taken".into(), now));
+        assert!(!e.conflict(200, "again".into(), now));
+        assert!(e.conflict(300, "other".into(), now));
+        assert_eq!(e.conflicts.iter().map(|c| c.issi).collect::<Vec<_>>(), vec![300, 200]);
     }
 
     #[test]
@@ -880,7 +1140,7 @@ mod tests {
 
     #[test]
     fn talker_is_registered_and_affiliated_once_before_its_first_over() {
-        let talkers: SharedTalkers = Arc::default();
+        let talkers: SharedExport = Arc::default();
         let mut out = Outbound::new(2, Arc::default()).registering(talkers.clone(), 9_000_001);
         let kinds = |v: &[Vec<u8>]| v.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>();
         let reg = (protocol::CLASS_SUBSCRIBER, protocol::SUB_REGISTER);
@@ -894,7 +1154,7 @@ mod tests {
         // The bridge ISSI is registered already; other networks' calls stay.
         assert_eq!(kinds(&out.packets(group_tx(Uuid::new_v4(), 9_000_001, alias(2, 909)))), vec![gtx]);
         assert!(out.packets(group_tx(Uuid::new_v4(), 2320973, alias(3, 909))).is_empty());
-        assert_eq!(talkers.lock().unwrap().get(&2320972).map(|g| g.len()), Some(2));
+        assert_eq!(talkers.lock().unwrap().have.get(&2320972).map(|g| g.len()), Some(2));
         // Switched off: passed through as before.
         let mut plain = Outbound::new(2, Arc::default());
         assert_eq!(kinds(&plain.packets(group_tx(Uuid::new_v4(), 2320972, alias(2, 909)))), vec![gtx]);
@@ -1295,6 +1555,61 @@ mod e2e {
         reconcile(&main);
         wait_until("bridge ISSI gone over there", async || !tp.inner.read().await.subscribers.contains_key(&9_000_001)).await;
         wait_until("link gone here", async || main.inner.read().await.netlinks.is_empty()).await;
+    }
+
+    #[tokio::test]
+    async fn register_all_checks_issis_and_reports_conflicts() {
+        let (tp, tp_addr) = serve(base_config()).await;
+        // TetraPack's own radio with an ISSI this server has as well.
+        let mut far = station(tp_addr, &[2_320_002, 1234], &[909]).await;
+        wait_until("far radios", async || tp.inner.read().await.subscribers.len() == 2).await;
+        let mut cfg = base_config();
+        cfg.multi_network.networks.push(NetworkConfig {
+            name: "TP".into(), remote_host: tp_addr.to_string(), bridge_issi: 9_000_001,
+            register_all: true, never_export: vec![2_320_003], reconnect_interval_seconds: 5, ..Default::default()
+        });
+        cfg.talkgroup_pools.push(TalkgroupPoolConfig {
+            name: "Bridge".into(), enabled: true, both_ways: true, groups: vec![9],
+            remote: vec![RemotePoolGroup { network: "TP".into(), gssi: 909 }],
+        });
+        let (main, main_addr) = serve(cfg).await;
+        // 10 stations, 25 radios, none in TG 9; station 0 has Multi Network
+        // (`mni` capability), the others do not.
+        let mut stations = Vec::new();
+        let mut issi = 2_320_001;
+        for s in 0..10u32 {
+            let n = if s < 5 { 3 } else { 2 };
+            let radios: Vec<u32> = (0..n).map(|k| issi + k).collect();
+            issi += n;
+            let mut st = station(main_addr, &radios, &[2321]).await;
+            if s == 0 {
+                st.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":232,"mnc":5,"cells":[],"capabilities":["mni"]}"#).into())).await.unwrap();
+            }
+            stations.push(st);
+        }
+        wait_until("all radios registered", async || main.inner.read().await.subscribers.len() == 25).await;
+        wait_until("mni station known", async || main.inner.read().await.carriers.info(main.inner.read().await.subscribers[&2_320_001].client_id).is_some()).await;
+        run(main.clone()).await;
+
+        // Station 0's free radio goes over (registered, no group); the
+        // taken one stays (asked: taken), the listed one too; no radio of
+        // another station goes.
+        wait_until("free radio exported", async || tp.inner.read().await.subscribers.get(&2_320_001).is_some_and(|s| s.groups.is_empty())).await;
+        wait_until("conflict noted", async || snapshot(&main).networks[0].conflicts.iter().any(|c| c.issi == 2_320_002)).await;
+        let view = snapshot(&main);
+        assert!(view.networks[0].checks, "the far brew-server answers the ISSI check");
+        assert_eq!(view.networks[0].exported, vec![2_320_001]);
+        {
+            let tpi = tp.inner.read().await;
+            assert_eq!(tpi.subscribers[&2_320_002].client_id, tpi.subscribers[&1234].client_id, "TetraPack's own radio keeps its ISSI");
+            assert!(!tpi.subscribers.contains_key(&2_320_003), "never exported");
+            assert!(!tpi.subscribers.contains_key(&2_320_004), "a station without mni is not exported");
+        }
+        // A radio over there talks with an ISSI this server has registered
+        // there: noted as a conflict (all a server that cannot be asked
+        // shows).
+        far.send(Message::Binary(protocol::build_group_tx(&Uuid::new_v4(), 2_320_001, 909, 0).into())).await.unwrap();
+        wait_until("talker conflict noted", async || snapshot(&main).networks[0].conflicts.iter().any(|c| c.issi == 2_320_001)).await;
     }
 
     #[tokio::test]
