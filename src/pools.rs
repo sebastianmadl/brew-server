@@ -160,13 +160,18 @@ fn leg_targets(state: &AppState, inner: &Inner, gssi: u32) -> HashSet<ClientId> 
         t.extend(crate::netlink::link_for(inner, gssi));
         return t;
     }
+    // Never broadcast to a station of another network (see
+    // `visitors::other_network_station`); it gets the leg where it routes the group.
+    let broadcast = || inner.clients.keys().copied().filter(|c| !crate::visitors::other_network_station(state, inner, *c)).collect::<HashSet<_>>();
     let mut targets = if state.config.route_without_affiliations {
-        inner.clients.keys().copied().collect::<HashSet<_>>()
+        let mut t = broadcast();
+        t.extend(inner.group_clients.get(&gssi).into_iter().flatten().copied());
+        t
     } else {
         inner.group_clients.get(&gssi).cloned().unwrap_or_default()
     };
     if targets.is_empty() && !state.config.route_without_affiliations && state.config.fallback_broadcast_when_no_affiliations {
-        targets = inner.clients.keys().copied().collect();
+        targets = broadcast();
     }
     targets.retain(|c| inner.clients.get(c).is_some_and(|c| !matches!(c.mode, ClientMode::Peer | ClientMode::Network)));
     targets

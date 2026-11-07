@@ -308,7 +308,9 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         if visitor_call { t.extend(crate::netlink::link_for(&inner, gt.destination)); }
         t
     } else if state.config.route_without_affiliations {
-        inner.clients.keys().copied().collect::<HashSet<_>>()
+        let mut t = inner.clients.keys().copied().filter(|c| !crate::visitors::other_network_station(state, &inner, *c)).collect::<HashSet<_>>();
+        t.extend(inner.group_clients.get(&gt.destination).into_iter().flatten().copied());
+        t
     } else {
         inner.group_clients.get(&gt.destination).cloned().unwrap_or_default()
     };
@@ -324,7 +326,8 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         && !state.config.route_without_affiliations
         && state.config.fallback_broadcast_when_no_affiliations
     {
-        targets = inner.clients.keys().copied().collect::<HashSet<_>>();
+        // Not to stations of another network (see `other_network_station`).
+        targets = inner.clients.keys().copied().filter(|c| !crate::visitors::other_network_station(state, &inner, *c)).collect::<HashSet<_>>();
         warn!(
             %source,
             gssi = gt.destination,

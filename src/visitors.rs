@@ -73,6 +73,18 @@ fn has_capability(inner: &Inner, id: ClientId) -> bool {
         && inner.carriers.info(id).is_some_and(|i| i.capabilities.iter().any(|c| c == CAPABILITY))
 }
 
+/// A station of another network: it speaks the `mni` extension and every
+/// cell it announced broadcasts an MNI other than this server's own (a cell
+/// serving radios of another network through this server). Such a station
+/// only takes this server's group calls where a radio of this network that
+/// migrated there is in the group (an affiliation), never a broadcast.
+/// Without the extension, or without this server's MNI set, nothing changes.
+pub fn other_network_station(state: &AppState, inner: &Inner, id: ClientId) -> bool {
+    let cfg = state.networks.read().map(|c| (c.mcc, c.mnc)).unwrap_or_default();
+    if cfg == (0, 0) || !has_capability(inner, id) { return false; }
+    inner.carriers.info(id).is_some_and(|i| !i.cells.is_empty() && i.cells.iter().all(|c| (c.key.mcc, c.key.mnc) != cfg))
+}
+
 /// Slot of the switched-on network with this MNI (`None`: this server's own
 /// network, an unknown one, or Multi Network off).
 fn slot_of(state: &AppState, mni: Mni) -> Option<u8> {

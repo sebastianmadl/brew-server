@@ -1806,6 +1806,42 @@ mod e2e {
     }
 
     #[tokio::test]
+    async fn own_group_calls_are_not_broadcast_to_a_station_of_another_network() {
+        let mut cfg = base_config();
+        cfg.multi_network.mcc = 901;
+        cfg.multi_network.mnc = 9999;
+        let (main, main_addr) = serve(cfg).await;
+        run(main.clone()).await;
+        let mut classic = station(main_addr, &[2_320_010], &[]).await;
+        let mut own = station(main_addr, &[2_320_020], &[]).await;
+        own.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":9999,"cells":[{"carrier":1528,"carrier_ext":268,"location_area":2}],"capabilities":["mni"]}"#).into())).await.unwrap();
+        let mut via = station(main_addr, &[], &[]).await;
+        via.send(Message::Binary(protocol::build_service(protocol::SERVICE_BTS_INFO, r#"{"mcc":901,"mnc":1638,"cells":[{"carrier":1530,"carrier_ext":268,"location_area":1}],"capabilities":["mni"]}"#).into())).await.unwrap();
+        let mut app = station(main_addr, &[2_320_001], &[]).await;
+        wait_until("stations announced", async || main.inner.read().await.carriers.announcements().count() == 2).await;
+        wait_until("radios registered", async || main.inner.read().await.subscribers.len() == 3).await;
+
+        // Nobody routes TG 9: the fallback goes to every station of this
+        // network, not to the one whose cell is TetraPack's.
+        let id = Uuid::new_v4();
+        app.send(Message::Binary(protocol::build_group_tx(&id, 2_320_001, 9, 0).into())).await.unwrap();
+        assert_eq!(next_group_tx(&mut classic, 2000).await.map(|g| g.0), Some(id));
+        assert_eq!(next_group_tx(&mut own, 2000).await.map(|g| g.0), Some(id));
+        assert_eq!(next_group_tx(&mut via, 500).await, None);
+        app.send(Message::Binary(protocol::build_call_cause(protocol::CALL_GROUP_IDLE, &id, 0).into())).await.unwrap();
+
+        // A radio of this network migrated onto that cell and in TG 9: the
+        // station gets the group through the affiliation.
+        via.send(svc(protocol::SERVICE_MS_NETWORK, serde_json::json!({"issi": 2_320_972, "mcc": 901, "mnc": 9999}))).await.unwrap();
+        via.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_REGISTER, 2_320_972, &[]).into())).await.unwrap();
+        via.send(Message::Binary(protocol::build_subscriber_message(protocol::SUB_AFFILIATE, 2_320_972, &[9]).into())).await.unwrap();
+        wait_until("affiliated", async || main.inner.read().await.group_clients.get(&9).is_some_and(|c| !c.is_empty())).await;
+        let id = Uuid::new_v4();
+        app.send(Message::Binary(protocol::build_group_tx(&id, 2_320_001, 9, 0).into())).await.unwrap();
+        assert_eq!(next_group_tx(&mut via, 2000).await.map(|g| g.0), Some(id));
+    }
+
+    #[tokio::test]
     async fn visitors_register_at_home_and_take_part_in_its_group_calls() {
         let (tp, tp_addr) = serve(base_config()).await;
         let (other, other_addr) = serve(base_config()).await;

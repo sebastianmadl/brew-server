@@ -90,6 +90,15 @@ across networks.
 - A radio a station names first with another network and then with this
   server's network (it registered there by ITSI attach, then migrated here)
   leaves the other network: the server deregisters it there.
+- A station whose announced cells (`SERVICE_BTS_INFO`) all broadcast another
+  network's MNI and that has the `mni` capability (a cell of TetraPack served
+  through this server) is a station of that network: this server's own group
+  calls are not broadcast to it (`route_without_affiliations` or the
+  no-affiliation fallback). It gets a group of this network only where a radio
+  of this network that migrated onto it is affiliated. So a group call from a
+  station or terminal without the extension stays in this network. Stations
+  without `mni` or without cells announced, and servers without their own MNI
+  set, are routed as before.
 - The dashboard lists the visitors per network ("Visitors" on the Multi
   Network page).
 - Not yet: groups of a third network (`SERVICE_GROUP_NETWORK` is logged
