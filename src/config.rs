@@ -247,7 +247,8 @@ pub struct NetworkConfig {
     /// group or not (needs `register_talkers`). The app and radios from
     /// peers or other networks are never exported.
     pub register_all: bool,
-    /// Station logins whose radios "register all" exports as well.
+    /// Station logins whose radios "register all" exports as well; an app
+    /// (Terminal) named by its login or its ISSI is exported too.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub export_stations: Vec<String>,
     /// ISSIs never registered there (an ISSI that network has itself).

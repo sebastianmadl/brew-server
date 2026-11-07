@@ -42,11 +42,12 @@ across networks.
 - **Register all** (`register_all`, off by default, needs `register_talkers`):
   also every radio of a station with Multi Network (a Basestation announcing
   the `mni` capability, see step 4) or named in `export_stations` (station
-  logins) is registered there, in a bridged group or not. The app (Terminal
-  mode) and radios from peers or other networks are never exported. So the
-  app is registered there only while it is in a bridged group or making a
-  call over there itself; a radio of that network reaches it by individual
-  call or SDS only then (field check 2026-11-07).
+  logins) is registered there, in a bridged group or not. An app (Terminal
+  mode) is exported only when `export_stations` names its login or its ISSI;
+  radios from peers or other networks never. An app not named is registered
+  there only while it is in a bridged group or making a call over there
+  itself, so a radio of that network reaches it by individual call or SDS
+  only then (field check 2026-11-07).
 - **ISSI collisions**: a radio is registered there only if that network may
   have its ISSI. A brew-server there (it offers `issi-check`) is asked first
   (`SERVICE_ISSI_CHECK`, docs/Brew-Extensions.md 12a); a taken ISSI is not
@@ -171,7 +172,7 @@ user_agent = "TMO-Austria Infra 1.0"
 bridge_issi = 9000001     # ISSI of the bridge in that network, 0 = none
 register_talkers = true   # register radios in bridged groups there
 register_all = false      # also all radios of mni stations / export_stations
-export_stations = ["bs-wien"]   # station logins for register_all
+export_stations = ["bs-wien", "2320997"]   # station logins for register_all; apps by login or ISSI
 never_export = [2320002]  # ISSIs that network has itself
 forward_unknown = false   # individual calls / SDS nobody here takes go there
 reconnect_interval_seconds = 15

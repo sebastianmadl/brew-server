@@ -369,12 +369,17 @@ pub fn mirror<'a>(
     out
 }
 
-/// Does "register all" of network `n` export the radios of this station?
-/// A Basestation with the `mni` capability or named in `export_stations`;
-/// never a Terminal (the app), a peer or another network's link.
-pub fn exports_station(n: &NetworkConfig, mode: ClientMode, login: Option<&str>, capabilities: &[String]) -> bool {
-    mode == ClientMode::Basestation
-        && (capabilities.iter().any(|c| c == CAPABILITY_MNI) || login.is_some_and(|l| n.export_stations.iter().any(|s| s == l)))
+/// Does "register all" of network `n` export radio `issi` of this
+/// connection? A Basestation with the `mni` capability or named in
+/// `export_stations`; a Terminal (the app) only when its login or its ISSI
+/// is named there; never a peer or another network's link.
+pub fn exports_station(n: &NetworkConfig, mode: ClientMode, login: Option<&str>, capabilities: &[String], issi: u32) -> bool {
+    let named = |x: &str| n.export_stations.iter().any(|s| s.trim() == x);
+    match mode {
+        ClientMode::Basestation => capabilities.iter().any(|c| c == CAPABILITY_MNI) || login.is_some_and(named),
+        ClientMode::Terminal => login.is_some_and(named) || named(&issi.to_string()),
+        _ => false,
+    }
 }
 
 /// Upstream messages that bring the radios registered there from `have` to
@@ -427,11 +432,12 @@ pub async fn sync_members(state: &AppState) {
             .filter(|(_, s)| s.route.path.is_empty() && local(&s.client_id))
             .map(|(i, s)| (*i, &s.groups)).collect();
         // Radios of the stations "register all" exports: a station with the
-        // `mni` capability or one named in `export_stations`; never the
-        // app (Terminal mode) or radios from peers or other networks.
-        let exporting = |n: &NetworkConfig, c: &crate::state::ClientId| inner.clients.get(c).is_some_and(|cl| {
+        // `mni` capability or one named in `export_stations`; the app
+        // (Terminal mode) only when named there; never radios from peers or
+        // other networks.
+        let exporting = |n: &NetworkConfig, c: &crate::state::ClientId, issi: u32| inner.clients.get(c).is_some_and(|cl| {
             let caps = inner.carriers.info(*c).map(|i| i.capabilities.as_slice()).unwrap_or_default();
-            exports_station(n, cl.mode, cl.username.as_deref(), caps)
+            exports_station(n, cl.mode, cl.username.as_deref(), caps, issi)
         });
         let wants: Vec<(String, HashMap<u32, BTreeSet<u32>>)> = cfg.networks.iter()
             .filter(|n| n.enabled && n.register_talkers)
@@ -451,7 +457,7 @@ pub async fn sync_members(state: &AppState) {
                 if n.register_all {
                     for (issi, sub) in inner.subscribers.iter() {
                         if *issi == 0 || *issi > GSSI_MASK || *issi == n.bridge_issi || !sub.route.path.is_empty() { continue; }
-                        if exporting(n, &sub.client_id) { want.entry(*issi).or_default(); }
+                        if exporting(n, &sub.client_id, *issi) { want.entry(*issi).or_default(); }
                     }
                 }
                 (n.name.clone(), want)
@@ -1244,13 +1250,19 @@ mod tests {
         let mut n = net("TP");
         n.export_stations = vec!["bs-wien".into()];
         let mni = vec!["handover-v1".to_string(), "mni".to_string()];
-        assert!(exports_station(&n, ClientMode::Basestation, Some("other"), &mni));
-        assert!(exports_station(&n, ClientMode::Basestation, Some("bs-wien"), &[]));
-        assert!(!exports_station(&n, ClientMode::Basestation, Some("other"), &[]));
-        assert!(!exports_station(&n, ClientMode::Basestation, None, &[]));
-        assert!(!exports_station(&n, ClientMode::Terminal, Some("bs-wien"), &mni), "the app is never exported");
-        assert!(!exports_station(&n, ClientMode::Peer, Some("bs-wien"), &mni));
-        assert!(!exports_station(&n, ClientMode::Network, Some("bs-wien"), &mni));
+        assert!(exports_station(&n, ClientMode::Basestation, Some("other"), &mni, 1));
+        assert!(exports_station(&n, ClientMode::Basestation, Some("bs-wien"), &[], 1));
+        assert!(!exports_station(&n, ClientMode::Basestation, Some("other"), &[], 1));
+        assert!(!exports_station(&n, ClientMode::Basestation, None, &[], 1));
+        assert!(!exports_station(&n, ClientMode::Terminal, Some("app"), &mni, 2_320_997), "an app not named is not exported");
+        assert!(!exports_station(&n, ClientMode::Peer, Some("bs-wien"), &mni, 1));
+        assert!(!exports_station(&n, ClientMode::Network, Some("bs-wien"), &mni, 1));
+        // An app named by its login or its ISSI (field request 2026-11-07).
+        n.export_stations = vec!["bs-wien".into(), "app-login".into(), "2320997".into()];
+        assert!(exports_station(&n, ClientMode::Terminal, Some("app-login"), &[], 2_320_001));
+        assert!(exports_station(&n, ClientMode::Terminal, None, &[], 2_320_997));
+        assert!(!exports_station(&n, ClientMode::Terminal, None, &[], 2_320_998));
+        assert!(!exports_station(&n, ClientMode::Basestation, None, &[], 2_320_997), "an ISSI names only an app");
     }
 
     #[test]
