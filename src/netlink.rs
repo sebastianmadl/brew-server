@@ -1012,6 +1012,34 @@ pub fn link_for(inner: &crate::state::Inner, alias: u32) -> Option<ClientId> {
     inner.netlinks.get(&slot).copied()
 }
 
+/// Name of the network whose link is connection `id` (`None`: not a link).
+pub fn link_name(state: &AppState, inner: &crate::state::Inner, id: ClientId) -> Option<String> {
+    if inner.clients.get(&id)?.mode != ClientMode::Network { return None; }
+    let slot = inner.netlinks.iter().find(|(_, c)| **c == id).map(|(s, _)| *s)?;
+    state.netlinks.lock().slots.iter().find(|(_, s)| **s == slot).map(|(n, _)| n.clone())
+}
+
+/// The networks traffic from `source` to `targets` crosses: the one it came
+/// from (its source is a link) and the ones it goes to, for the dashboard.
+pub fn crossing(state: &AppState, inner: &crate::state::Inner, source: ClientId, targets: impl IntoIterator<Item = ClientId>) -> (Option<String>, Vec<String>) {
+    let mut to: Vec<String> = targets.into_iter().filter_map(|t| link_name(state, inner, t)).collect();
+    to.sort();
+    to.dedup();
+    (link_name(state, inner, source), to)
+}
+
+/// Shows on the dashboard which networks call `id` crosses (see `crossing`);
+/// returns the networks it goes to.
+pub async fn note_call(state: &AppState, id: Uuid) -> Vec<String> {
+    let (from, to) = {
+        let inner = state.inner.read().await;
+        let Some(call) = inner.calls.get(&id) else { return Vec::new() };
+        crossing(state, &inner, call.owner, call.peers.iter().copied())
+    };
+    state.monitor.note_networks(id, from, to.clone()).await;
+    to
+}
+
 /// Checks a network list from the dashboard; the error says what is wrong.
 pub fn validate(cfg: &MultiNetworkConfig, pools: &[TalkgroupPoolConfig]) -> Result<(), String> {
     if cfg.name.chars().count() > MAX_NAME { return Err(format!("the network name is longer than {MAX_NAME} characters")); }
@@ -2043,6 +2071,64 @@ mod e2e {
         assert!(state.inner.read().await.calls.is_empty(), "a station may not start a call on another network's group");
         crate::router::handle_packet(state.clone(), link, protocol::build_group_tx(&Uuid::new_v4(), 7, target, 0)).await;
         assert!(state.inner.read().await.calls.values().any(|c| c.destination == target), "the link may");
+    }
+
+    /// Test state with network "TP" linked (forwarding unknown targets), pool
+    /// TG 9 <-> TP:909, a station and the link. Returns (state, station, link, slot).
+    async fn linked_tp() -> (Arc<AppState>, ClientId, ClientId, u8) {
+        let state = AppState::for_test();
+        if let Ok(mut n) = state.networks.write() {
+            n.enabled = true;
+            n.networks.push(NetworkConfig { name: "TP".into(), enabled: true, forward_unknown: true, ..Default::default() });
+        }
+        let slot = slots(&state)["TP"];
+        if let Ok(mut p) = state.pools.write() {
+            p.push(TalkgroupPoolConfig { name: "B".into(), enabled: true, both_ways: true, groups: vec![9],
+                remote: vec![RemotePoolGroup { network: "TP".into(), gssi: 909 }] });
+        }
+        let (bs, link) = (Uuid::new_v4(), Uuid::new_v4());
+        {
+            let mut inner = state.inner.write().await;
+            for (id, mode) in [(bs, ClientMode::Basestation), (link, ClientMode::Network)] {
+                let (tx, rx) = mpsc::unbounded_channel();
+                std::mem::forget(rx);
+                inner.clients.insert(id, Client { tx, mode, version: ConnVersion::V1, version_announced: false, remote_addr: None, connected_at_ms: 0, username: None });
+            }
+            inner.netlinks.insert(slot, link);
+        }
+        (state, bs, link, slot)
+    }
+
+    /// The dashboard shows which network a call or SDS went to or came from.
+    #[tokio::test]
+    async fn dashboard_shows_the_network_a_call_or_sds_crosses() {
+        let (state, bs, link, slot) = linked_tp().await;
+        let tp = vec!["TP".to_string()];
+        // Group call on TG 9: its pool leg goes to TP:909.
+        let call = Uuid::new_v4();
+        crate::router::handle_packet(state.clone(), bs, protocol::build_group_tx(&call, 2_320_001, 9, 0)).await;
+        let snap = state.monitor.snapshot(0, 0, 0).await;
+        let row = snap.active_calls.iter().find(|c| c.uuid == call).expect("call shown");
+        assert_eq!(row.nets.to, tp, "the call shows the network its leg goes to");
+        assert_eq!(row.nets.from, None);
+        let leg = snap.active_calls.iter().find(|c| c.destination == alias(slot, 909)).expect("leg shown");
+        assert_eq!(leg.nets.to, tp);
+        // A call that came in over the link (TP:909 is not busy there).
+        let (state, bs, link, slot) = linked_tp().await;
+        let inbound = Uuid::new_v4();
+        crate::router::handle_packet(state.clone(), link, protocol::build_group_tx(&inbound, 7, alias(slot, 909), 0)).await;
+        let snap = state.monitor.snapshot(0, 0, 0).await;
+        let row = snap.active_calls.iter().find(|c| c.uuid == inbound).expect("inbound call shown");
+        assert_eq!(row.nets.from.as_deref(), Some("TP"));
+        // SDS to a target nobody here takes: forwarded to TP.
+        let sds = Uuid::new_v4();
+        crate::router::handle_packet(state.clone(), bs, protocol::build_short_transfer(&sds, 2_320_001, 2_999_999)).await;
+        let snap = state.monitor.snapshot(0, 0, 0).await;
+        let row = snap.recent_sds.iter().find(|s| s.uuid == sds).expect("sds shown");
+        assert_eq!(row.nets.to, tp);
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["to_networks"], serde_json::json!(["TP"]));
+        assert_eq!(json["source"], serde_json::json!(2_320_001));
     }
 
     fn voice(id: &Uuid) -> Vec<u8> {

@@ -52,6 +52,13 @@ across networks.
   into another network by itself.
 - A **main switch** (`enabled`, on the Multi Network page next to "This
   server") closes all links at once; settings and pools stay.
+- Calls and SDS that cross a link carry their network on the dashboard:
+  "→ name" for the network they went to, "← name" for the one they came
+  from (live calls, Recent calls, Recent SDS; a call shows the networks of
+  its pool legs too). The JSON of `/api/status` has `to_networks` and
+  `from_network` on those entries. Kept in memory only, so the history file
+  stays readable by older versions; after a restart older entries show no
+  network.
 - Networks are edited live (dashboard page **Multi Network**, admins only).
   Only a network whose settings changed reconnects; no restart. An empty
   password on save keeps the saved one.

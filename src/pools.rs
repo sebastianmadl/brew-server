@@ -319,6 +319,9 @@ pub async fn on_group_tx(state: &Arc<AppState>, source: ClientId, id: Uuid, sour
     }
     for (leg, t) in started {
         state.monitor.call_started(leg, "group", source_issi, t, priority).await;
+        // The call shows the networks its legs go to.
+        let to = crate::netlink::note_call(state, leg).await;
+        state.monitor.note_networks(id, None, to).await;
     }
 }
 
@@ -419,14 +422,16 @@ pub async fn on_call_end(state: &Arc<AppState>, id: Uuid, gssi: u32) -> Vec<Uuid
             if busy(&inner, gssi, origin) { continue; }
             if let Some(leg) = start_leg(state, &mut inner, origin, gssi, &mut out) {
                 let r = &inner.pools.runs[&origin];
-                started.push((leg, r.source_issi, r.priority));
+                started.push((leg, r.source_issi, r.priority, origin));
                 info!(origin=%origin, leg=%leg, gssi, "talkgroup pool: waiting group joined the running call");
             }
         }
         for (tx, msg) in out { let _ = tx.send(msg); }
     }
-    for (leg, src, prio) in started {
+    for (leg, src, prio, origin) in started {
         state.monitor.call_started(leg, "group", src, gssi, prio).await;
+        let to = crate::netlink::note_call(state, leg).await;
+        state.monitor.note_networks(origin, None, to).await;
     }
     to_end
 }

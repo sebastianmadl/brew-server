@@ -517,6 +517,7 @@ pub async fn handle_handoff(state: &Arc<AppState>, source: ClientId, json: &str)
     drop(inner);
     if let Some((id, _, priority, source_issi, destination)) = call {
         state.monitor.call_started(id, "private", source_issi, destination, priority).await;
+        crate::netlink::note_call(state, id).await;
     }
 }
 

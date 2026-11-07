@@ -400,6 +400,7 @@ async fn handle_group_tx(state: &Arc<AppState>, source: ClientId, id: uuid::Uuid
         }
     }
     state.monitor.call_started(id, "group", gt.source, gt.destination, if emergency { gt.priority.max(EMERGENCY_PRIORITY) } else { gt.priority }).await;
+    crate::netlink::note_call(state, id).await;
     info!(%source, uuid=%id, src_issi=gt.source, gssi=gt.destination, priority=gt.priority,
         target_count=targets.len(), "routed GROUP_TX");
     // Talkgroup pools: the call is played on the pool's other groups too.
@@ -502,12 +503,14 @@ async fn handle_sds_header(state: &Arc<AppState>, source: ClientId, id: uuid::Uu
     }
     let inner = state.inner.read().await;
     let txs = targets.iter().filter_map(|cid| inner.clients.get(cid).map(|c| (*cid, c.tx.clone()))).collect::<Vec<_>>();
+    let (from_net, to_nets) = crate::netlink::crossing(state, &inner, source, targets.iter().copied());
     drop(inner);
     for (cid, tx) in txs {
         if let Some((_, n)) = note.as_ref().filter(|(to, _)| *to == cid) { let _ = tx.send(n.clone()); }
         let _ = tx.send(raw.clone());
     }
     state.monitor.sds(id, source_issi, destination).await;
+    state.monitor.note_networks(id, from_net, to_nets).await;
     info!(%source, uuid=%id, channel="brew", source_issi, destination, lip=sds_is_lip(&raw), target_count=targets.len(), "routed SDS header");
 }
 
@@ -534,6 +537,7 @@ async fn handle_sds_transfer(state: &Arc<AppState>, source: ClientId, id: uuid::
                 let (source_issi, targets) = (route.source_issi, route.targets.clone());
                 let held = route.held_header.take().map(|h| (h, route.destination));
                 let txs = targets.iter().filter_map(|cid| inner.clients.get(cid).map(|c| c.tx.clone())).collect::<Vec<_>>();
+                let held = held.map(|(h, d)| (h, d, crate::netlink::crossing(state, &inner, source, targets.iter().copied())));
                 (source_issi, txs, store_for, held)
             }
             // Over a second peer link this is the payload of a duplicate SDS
@@ -559,9 +563,10 @@ async fn handle_sds_transfer(state: &Arc<AppState>, source: ClientId, id: uuid::
         }
     };
     // The header of a held (LIP-only) SDS goes out just before its payload.
-    if let Some((header, destination)) = held {
+    if let Some((header, destination, (from_net, to_nets))) = held {
         for tx in &txs { let _ = tx.send(header.clone()); }
         state.monitor.sds(id, source_issi, destination).await;
+        state.monitor.note_networks(id, from_net, to_nets).await;
     }
     for tx in &txs { let _ = tx.send(raw.clone()); }
 
@@ -773,6 +778,7 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
             drop(inner);
             if let Some((tx, version)) = tx { let _ = tx.send(protocol::adapt_to_version(&raw, version).into_owned()); }
             state.monitor.call_started(id, "private", source_issi, destination, priority).await;
+            crate::netlink::note_call(state, id).await;
             info!(%source, uuid=%id, source_issi, destination, "routed private SETUP_REQUEST to another network (unknown here)");
         } else {
             warn!(%source, uuid=%id, destination, dialled = %dialled, "private call destination not registered (no SIP route); rejected");
@@ -815,6 +821,7 @@ async fn handle_private_setup(state: &Arc<AppState>, source: ClientId, id: uuid:
     }
     let kind = if ambience { "ambience" } else { "private" };
     state.monitor.call_started(id, kind, source_issi, destination, priority).await;
+    crate::netlink::note_call(state, id).await;
     if ambience {
         trigger_ambience_listen(state, bts_username, destination).await;
     }

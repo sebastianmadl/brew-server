@@ -16,6 +16,11 @@ Unreleased (Multi Network, part 1) adds:
   **Multi Network** (admins): main switch, this server's network and MNI, the other
   networks with link state, edited live without a restart. See
   [docs/Multi-Network.md](docs/Multi-Network.md).
+- **Destination network on the dashboard.** Calls and SDS that leave this
+  server over a Multi Network link show the network they went to ("→ TP"),
+  and those that came in over one the network they came from ("← TP"): live
+  calls, Recent calls and Recent SDS, with a Network column when there is
+  one to show. In memory only (the history file format is unchanged).
 - **Open dashboard fixed.** With `[dashboard.ui] open = true` a visitor who is not
   signed in got the login window every 5 s again (the new page asked the admin-only
   network list on every refresh). It is now asked only for admins.

@@ -613,6 +613,13 @@ function render(force){
   if(force||html!==lastSig){$('content').innerHTML=html;lastSig=html;}
 }
 const R={};
+// Other networks a call or SDS crossed (Multi Network): where it went, where it came from.
+function netChips(x){
+  const to=(x.to_networks||[]).map(n=>`<span class="chip b" title="Sent to network ${esc(n)}">${ic('globe')} → ${esc(n)}</span>`);
+  const from=x.from_network?[`<span class="chip i" title="Came from network ${esc(x.from_network)}">${ic('globe')} ← ${esc(x.from_network)}</span>`]:[];
+  return from.concat(to).join(' ');
+}
+const hasNet=list=>list.some(x=>x.from_network||(x.to_networks||[]).length);
 const callRow=(c,now)=>{
   const pool=poolOf(c);
   const grp=c.kind==='group';
@@ -620,7 +627,7 @@ const callRow=(c,now)=>{
   const legs=pool?pool.live.legs.map(g=>tgChip(g)).join(' '):'';
   const wait=pool&&pool.live.waiting.length?` <span class="mut">waiting: ${pool.live.waiting.join(', ')}</span>`:'';
   return `<div class="row"><div class="ric${em?' e':grp?'':' p'}">${ic(grp?'radios':'call')}</div><div class="rm">
-   <div class="rt">${grp?'TG '+tgTxt(c.destination):issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}</div>
+   <div class="rt">${grp?'TG '+tgTxt(c.destination):issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}${netChips(c)?' '+netChips(c):''}</div>
    <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
    <div class="rr"><b>${dur(now-c.started_at_ms)}</b><br>${c.voice_frames} frames · prio ${c.priority}</div></div>`;
 };
@@ -665,7 +672,7 @@ R.overview=()=>{
    <div class="card"><div class="ch"><h2>Recent cell changes</h2><span class="sp"></span><a data-go="roaming" href="#roaming">Roaming log ›</a></div>
     ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${issiTxt(r.issi)}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
    <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="sp"></span><a data-go="sds" href="#sds">All SDS ›</a></div>
-    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiTxt(s.source)}</b><span class="arrow">→</span><b class="m">${issiTxt(s.destination)}</b><span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
+    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiTxt(s.source)}</b><span class="arrow">→</span><b class="m">${issiTxt(s.destination)}</b>${netChips(s)?' '+netChips(s):''}<span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
   </div>`;
 };
 const RESEL={undeclared:['i','undeclared'],unannounced:['w','unannounced'],announced_type_1:['a','announced · type 1'],announced_type_2:['a','announced · type 2'],announced_type_3:['a','announced · type 3']};
@@ -683,19 +690,21 @@ R.calls=()=>{
   const st=D.status,now=Date.now();if(!st)return '<div class="empty">Loading…</div>';
   const legs=legIds();const q=UI.filter.calls||'';const k=UI.filter.callk||'all';
   const act=st.active_calls.filter(x=>!legs.has(x.uuid));
-  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination),c.kind==='group'&&c.destination>16777215?tgTxt(c.destination):''));
+  const rec=st.recent_calls.filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,c.from_network,(c.to_networks||[]).join(' '),nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination),c.kind==='group'&&c.destination>16777215?tgTxt(c.destination):''));
+  const nc=hasNet(rec);
   return `<div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${act.length}</span></div>${act.length?act.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
   <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span></div>
-  <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th><th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
-   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td><td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No calls yet</td></tr>'}
+  <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
+   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td>${nc?`<td>${netChips(c)}</td>`:''}<td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="${nc?8:7}" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 R.sds=()=>{
   const st=D.status;if(!st)return '<div class="empty">Loading…</div>';
-  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination)));
+  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));
+  const nc=hasNet(list);
   return `<div class="bar">${searchBox('sds','ISSI…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span></div>
-  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Reports</th></tr></thead><tbody>
-  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td><td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
+  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
+  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="${nc?5:4}" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
 };
 R.radios=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
