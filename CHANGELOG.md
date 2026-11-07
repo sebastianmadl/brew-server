@@ -4,7 +4,7 @@ All notable changes to brew-server, newest first.
 
 Version 1.20.0 adds:
 
-- **Multi Network: bridges to other Brew networks.** Links, bridge pools, and individual (duplex) calls and SDS across networks are tested on air; visitors (radios of other networks on a station, `mni`) are provisional, not yet tested on air. `[multi_network]` lists other networks
+- **Multi Network: bridges to other Brew networks.** Links, bridge pools, individual (duplex) calls and SDS across networks, visitors (radios of other networks on a station, `mni`) and radios of this network migrated onto a cell of a linked network are tested on air (FlowStation, Motorola MTP6650, TetraPack, 2026-11-07). `[multi_network]` lists other networks
   this server connects to itself, each over one outbound connection in plain
   Basestation mode (nothing new needed on the far server). The connection name
   (`user_agent`) is free text, e.g. `TMO-Austria Infra 1.0`. Credentials stay

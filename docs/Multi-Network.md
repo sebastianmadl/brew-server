@@ -5,10 +5,12 @@ neighbouring operator) and bridge talkgroups across them, and it takes radios of
 stations (visitors, extension `mni`), and carries individual calls and SDS
 across networks.
 
-> **Status:** links to other networks, bridge pools, and individual (duplex)
-> calls and SDS across networks are tested on air (e.g. TetraPack). Visitors
-> (radios of other networks on a station, `mni`) are provisional: covered by
-> unit and end-to-end tests, not yet tested on air.
+> **Status:** tested on air with TetraPack (FlowStation, Motorola MTP6650,
+> 2026-11-07): links to other networks, bridge pools, individual (duplex)
+> calls and SDS across networks, visitors (radios of other networks on a
+> station, `mni`) and a radio of this network migrated onto a cell of the
+> linked network, in that network's groups. Not yet on air: a visitor from a
+> third network (neither the station's nor this server's).
 
 ## How it works
 
