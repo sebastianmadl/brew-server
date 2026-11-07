@@ -5,9 +5,10 @@ neighbouring operator) and bridge talkgroups across them, and it takes radios of
 stations (visitors, extension `mni`), and carries individual calls and SDS
 across networks.
 
-> **Status: provisional.** Covered by unit and end-to-end tests; links to a
-> second brew-server and to TetraPack have been tried, but visitors, calls
-> and SDS across networks are not yet fully tested on air.
+> **Status:** links to other networks and bridge pools are tested on air
+> (e.g. TetraPack). Visitors (`mni`) and individual calls
+> and SDS across networks are provisional: covered by unit and end-to-end
+> tests, not yet tested on air.
 
 ## How it works
 
