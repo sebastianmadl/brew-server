@@ -601,24 +601,29 @@ function legIds(){
   return out;
 }
 function poolOf(call){return D.pools.find(p=>p.live&&p.live.gssi===call.destination&&p.live.talker===call.source);}
-// The pool a group belongs to: one of its own groups, or a group of another network (alias above
-// the 24 GSSI bits, slot << 24 | gssi).
-function poolOfGroup(g){return D.pools.find(p=>g<=16777215?p.groups.includes(g):(p.remote||[]).some(r=>{const n=netOfSlot(Math.floor(g/16777216));return n&&n.name===r.network&&g%16777216===r.gssi;}));}
+// The pool a call's group belongs to: one of its own groups, or a group of another network (alias
+// above the 24 GSSI bits, slot << 24 | gssi). The network list is only loaded for admins, so without
+// it the network name comes from the call itself, and failing that the GSSI alone decides.
+function poolOfGroup(c){const g=c.destination;return D.pools.find(p=>g<=16777215?p.groups.includes(g):(p.remote||[]).some(r=>{
+  const n=netOfSlot(Math.floor(g/16777216)),name=(n&&n.name)||(c.to_networks||[])[0]||c.from_network;
+  return g%16777216===r.gssi&&(!name||name===r.network);}));}
 // Recent calls: the legs of one pool call (same talker, groups of one pool, started within 3 s)
-// become one row naming the pool, so a bridge does not fill the log with a row per group.
+// become one row naming the pool, so a bridge does not fill the log with a row per group. A bridge
+// whose pool is unknown here (same talker, same GSSI on another network) is joined too.
 function mergePoolLegs(list){
-  const out=[],used=new Set();
+  const out=[],used=new Set(),low=g=>g%16777216;
   list.forEach((c,i)=>{
     if(used.has(i))return;
-    const p=c.kind==='group'&&poolOfGroup(c.destination);
-    if(!p){out.push(c);return;}
+    if(c.kind!=='group'){out.push(c);return;}
+    const p=poolOfGroup(c);
     const legs=[c];
     for(let j=i+1;j<list.length&&j<=i+50;j++){const o=list[j];
-      if(used.has(j)||o.kind!=='group'||o.source!==c.source||Math.abs(o.started_at_ms-c.started_at_ms)>3000||poolOfGroup(o.destination)!==p)continue;
+      if(used.has(j)||o.kind!=='group'||o.source!==c.source||Math.abs(o.started_at_ms-c.started_at_ms)>3000)continue;
+      if(p?poolOfGroup(o)!==p:(o.destination===c.destination||low(o.destination)!==low(c.destination)))continue;
       legs.push(o);used.add(j);}
     if(legs.length<2){out.push(c);return;}
     const ends=legs.map(x=>x.ended_at_ms).filter(Boolean);
-    out.push(Object.assign({},c,{pool:p.name,legs:legs.map(x=>x.destination),
+    out.push(Object.assign({},c,{pool:p?p.name:'TG '+low(c.destination),legs:legs.map(x=>x.destination),
       started_at_ms:Math.min(...legs.map(x=>x.started_at_ms)),ended_at_ms:ends.length===legs.length?Math.max(...ends):null,
       voice_frames:Math.max(...legs.map(x=>x.voice_frames)),
       from_network:legs.map(x=>x.from_network).find(Boolean)||null,
@@ -1260,8 +1265,11 @@ mod tests {
         let body = &PAGE_HTML[start..start + PAGE_HTML[start..].find("\n};\n").expect("end")];
         assert!(body.contains("mergePoolLegs(st.recent_calls)"), "recent calls merged");
         assert!(body.contains("c.pool?"), "pool name in the To column");
+        // Without the admin-only network list the alias network comes from the call.
+        let pg = &PAGE_HTML[PAGE_HTML.find("function poolOfGroup(c){").expect("poolOfGroup")..];
+        assert!(pg[..pg.find("\n}").unwrap_or(pg.len()).max(400).min(pg.len())].contains("(c.to_networks||[])[0]||c.from_network"), "works logged out");
         let f = &PAGE_HTML[PAGE_HTML.find("function mergePoolLegs(list){").expect("mergePoolLegs")..start];
-        for needle in ["o.source!==c.source", "3000", "poolOfGroup(o.destination)!==p"] {
+        for needle in ["o.source!==c.source", "3000", "poolOfGroup(o)!==p", "low(o.destination)!==low(c.destination)"] {
             assert!(f.contains(needle), "{needle}");
         }
     }

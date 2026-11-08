@@ -12,6 +12,8 @@ Version 1.20.0 adds:
   call (same talker, groups of one pool, started within 3 s) as one row with
   the pool's name and its groups, instead of one row per group. Live calls
   still show every group.
+  This also works logged out (the network list is admin only), and a bridge
+  whose pool is not known joins its legs by GSSI.
 - **One configuration editor.** The Settings page of the new dashboard no
   longer shows the classic raw TOML editor; the configuration is edited on the
   Configuration page. The classic dashboard's Settings page keeps it.
