@@ -23,6 +23,10 @@ Unreleased:
   "Station". The help ("?") explains that the global cell ID is not an ETSI
   identity, that apps and other terminals have no cells, and that a station
   without `bts-info` is counted but its cells are unknown.
+  A station with several Brew connections (one per network its cells
+  serve) is listed once under Brew connections, with all its cells, its
+  remote addresses and the radios summed; the sidebar counts stations, not
+  connections.
   Thanks to OE1LHP for the visual review and the reports of
   inconsistencies.
   The Overview adds up the radios of a station that has one connection per

@@ -576,7 +576,7 @@ async function refreshSlow(){
 }
 function chrome(){
   const c=D.conn,st=D.status;
-  const bs=c?c.brew_clients.filter(x=>x.mode==='Basestation').length:0;
+  const bs=c?new Set(c.brew_clients.filter(x=>x.mode==='Basestation').map(x=>x.station)).size:0;
   $('hw-brew').textContent=c?`${bs} station${bs===1?'':'s'}`:'…';
   $('hw-brew-dot').className='dot'+(ok?(bs?'':' w'):' d');
   const ha=D.ha;
@@ -777,6 +777,7 @@ const gcidOf=carrier=>{const c=((D.conn&&D.conn.cells)||[]).find(x=>x.online!==f
 function software(a){if(!a)return '<span class="mut">—</span>';const m=/^(.+?)\/(\S+)(.*)$/.exec(a);return m?`${esc(m[1])} <span class="m">${esc(m[2])}</span>${esc(m[3])}`:esc(a);}
 R.stations=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
+  const conns=connGroups(c.brew_clients);
   const f=UI.filter.cellf||'all';
   const cells=(c.cells||[]).filter(x=>f==='all'||(f==='on')===(x.online!==false));
   const dups=c.duplicate_carriers||[];
@@ -792,8 +793,8 @@ R.stations=()=>{
    ${open?`<tr class="exp"><td colspan="8"><div class="kv"><div><span class="l">Station address</span>${offc?'—':`<span class="m">${esc(x.remote_addr||'—')}</span>`}</div><div><span class="l">${offc?'Gone':'Connected'}</span>${offc?(x.last_seen_ms?ago(x.last_seen_ms)+' ago':'—'):ago(x.connected_at_ms)}</div>
     <div><span class="l">Extensions</span>${caps(x)}</div><div><span class="l">Access level / MS power</span>${x.rxlev_access_min_dbm!=null?x.rxlev_access_min_dbm+' dBm':'—'} · ${x.ms_txpwr_max_dbm!=null?x.ms_txpwr_max_dbm+' dBm':'—'}</div></div></td></tr>`:''}`;}).join('')||'<tr><td colspan="8" class="mut">No cells announced</td></tr>'}
   </tbody></table></div>${helpNote('cells','Cells the stations announce (FlowStation with the <code>bts-info</code> extension). '+CELL_ID_HELP+' Click a row for details. A station that went away stays listed as offline until it connects again (stations with a login only). Apps and other terminals (Terminal mode) have no cells. A station without the <code>bts-info</code> extension is counted as a station (Overview, Brew connections), but its cells are not known and not listed here.')}</div>
-  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${c.brew_clients.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Every Brew connection, by login: stations (Basestation mode), apps and other terminals (Terminal mode, no cells) and this server\'s own links to other networks (Network mode). A station whose cells serve several networks has one connection per network, each with its own cells. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Mode</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
-  ${c.brew_clients.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}</td><td>${esc(b.mode)}</td><td>${software(b.agent)}<span class="sub">Brew v${b.version}</span></td><td class="m">${esc(b.remote_addr||'—')}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${(b.cells||[]).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||`<span class="mut">${b.mode==='Terminal'?'— (terminal)':'—'}</span>`}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
+  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${conns.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Every Brew connection, by login: stations (Basestation mode), apps and other terminals (Terminal mode, no cells) and this server\'s own links to other networks (Network mode). A station that opens several connections (one per cell or per network) is listed once, with all its cells, the radios summed and every remote address. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Mode</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
+  ${conns.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${esc(b.mode)}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${b.cells.sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true})).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||`<span class="mut">${b.mode==='Terminal'?'— (terminal)':'—'}</span>`}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
   </tbody></table></div></div>
   ${c.sip&&c.sip.enabled?'':''}`;
 };
@@ -858,6 +859,14 @@ const v=id=>($(id)||{}).value||'';
 async function ctl(id,s,cmd){const body=typeof cmd==='string'?{action:cmd}:cmd;setMsg(s+'_res','mut','Sending…');
   try{const r=await postJ('/api/control/'+encodeURIComponent(id),body);setMsg(s+'_res','ok','Sent'+(r&&r.response?': '+JSON.stringify(r.response):''));}catch(e){setMsg(s+'_res','err',e.message);}}
 
+// One row per login and mode: a station with several Brew connections (one per cell or network) is listed once.
+function connGroups(list){const m=new Map();
+  for(const b of list||[]){const k=b.mode+'|'+b.station;let g=m.get(k);
+    if(!g){g={station:b.station,mode:b.mode,n:0,agents:[],versions:[],addrs:[],connected_at_ms:b.connected_at_ms,registered_issis:0,cells:[]};m.set(k,g);}
+    g.n++;g.agents.push(b.agent);g.versions.push(b.version);if(b.remote_addr)g.addrs.push(b.remote_addr);
+    g.connected_at_ms=Math.min(g.connected_at_ms,b.connected_at_ms);g.registered_issis+=b.registered_issis;
+    for(const x of b.cells||[])if(!g.cells.some(y=>y.name===x.name))g.cells.push(x);}
+  return [...m.values()];}
 /* ---------- routing ---------- */
 R.routing=()=>{
   const adm=D.who.admin;
@@ -1323,6 +1332,7 @@ mod tests {
         assert!(PAGE_HTML.contains("it is not an ETSI identity"));
         assert!(PAGE_HTML.contains("Apps and other terminals (Terminal mode) have no cells"));
         assert!(PAGE_HTML.contains("a station without it is counted as a station, its cells are unknown"));
+        assert!(PAGE_HTML.contains("conns.map(b=>") && PAGE_HTML.contains("function connGroups("), "one Brew connections row per station, not per connection");
         for page in [&*crate::dashboard::TELEMETRY_SDS_HTML, &*crate::dashboard::REGISTRATIONS_HTML] {
             assert!(!page.contains("<th>BTS</th>"), "Station, not BTS");
         }
