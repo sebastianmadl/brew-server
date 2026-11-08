@@ -11,7 +11,8 @@ Unreleased:
   there), an on/off switch and its live status. A link is a talkgroup pool
   with exactly these two groups, saved as `[[talkgroup_pools]]` with
   `linked = true`; the server refuses a link with more groups or one way.
-  Links are not listed again under Talkgroup pools.
+  Links are not listed again under Talkgroup pools. The name is optional;
+  without one the list shows only the groups.
 
 - **Stations and cells named the same on every page.** A station is named by
   its Brew login, a cell by its global cell ID `login/cell` (the Brew login

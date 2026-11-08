@@ -868,7 +868,7 @@ R.routing=()=>{
   const ownNet=(D.nets&&D.nets.name)||'This server';
   const linkRows=links.map(([p,i])=>{const r=(p.remote||[])[0]||{network:'?',gssi:0};const g=p.groups[0];
    return `<tr class="${p.enabled?'':'off'}"><td><button class="tog" role="switch" aria-checked="${p.enabled}" aria-label="Link ${esc(p.name)} on" ${adm?'':'disabled'} onclick="togglePool(${i})"></button></td>
-    <td><span class="mut" style="font-size:12px">${esc(ownNet)}</span><br>${tgChip(g)}</td><td class="arrow" style="font-size:18px">⇄</td>
+    <td>${p.name===autoLink(p)?'<span class="mut">—</span>':`<b>${esc(p.name)}</b>`}</td><td><span class="mut" style="font-size:12px">${esc(ownNet)}</span><br>${tgChip(g)}</td><td class="arrow" style="font-size:18px">⇄</td>
     <td><span class="mut" style="font-size:12px">${esc(r.network)}</span><br><span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${r.gssi}</span></td>
     <td>${live(p)}</td><td style="white-space:nowrap">${adm?`<button class="btn" onclick="editLink(${i})">Edit</button> <button class="btn danger" onclick="delPool(${i})">Delete</button>`:''}</td></tr>`;}).join('');
   const poolRows=pools.map((p,i)=>{if(p.linked)return '';const l=p.live;const mem=[...p.groups.map(g=>({t:tgChip(g,(l&&l.gssi===g)?' src':''),g})),...(p.remote||[]).map(r=>({t:`<span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${esc(r.network)}:${r.gssi}</span>`}))];
@@ -890,7 +890,7 @@ R.routing=()=>{
   const f=UI.dgf||(UI.dgf={gssi:'',name:'',assign:true,mode:0});
   return `<div class="card"><div class="ch"><h2>Linked talkgroups</h2><span class="cnt">${links.length}</span>${helpBtn('links')}<span class="sp"></span>${adm?`<button class="btn pri" onclick="editLink(-1)">${ic('plus')}New link</button>`:''}</div>
    ${helpNote('links','A linked talkgroup connects one group of this server with one group of another network (Multi Network link), both ways: a call on either group is heard on the other, the talker\'s ISSI is passed on 1:1. It works like a talkgroup pool with exactly these two groups and is saved as one (<code>[[talkgroup_pools]]</code> with <code>linked = true</code>). The other network must be set up on the Multi Network page. Changes apply at once, no restart.')}
-   ${links.length?`<div class="tw"><table><thead><tr><th style="width:56px">On</th><th>This server · TG</th><th style="width:30px"></th><th>Linked network · TG</th><th>Status</th><th></th></tr></thead><tbody>${linkRows}</tbody></table></div>`:'<div class="empty">No linked talkgroups yet. A link connects one group here with one group of another network.</div>'}
+   ${links.length?`<div class="tw"><table><thead><tr><th style="width:56px">On</th><th>Name</th><th>This server · TG</th><th style="width:30px"></th><th>Linked network · TG</th><th>Status</th><th></th></tr></thead><tbody>${linkRows}</tbody></table></div>`:'<div class="empty">No linked talkgroups yet. A link connects one group here with one group of another network.</div>'}
    ${msgDiv('link-msg')}</div>
   <div class="card"><div class="ch"><h2>Talkgroup pools</h2><span class="cnt">${pools.length-links.length}</span>${helpBtn('pools')}<span class="sp"></span>${adm?`<button class="btn pri" onclick="editPool(-1)">${ic('plus')}New pool</button>`:''}</div>
    ${poolRows.trim()||'<div class="empty">No pools yet. A pool plays the calls of one group on other groups too.</div>'}
@@ -926,6 +926,8 @@ async function savePools(list,okText,box='pool-msg'){
   try{await postJ('/api/pools/save',list);D.pools=await getJ('/api/pools');setMsg(box,'ok',okText);render(true);return true;}
   catch(e){setMsg(box,'err',e.message);render(true);return false;}
 }
+// Name a link gets when its name field is left empty.
+const autoLink=p=>{const r=(p.remote||[])[0]||{};return `TG ${p.groups[0]} ⇄ ${r.network}:${r.gssi}`.slice(0,40);};
 const plain=p=>({name:p.name,enabled:p.enabled,both_ways:p.both_ways,groups:p.groups,remote:(p.remote||[]).map(r=>({network:r.network,gssi:r.gssi})),linked:!!p.linked});
 // Editor of a linked talkgroup: one own group, one network, one group there.
 function editLink(i){
@@ -933,13 +935,14 @@ function editLink(i){
   const r=p.remote[0]||{network:'',gssi:''};const nets=(D.nets&&D.nets.networks||[]).map(n=>n.name);
   if(r.network&&!nets.includes(r.network))nets.push(r.network);
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${i>=0?'Edit linked talkgroup':'New linked talkgroup'}</h3></div><div class="sb">
+   <div><label class="l" for="le-name">Name (optional)</label><input class="f" id="le-name" maxlength="40" value="${p.name===autoLink(p)?'':esc(p.name)}" placeholder="e.g. Austria wide ⇄ TetraPack"><div class="mut" style="font-size:12px;margin-top:4px">Can stay empty.</div></div>
    <div><label class="l" for="le-own">Talkgroup of this server (GSSI)</label><input class="f" id="le-own" inputmode="numeric" value="${p.groups[0]??''}" placeholder="e.g. 9" autocomplete="off"></div>
    <div><label class="l" for="le-net">Linked network (Multi Network)</label>${nets.length?`<select class="f" id="le-net">${nets.map(n=>`<option ${n===r.network?'selected':''}>${esc(n)}</option>`).join('')}</select>`:`<input class="f" id="le-net" value="${esc(r.network)}" placeholder="network name as on the Multi Network page">`}</div>
    <div><label class="l" for="le-tg">Talkgroup in the linked network (GSSI)</label><input class="f" id="le-tg" inputmode="numeric" value="${r.gssi}" placeholder="e.g. 909" autocomplete="off"></div>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="le-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveLink(${i})">Save</button></div>`;
-  $('scrim').classList.add('on');setTimeout(()=>$('le-own').focus(),30);
+  $('scrim').classList.add('on');setTimeout(()=>$('le-name').focus(),30);
 }
 async function saveLink(i){
   const m=$('sheet-msg'),own=+$('le-own').value.trim(),tg=+$('le-tg').value.trim(),net=$('le-net').value.trim();
@@ -947,7 +950,9 @@ async function saveLink(i){
   if(!(Number.isInteger(own)&&own>=1&&own<=16777215))return bad('Enter the talkgroup of this server (1 to 16777215).');
   if(!net)return bad('Choose the linked network.');
   if(!(Number.isInteger(tg)&&tg>=1&&tg<=16777215))return bad('Enter the talkgroup in the linked network (1 to 16777215).');
-  const p={name:`TG ${own} ⇄ ${net}:${tg}`.slice(0,40),groups:[own],remote:[{network:net,gssi:tg}],both_ways:true,enabled:$('le-on').getAttribute('aria-checked')==='true',linked:true};
+  const p={name:'',groups:[own],remote:[{network:net,gssi:tg}],both_ways:true,enabled:$('le-on').getAttribute('aria-checked')==='true',linked:true};
+  p.name=($('le-name').value.trim()||autoLink(p)).slice(0,40);
+  if(D.pools.some((q,j)=>j!==i&&q.linked&&q.groups[0]===own&&q.remote[0]&&q.remote[0].network===net&&q.remote[0].gssi===tg))return bad('This link exists already.');
   const l=D.pools.map(plain);if(i>=0)l[i]=p;else l.push(p);
   m.className='msg mut';m.textContent='Saving…';
   try{await postJ('/api/pools/save',l);closeSheet();D.pools=await getJ('/api/pools');setMsg('link-msg','ok',`${p.name} saved.`);render(true);}
@@ -1329,6 +1334,7 @@ mod tests {
     fn routing_page_lists_linked_talkgroups() {
         assert!(PAGE_HTML.contains("<h2>Linked talkgroups</h2>"));
         assert!(PAGE_HTML.contains("function editLink(") && PAGE_HTML.contains("function saveLink("));
+        assert!(PAGE_HTML.contains("id=\"le-name\""), "a link has a name field");
         assert!(PAGE_HTML.contains("linked:!!p.linked"), "the flag survives every save of the pool list");
         assert!(PAGE_HTML.contains("if(p.linked)return '';"), "links are not listed again as pools");
     }
