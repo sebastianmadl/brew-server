@@ -2,6 +2,20 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased:
+
+- **Stations and cells named the same on every page.** A station is named by
+  its Brew login, a cell by its global cell ID `login/cell` (the Brew login
+  and the cell number inside the station, 0 = primary). Radios, the
+  registration log and DGNA show station and cell in separate columns;
+  Brew connections list their cells by global ID; Telemetry shows the local
+  cell number with the global ID in brackets; "BTS" columns are now
+  "Station". The help ("?") explains that the global cell ID is not an ETSI
+  identity, that apps and other terminals have no cells, and that a station
+  without `bts-info` is counted but its cells are unknown.
+  The Overview adds up the radios of a station that has one connection per
+  network.
+
 Version 1.20.1 adds:
 
 - **Pool calls in one row.** Recent calls show the legs of a talkgroup pool
@@ -17,12 +31,6 @@ Version 1.20.0 adds:
   list the station's calls (group or individual, from, to, cell, carrier and
   timeslot, priority) and draw the four timeslots of every carrier in use, busy
   or available, as the classic Basestation Telemetry panel did.
-- **Pool calls in one row.** Recent calls show the legs of a talkgroup pool
-  call (same talker, groups of one pool, started within 3 s) as one row with
-  the pool's name and its groups, instead of one row per group. Live calls
-  still show every group.
-  This also works logged out (the network list is admin only), and a bridge
-  whose pool is not known joins its legs by GSSI.
 - **One configuration editor.** The Settings page of the new dashboard no
   longer shows the classic raw TOML editor; the configuration is edited on the
   Configuration page. The classic dashboard's Settings page keeps it.

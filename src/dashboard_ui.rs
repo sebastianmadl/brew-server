@@ -667,7 +667,8 @@ function stationsList(){
   const byStation={};
   for(const x of c.cells||[]){(byStation[x.station]=byStation[x.station]||{name:x.station,cells:[],online:false,regs:0,addr:'',since:0,gone:0}).cells.push(x);
     const s=byStation[x.station];if(x.online!==false){s.online=true;s.regs=x.registered_issis;s.addr=x.remote_addr;s.since=x.connected_at_ms;}else s.gone=x.last_seen_ms;}
-  for(const b of c.brew_clients.filter(b=>b.mode==='Basestation')){const s=byStation[b.station]||(byStation[b.station]={name:b.station,cells:[],online:true,regs:b.registered_issis,addr:b.remote_addr,since:b.connected_at_ms,gone:0});s.online=true;s.regs=b.registered_issis;s.since=b.connected_at_ms;s.addr=b.remote_addr;s.ver=b.version;}
+  // A station with cells in several networks has one connection per network: add up its radios.
+  for(const b of c.brew_clients.filter(b=>b.mode==='Basestation')){const s=byStation[b.station]||(byStation[b.station]={name:b.station,cells:[],online:true,regs:b.registered_issis,addr:b.remote_addr,since:b.connected_at_ms,gone:0});s.online=true;s.regs=(s.conns?s.regs:0)+b.registered_issis;s.conns=(s.conns||0)+1;s.since=b.connected_at_ms;s.addr=s.addr||b.remote_addr;s.ver=b.version;}
   for(const t of D.tele){const m=Object.values(byStation).find(s=>s.addr&&t.ip&&s.addr.startsWith(t.ip+':')&&!s.tele);if(m&&Object.values(byStation).filter(s=>s.addr&&s.addr.startsWith(t.ip+':')).length===1)m.tele=t;}
   return Object.values(byStation).sort((a,b)=>(b.online-a.online)||a.name.localeCompare(b.name));
 }
@@ -695,8 +696,9 @@ R.overview=()=>{
   <div class="grid2">
    <div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${calls.length}</span><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
     ${calls.length?calls.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
-   <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${stations.length}</span><span class="sp"></span><a data-go="stations" href="#stations">Cells ›</a></div>
-    ${stations.length?stations.map(s=>`<div class="row"><div class="ric s">${ic('bts')}</div><div class="rm"><div class="rt">${esc(s.name)}</div><div class="rs">${s.cells.length} cell${s.cells.length===1?'':'s'}${s.cells.length?' · '+s.cells.map(x=>x.carrier).join(', '):''}${s.tele&&s.tele.version?' · FlowStation '+esc(s.tele.version):''}</div></div>
+   <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${stations.length}</span>${helpBtn('ovst')}<span class="sp"></span><a data-go="stations" href="#stations">Cells ›</a></div>
+    ${helpNote('ovst',CELL_ID_HELP+' Cells are counted only for stations with the <code>bts-info</code> extension; a station without it is counted as a station, its cells are unknown. Apps and other terminals are not stations and have no cells.')}
+    ${stations.length?stations.map(s=>`<div class="row"><div class="ric s">${ic('bts')}</div><div class="rm"><div class="rt">${esc(s.name)}</div><div class="rs">${s.cells.length?s.cells.length+' cell'+(s.cells.length===1?'':'s')+' · '+s.cells.map(x=>esc(x.name)+' ('+x.carrier+')').join(', '):'cells unknown (no <code>bts-info</code>)'}${s.tele&&s.tele.version?' · FlowStation '+esc(s.tele.version):''}</div></div>
       <div class="rr">${s.online?'<span class="st"><i></i>Online</span>':'<span class="st i"><i></i>Offline</span>'}<br>${s.online?s.regs+' radio'+(s.regs===1?'':'s'):(s.gone?'gone '+ago(s.gone):'')}</div></div>`).join(''):'<div class="empty">No stations connected</div>'}</div>
   </div>
   <div class="grid2">
@@ -743,11 +745,11 @@ R.radios=()=>{
   const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),(m.groups||[]).map(gName).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
-  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span></div><div class="tw"><table><thead><tr><th>ISSI</th><th>Station / cell</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
-  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${m.cell?`<span class="chip">${esc(m.cell.name)}</span>`:`<span class="chip">${esc(m.basestation_name||'—')}</span>`}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
+  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>). Apps and other terminals (Terminal mode) have no cells; a station without these extensions is shown without a cell.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
+  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
   </tbody></table></div></div>
-  <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th></tr></thead><tbody>
-  ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}${r.cell?' <span class="chip">'+esc(r.cell)+'</span>':''}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No registrations yet</td></tr>'}
+  <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th><th>Cell (global ID)</th></tr></thead><tbody>
+  ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 // Name of an ISSI from the directory, if any.
@@ -763,6 +765,14 @@ const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String
 const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
 // Info text of a login (Accounts page), if any.
 const infoOf=login=>(D.names||{})[login]||'';
+// Station and cell naming, the same on every page: a station is named by its Brew login; a cell by
+// its global cell ID <login>/<cell number in the station>. The global ID is a brew-server and
+// FlowStation name for Brew and the dashboard, not an ETSI identity.
+const CELL_ID_HELP='<b>Station</b> = a base station (FlowStation) connected in Basestation mode, named by its Brew login. <b>Global cell ID</b> = <i>login/cell</i>: the Brew login of the station and the number of the cell inside the station (local cell number, 0 = primary), e.g. 1000002/1. The global cell ID is defined by brew-server and FlowStation for Brew and this dashboard; it is not an ETSI identity. On the air interface a cell is identified by MCC, MNC, main carrier and band plan; the location area (LA) is shown separately.';
+// The cell column of a radio: its global cell ID, or why there is none.
+const cellCell=(name,mode)=>name?`<span class="chip">${esc(name)}</span>`:mode==='Terminal'?'<span class="mut" title="Apps and other terminals have no cells">— (terminal)</span>':'<span class="mut" title="The station reports no cells">—</span>';
+// Global cell ID of a station cell seen in telemetry, by its carrier (unique in a network).
+const gcidOf=carrier=>{const c=((D.conn&&D.conn.cells)||[]).find(x=>x.online!==false&&x.carrier===carrier);return c?c.name:'';};
 // "Bost FlowStation/v0.5.6-55a08812" -> "Bost FlowStation v0.5.6-55a08812".
 function software(a){if(!a)return '<span class="mut">—</span>';const m=/^(.+?)\/(\S+)(.*)$/.exec(a);return m?`${esc(m[1])} <span class="m">${esc(m[2])}</span>${esc(m[3])}`:esc(a);}
 R.stations=()=>{
@@ -773,7 +783,7 @@ R.stations=()=>{
   const caps=x=>(x.capabilities||[]).map(k=>`<span class="chip">${esc(k)}</span>`).join(' ')||'<span class="mut">—</span>';
   return `<div class="bar">${seg('cellf',[['all','All'],['on','Online'],['off','Offline']])}</div>
   ${dups.length?`<div class="card"><div class="note">${ic('alert')}<div><b>Duplicate carriers:</b> ${dups.map(d=>esc(JSON.stringify(d))).join(', ')}. The newest announcement serves.</div></div></div>`:''}
-  <div class="card"><div class="ch"><h2>Cells</h2><span class="cnt">${cells.length}</span>${helpBtn('cells')}</div><div class="tw"><table><thead><tr><th>Cell</th><th>Status</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Neighbours</th><th>Radios</th></tr></thead><tbody>
+  <div class="card"><div class="ch"><h2>Cells</h2><span class="cnt">${cells.length}</span>${helpBtn('cells')}</div><div class="tw"><table><thead><tr><th>Cell (global ID)</th><th>Status</th><th>Carrier</th><th>Downlink</th><th>LA</th><th>MCC / MNC</th><th>Neighbours</th><th>Radios</th></tr></thead><tbody>
   ${cells.map(x=>{const key='c'+x.name;const open=UI.open[key];const offc=x.online===false;
    const ci=infoOf(String(x.name).split('/')[0]);
    return `<tr class="click${offc?' off':''}" onclick="UI.open['${esc(key)}']=!UI.open['${esc(key)}'];render(true)" aria-expanded="${!!open}"><td><b>${esc(x.name)}</b> ${x.cell===0&&!offc?'<span class="chip i">primary</span>':''}${x.duplicate?' <span class="chip w">duplicate</span>':''}${ci?`<span class="sub">${esc(ci)}</span>`:''}</td>
@@ -781,9 +791,9 @@ R.stations=()=>{
    <td>${x.neighbours?(x.neighbours.map(n=>`<span class="chip">${esc(n)}</span>`).join(' ')||'<span class="mut">none</span>'):'<span class="mut">—</span>'}</td><td class="num">${offc?'—':x.registered_issis}</td></tr>
    ${open?`<tr class="exp"><td colspan="8"><div class="kv"><div><span class="l">Station address</span>${offc?'—':`<span class="m">${esc(x.remote_addr||'—')}</span>`}</div><div><span class="l">${offc?'Gone':'Connected'}</span>${offc?(x.last_seen_ms?ago(x.last_seen_ms)+' ago':'—'):ago(x.connected_at_ms)}</div>
     <div><span class="l">Extensions</span>${caps(x)}</div><div><span class="l">Access level / MS power</span>${x.rxlev_access_min_dbm!=null?x.rxlev_access_min_dbm+' dBm':'—'} · ${x.ms_txpwr_max_dbm!=null?x.ms_txpwr_max_dbm+' dBm':'—'}</div></div></td></tr>`:''}`;}).join('')||'<tr><td colspan="8" class="mut">No cells announced</td></tr>'}
-  </tbody></table></div>${helpNote('cells','Cells the stations announce (FlowStation with the <code>bts-info</code> extension), named <i>login/cell</i>: the Brew login of the station and the cell number in it (0 = primary). On the air a cell is identified by MCC, MNC, carrier and band plan. Click a row for details. A station that went away stays listed as offline until it connects again (stations with a login only).')}</div>
-  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${c.brew_clients.length}</span></div><div class="tw"><table><thead><tr><th>Station</th><th>Mode</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells</th></tr></thead><tbody>
-  ${c.brew_clients.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}</td><td>${esc(b.mode)}</td><td>${software(b.agent)}<span class="sub">Brew v${b.version}</span></td><td class="m">${esc(b.remote_addr||'—')}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${(b.cells||[]).map(x=>`<span class="chip">${x.carrier}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
+  </tbody></table></div>${helpNote('cells','Cells the stations announce (FlowStation with the <code>bts-info</code> extension). '+CELL_ID_HELP+' Click a row for details. A station that went away stays listed as offline until it connects again (stations with a login only). Apps and other terminals (Terminal mode) have no cells. A station without the <code>bts-info</code> extension is counted as a station (Overview, Brew connections), but its cells are not known and not listed here.')}</div>
+  <div class="card"><div class="ch"><h2>Brew connections</h2><span class="cnt">${c.brew_clients.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Every Brew connection, by login: stations (Basestation mode), apps and other terminals (Terminal mode, no cells) and this server\'s own links to other networks (Network mode). A station whose cells serve several networks has one connection per network, each with its own cells. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Mode</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
+  ${c.brew_clients.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}</td><td>${esc(b.mode)}</td><td>${software(b.agent)}<span class="sub">Brew v${b.version}</span></td><td class="m">${esc(b.remote_addr||'—')}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${(b.cells||[]).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||`<span class="mut">${b.mode==='Terminal'?'— (terminal)':'—'}</span>`}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No Brew connections</td></tr>'}
   </tbody></table></div></div>
   ${c.sip&&c.sip.enabled?'':''}`;
 };
@@ -815,19 +825,19 @@ function tlmCalls(s){
   const grid=[...used.keys()].sort((a,b)=>a-b).map(cn=>{const b=used.get(cn);
     return `<div class="tsg"><span class="l">Carrier ${cn}</span>${[1,2,3,4].map(ts=>{const c=b.get(ts);
       return c?`<span class="tss b" title="Carrier ${cn} TS${ts}: ${esc(String(c.source_issi))} → ${c.is_group?'group':'radio'} ${esc(String(c.gssi_or_called))}">TS${ts}</span>`:`<span class="tss" title="Carrier ${cn} TS${ts}: available">TS${ts}</span>`;}).join('')}</div>`;}).join('');
-  return `<div class="tw"><table><thead><tr><th>Call</th><th>From</th><th>To</th>${multi?'<th>Cell</th>':''}<th>Carrier / TS</th><th>Pri</th></tr></thead><tbody>${calls.map(c=>`<tr><td>${c.is_group?'Group':'Individual'}</td><td class="m">${esc(String(c.source_issi))}</td><td class="m">${esc(String(c.gssi_or_called))}</td>${multi?`<td>${cellOf[c.carrier_num]??'—'}</td>`:''}<td class="m">${c.carrier_num} / TS${c.ts}</td><td class="num">${c.priority}</td></tr>`).join('')}</tbody></table></div>
+  return `<div class="tw"><table><thead><tr><th>Call</th><th>From</th><th>To</th>${multi?'<th>Cell (local / global ID)</th>':''}<th>Carrier / TS</th><th>Pri</th></tr></thead><tbody>${calls.map(c=>`<tr><td>${c.is_group?'Group':'Individual'}</td><td class="m">${esc(String(c.source_issi))}</td><td class="m">${esc(String(c.gssi_or_called))}</td>${multi?`<td>${cellOf[c.carrier_num]??'—'}${gcidOf(c.carrier_num)?` <span class="mut">(${esc(gcidOf(c.carrier_num))})</span>`:''}</td>`:''}<td class="m">${c.carrier_num} / TS${c.ts}</td><td class="num">${c.priority}</td></tr>`).join('')}</tbody></table></div>
    <div style="padding:4px 18px 14px">${grid}<div class="tsg" style="gap:12px;margin-top:8px"><span><span class="tss b" style="width:12px;height:12px"></span> busy</span><span><span class="tss" style="width:12px;height:12px"></span> available</span></div></div>`;
 }
 R.telemetry=()=>{
   const t=D.tele||[];
   const lvl=l=>l==='ok'?'':l==='degraded'?' w':' d';
-  return t.length?`<div class="grid2" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))">${t.map(s=>{const h=s.health||{};
+  return t.length?`<div class="card"><div class="ch"><h2>Station telemetry</h2><span class="cnt">${t.length}</span>${helpBtn('tlm')}</div>${helpNote('tlm','One card per station with a telemetry connection, named by its telemetry login. <i>Cell (local / global ID)</i>: the number of the cell inside the station (local, 0 = primary) and in brackets its global cell ID <i>login/cell</i> as on the other pages. '+CELL_ID_HELP)}</div><div class="grid2" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))">${t.map(s=>{const h=s.health||{};
   const nm=infoOf(s.id)||(s.site_name&&s.site_name!==s.id?s.site_name:'');
   return `<div class="card tlm"><div class="ch"><h2>${esc(s.id)}</h2>${nm?`<span class="mut" style="font-size:13px">${esc(nm)}</span>`:''}<span class="sp"></span><span class="st${lvl(h.overall)}"><i></i>${esc(h.overall||'unknown')}</span></div>
    <div class="kv tight" style="padding:12px 18px"><div><span class="l">Version</span>${esc(s.build||s.version||'—')}</div><div><span class="l">Address</span><span class="m">${esc(s.ip||'—')}</span></div><div><span class="l">Connected</span>${ago(s.connected_at_ms)}</div><div><span class="l">Backhaul</span>${s.backhaul_connected==null?'—':s.backhaul_connected?'connected':'down'}</div>
     <div><span class="l">Radios</span>${s.registration_count}</div><div><span class="l">Calls</span>${Object.keys(s.active_calls||{}).length}</div><div><span class="l">TX EVM</span>${s.evm_pct!=null?s.evm_pct.toFixed(1)+' %':'—'}</div><div><span class="l">Emergencies</span>${(s.emergencies||[]).length||'none'}</div></div>
    ${(h.domains||[]).length?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${h.domains.map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
-   <div class="tw"><table><thead><tr><th>Cell</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;}).join('')}</div>`
+   <div class="tw"><table><thead><tr><th title="Local cell number in this station, global cell ID in brackets">Cell (local / global ID)</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${gcidOf(x.main_carrier)?` <span class="mut">(${esc(gcidOf(x.main_carrier))})</span>`:''}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;}).join('')}</div>`
   :'<div class="card"><div class="empty">No station telemetry connections. Stations report here with FlowStation <code>[telemetry]</code>.</div></div>';
 };
 R.control=()=>{
@@ -875,8 +885,8 @@ R.routing=()=>{
    ${msgDiv('pool-msg')}</div>
   <div class="card"><div class="ch"><h2>Assign radios to a group (DGNA)</h2>${helpBtn('dgna')}<span class="sp"></span>${searchBox('dg','ISSI, group or station…')}</div>
    ${helpNote('dgna','Dynamic group number assignment (SS-DGNA, ETSI EN 300 392-12-22): the station tells the selected radios to add or remove a group, with an optional name the radio shows. Each command goes to the station the radio is registered on, over its control connection (FlowStation <code>[command]</code>). The answer of each radio shows under <i>Last DGNA</i>. ★ = group assigned by DGNA. Apps and other terminals cannot be reached.')}
-   <div class="tw"><table><thead><tr><th style="width:44px"><input type="checkbox" class="chk" aria-label="Select all" ${allSel?'checked':''} ${adm?'':'disabled'} onchange="selAll(this.checked)"></th><th>ISSI</th><th>Station / cell</th><th>Groups now</th><th>Last DGNA</th></tr></thead><tbody>
-   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><span class="chip">${esc(r.cell||r.station)}</span></td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No radios registered</td></tr>'}
+   <div class="tw"><table><thead><tr><th style="width:44px"><input type="checkbox" class="chk" aria-label="Select all" ${allSel?'checked':''} ${adm?'':'disabled'} onchange="selAll(this.checked)"></th><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups now</th><th>Last DGNA</th></tr></thead><tbody>
+   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><b class="m">${esc(r.station||'—')}</b></td><td>${r.cell?`<span class="chip">${esc(r.cell)}</span>`:`<span class="mut">${r.radio?'—':'— (terminal)'}</span>`}</td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
    </tbody></table></div>
    ${adm?`<div class="selbar"><b>${sel} selected</b><span class="arrow">→</span>
     <input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
@@ -1255,6 +1265,22 @@ mod tests {
             for line in body.lines().filter(|l| l.contains(&format!("getJ({route}"))) {
                 assert!(line.contains(".admin"), "{route} polled without an admin check: {line}");
             }
+        }
+    }
+
+    /// Stations and cells are named the same way on every page: a station by its Brew login, a
+    /// cell by its global cell ID (login/cell), with telemetry adding the local cell number; the
+    /// help says that the global ID is not an ETSI identity and that terminals have no cells.
+    #[test]
+    fn stations_and_cells_are_named_the_same_everywhere() {
+        assert!(!PAGE_HTML.contains("Station / cell"), "station and cell in their own columns");
+        assert!(PAGE_HTML.contains("<th>Cell (global ID)</th>"));
+        assert!(PAGE_HTML.contains("Cell (local / global ID)"), "telemetry: local number and global ID");
+        assert!(PAGE_HTML.contains("it is not an ETSI identity"));
+        assert!(PAGE_HTML.contains("Apps and other terminals (Terminal mode) have no cells"));
+        assert!(PAGE_HTML.contains("a station without it is counted as a station, its cells are unknown"));
+        for page in [&*crate::dashboard::TELEMETRY_SDS_HTML, &*crate::dashboard::REGISTRATIONS_HTML] {
+            assert!(!page.contains("<th>BTS</th>"), "Station, not BTS");
         }
     }
 
