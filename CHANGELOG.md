@@ -27,10 +27,10 @@ Unreleased:
   serve) is listed once under Brew connections, with all its cells, its
   remote addresses and the radios summed; the sidebar counts stations, not
   connections.
-  Thanks to OE1LHP for the visual review and the reports of
-  inconsistencies.
   The Overview adds up the radios of a station that has one connection per
   network.
+  Thanks to OE1LHP for the visual review and the reports of
+  inconsistencies.
 
 Version 1.20.1 adds:
 
