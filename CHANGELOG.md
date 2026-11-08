@@ -4,6 +4,15 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Linked talkgroups on the Routing page.** A simple list of 1:1 links
+  "this server · TG ⇄ linked network · TG": one group of this server, both
+  ways, to one group of another network of the Multi Network page. Each link
+  has its own editor (one GSSI here, the network from the list, one GSSI
+  there), an on/off switch and its live status. A link is a talkgroup pool
+  with exactly these two groups, saved as `[[talkgroup_pools]]` with
+  `linked = true`; the server refuses a link with more groups or one way.
+  Links are not listed again under Talkgroup pools.
+
 - **Stations and cells named the same on every page.** A station is named by
   its Brew login, a cell by its global cell ID `login/cell` (the Brew login
   and the cell number inside the station, 0 = primary). Radios, the
