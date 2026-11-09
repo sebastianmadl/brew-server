@@ -4,6 +4,28 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **History stays small.** `[storage] keep_days = 7`, `max_calls = 2000`,
+  `max_sds = 2000` (0 = no limit): older entries and those over the limit
+  are dropped from the history log at start and once an hour (the log is
+  rewritten, its format is unchanged). The call / SDS totals keep counting
+  them (`<path>.totals`). Admins can clear all calls or all SDS on the Calls
+  / SDS pages; the totals stay. Calls and SDS pages: "Show 25 / 50 / 100 /
+  500 / All (7 days)". Overview shows the call total under "No active
+  calls". HA: a Standby whose copy position no longer fits the rewritten log
+  starts over and skips what it has.
+- **Ham callsign database** (Directory, Radios tab, folded card, off by
+  default): radios without a Directory name are named by their call sign
+  from a list of `ID;CALLSIGN` lines, by default radioid.net `dmrid.dat`.
+  Directory names always come first. "Now" fetches the list, "Automatic"
+  every day at 00:00 UTC; a new list replaces the old one (one cache file,
+  nothing else stored). Config `[callsign_db] enabled`, `url`, `auto`,
+  `cache`; API `GET /api/callsigns?issi=..`, `GET /api/callsign-db`.
+- **Map: names.** The popup of a radio shows its call sign / name from the
+  ISSI directory (or the callsign database), e.g. "ISSI 2320972 (OE4SXM)".
+- **Phone fixes.** Live updates wait while the page is scrolled (iOS left
+  blank areas), fields use 16 px text so iOS no longer zooms in on them, and
+  double-tap zoom is off.
+
 - **Managed talkgroups.** A card on the Routing page (folds to a thin bar:
   folded while off, open while on) closes the set of talkgroups: only
   allowed groups may be used, i.e. the card's list, the groups of

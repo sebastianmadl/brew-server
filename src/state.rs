@@ -375,6 +375,9 @@ pub struct AppState {
     pub group_access: std::sync::RwLock<std::collections::BTreeMap<String, crate::config::GroupAccessConfig>>,
     /// `[talkgroups]` as it is right now (managed switch, allowed and hidden groups).
     pub talkgroups: std::sync::RwLock<crate::config::TalkgroupsConfig>,
+    /// `[callsign_db]` as it is right now, and the loaded list.
+    pub callsign_cfg: std::sync::RwLock<crate::config::CallsignDbConfig>,
+    pub callsign_db: crate::callsign_db::Db,
     /// Groups managed talkgroups refused since the start, with the ISSIs that
     /// tried (in memory only, for the Routing page).
     pub refused_groups: std::sync::RwLock<std::collections::BTreeMap<u32, std::collections::BTreeSet<u32>>>,
@@ -557,6 +560,7 @@ impl AppState {
         if let Ok(n) = self.gssi_names.read() { cfg.gssi_names = n.clone(); }
         if let Ok(g) = self.group_access.read() { cfg.group_access = g.clone(); }
         if let Ok(t) = self.talkgroups.read() { cfg.talkgroups = t.clone(); }
+        if let Ok(c) = self.callsign_cfg.read() { cfg.callsign_db = c.clone(); }
         
         let (enabled, issis) = self.allowlist_snapshot();
         cfg.allowlist.enabled = enabled;
@@ -599,7 +603,7 @@ impl AppState {
             None
         };
         let monitor = match &store {
-            Some(store) => Monitor::with_store(store.clone()),
+            Some(store) => Monitor::with_store_cfg(store.clone(), &config.storage),
             None => Monitor::new(),
         };
         let telemetry = match &store {
@@ -617,6 +621,9 @@ impl AppState {
         let gssi_names = config.gssi_names.clone();
         let group_access = config.group_access.clone();
         let talkgroups = config.talkgroups.clone();
+        let callsign_cfg = config.callsign_db.clone();
+        let callsign_db = crate::callsign_db::Db::default();
+        if callsign_cfg.enabled { callsign_db.load_cache(&callsign_cfg.cache); }
         let allowlist = Allowlist { enabled: config.allowlist.enabled, issis: config.allowlist.issis.iter().copied().collect() };
         let config_hash = crate::ha::config_hash(&config);
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
@@ -643,6 +650,8 @@ impl AppState {
                 gssi_names: std::sync::RwLock::new(gssi_names),
                 group_access: std::sync::RwLock::new(group_access),
                 talkgroups: std::sync::RwLock::new(talkgroups),
+                callsign_cfg: std::sync::RwLock::new(callsign_cfg),
+                callsign_db,
                 refused_groups: std::sync::RwLock::new(std::collections::BTreeMap::new()),
                 allowlist: std::sync::RwLock::new(allowlist),
             },

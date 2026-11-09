@@ -159,6 +159,7 @@ a.tile{color:inherit;cursor:pointer}
 @media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
 .tw{overflow-x:auto}
+.empty .tot{margin-top:6px;font-size:12.5px}.empty .tot b{font:600 15px var(--mono,ui-monospace,monospace);color:var(--text2)}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
 td{padding:10px 18px;border-top:1px solid var(--sep);font-size:13.5px;vertical-align:middle}
@@ -309,7 +310,11 @@ td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-t
 
 /* Phone */
 .tabbar{display:none}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{touch-action:manipulation}
 @media (max-width:760px){
+  /* iOS zooms into a field with text under 16px when it gets focus, and stays zoomed. */
+  input.f,select.f,textarea.f,textarea.cfg,.sheet input,.sheet textarea,.sheet select{font-size:16px}
   #rochip{display:none}
   #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow);z-index:35;padding-bottom:env(safe-area-inset-bottom)}
   body.sbopen #sb{transform:none}
@@ -548,6 +553,7 @@ function show(p){
   if(emb){const fixed=emb==='/map';$('content').innerHTML=`<iframe class="embed${fixed?' fixed':''}" title="${esc(PG[p][1])}" src="${emb}?embed=1${document.documentElement.dataset.theme?'&theme='+document.documentElement.dataset.theme:''}"></iframe>`;if(!fixed)fitFrame();}
   else render(true);
   $('content').parentElement.scrollTop=0;
+  if(p==='calls'||p==='sds')refreshFast();
 }
 function fitFrame(){const f=document.querySelector('iframe.embed');if(!f)return;f.onload=()=>{try{const d=f.contentDocument;const fit=()=>{f.style.height=Math.max(window.innerHeight-130,d.documentElement.scrollHeight+20)+'px';};fit();new ResizeObserver(fit).observe(d.body);}catch(e){}};}
 function helpBtn(key){return `<button class="help" aria-expanded="${!!UI.help[key]}" aria-controls="h-${key}" onclick="UI.help['${key}']=!UI.help['${key}'];render(true)" title="What is this?">?<span class="sr">Explain</span></button>`;}
@@ -557,7 +563,7 @@ function helpNote(key,text){return `<div class="note" id="h-${key}" ${UI.help[ke
 async function refreshFast(){
   if(document.body.classList.contains('locked'))return;
   try{
-    const [st,pools,emg]=await Promise.all([getJ('/api/status'),getJ('/api/pools'),getJ('/api/emergencies')]);
+    const [st,pools,emg]=await Promise.all([getJ(statusUrl()),getJ('/api/pools'),getJ('/api/emergencies')]);
     D.status=st;D.pools=pools;D.emg=emg;ok=true;
   }catch(e){ok=false;}
   $('live').className='pill'+(ok?'':' d');$('live').lastChild.textContent=ok?'Live':'Offline';
@@ -580,9 +586,48 @@ async function refreshSlow(){
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   tasks.push(getJ('/api/talkgroups').then(v=>D.tg=v).catch(()=>{}));
+  tasks.push(getJ('/api/callsign-db').then(v=>{if(D.csdb&&(D.csdb.updated_ms!==v.updated_ms||D.csdb.enabled!==v.enabled)){D.cs={};CS_ASKED.clear();}D.csdb=v;}).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
   await Promise.allSettled(tasks);
+  await csLookup();
   chrome();render();
+}
+// Ham callsign database: ask the server for the ISSIs on screen that have no Directory name (once each).
+const CS_ASKED=new Set();
+async function csLookup(){
+  if(!(D.csdb&&D.csdb.enabled&&D.csdb.entries))return;
+  const want=new Set(),add=i=>{if(i>0&&i<=16777215)want.add(String(i));};
+  const st=D.status||{};
+  for(const c of [...(st.active_calls||[]),...(st.recent_calls||[])]){add(c.source);if(c.kind!=='group')add(c.destination);}
+  for(const x of (st.recent_sds||[])){add(x.source);add(x.destination);}
+  for(const m of ((D.conn&&D.conn.mobile_stations)||[]))add(m.issi);
+  for(const r of ((D.conn&&D.conn.roaming_log)||[]))add(r.issi);
+  for(const r of (D.regs||[]))add(r.issi);
+  const ask=[...want].filter(i=>!(D.issi||{})[i]&&!CS_ASKED.has(i)).slice(0,500);
+  if(!ask.length)return;
+  try{const m=await getJ('/api/callsigns?issi='+ask.join(','));ask.forEach(i=>CS_ASKED.add(i));D.cs=Object.assign(D.cs||{},m);}catch(e){}
+}
+function csCard(adm){
+  const c=D.csdb;if(!c)return '';
+  const open=!!UI.csOpen,when=c.updated_ms?new Date(c.updated_ms).toLocaleString():'never';
+  const state=c.running?'updating…':c.enabled?`${c.entries.toLocaleString()} call signs · updated ${esc(when)}`:'off';
+  return `<div class="card${open?'':' shut'}"><div class="ch tgh" role="button" tabindex="0" aria-expanded="${open}" onclick="UI.csOpen=!${open};render(true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
+    <span class="chev" aria-hidden="true">▸</span><h2>Ham callsign database</h2>${c.enabled?'<span class="chip a">on</span>':'<span class="chip i">off</span>'}<span class="cnt hide-s">${state}</span><span onclick="event.stopPropagation()">${helpBtn('csdb')}</span><span class="sp"></span>
+    <label style="display:flex;gap:10px;align-items:center" onclick="event.stopPropagation()"><button class="tog" role="switch" aria-checked="${!!c.enabled}" aria-label="Ham callsign database" ${adm?'':'disabled'} onclick="csSet({enabled:this.getAttribute('aria-checked')!=='true'})"></button></label></div>
+   ${helpNote('csdb','Names radios without a Directory name by their call sign from a list of <code>ID;CALLSIGN</code> lines (default: radioid.net <code>dmrid.dat</code>, the DMR IDs that amateur TETRA networks use as ISSIs). <b>Directory names always come first.</b> <i>Now</i> fetches the list, <i>Automatic</i> every day at 00:00 UTC. A new list replaces the old one (one file, <code>[callsign_db] cache</code>); nothing else is stored or collected. Config <code>[callsign_db]</code>, no restart.')}
+   ${open?`<div class="tgadd"><input class="f" id="cs-url" value="${esc(c.url)}" placeholder="${esc(c.default_url)}" style="flex:1;min-width:200px" ${adm?'':'disabled'} onkeydown="if(event.key==='Enter')csSet({url:this.value})" onchange="csSet({url:this.value})">
+     <button class="btn" ${adm&&c.enabled&&!c.running?'':'disabled'} onclick="csNow()">${c.running?'Updating…':'Now'}</button>
+     <label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600"><button class="tog" role="switch" aria-checked="${!!c.auto}" ${adm?'':'disabled'} onclick="csSet({auto:this.getAttribute('aria-checked')!=='true'})"></button>Automatic <span class="mut" style="font-weight:400">(daily 00:00 UTC)</span></label></div>
+   <div class="msg ${c.error?'err':'mut'}" style="padding:10px 18px">${c.error?'Last update failed: '+esc(c.error):state}</div>${msgDiv('cs-msg','padding:0 18px 10px')}`:''}</div>`;
+}
+async function csSet(req){
+  try{D.csdb=await postJ('/api/callsign-db/set',req);D.cs={};CS_ASKED.clear();if(req.enabled)UI.csOpen=true;setMsg('cs-msg','ok',req.enabled===false?'Switched off.':'Saved.');}catch(e){setMsg('cs-msg','err',e.message);}
+  render(true);if(D.csdb&&D.csdb.running)setTimeout(refreshSlow,4000);
+}
+async function csNow(){
+  D.csdb={...D.csdb,running:true};render(true);
+  try{D.csdb=await postJ('/api/callsign-db/update',{});D.cs={};CS_ASKED.clear();await csLookup();setMsg('cs-msg','ok',`${D.csdb.entries.toLocaleString()} call signs loaded.`);}catch(e){setMsg('cs-msg','err',e.message);D.csdb={...D.csdb,running:false};}
+  render(true);
 }
 function chrome(){
   const c=D.conn,st=D.status;
@@ -642,10 +687,37 @@ function mergePoolLegs(list){
   return out;
 }
 
+/* ---------- history (Calls / SDS pages) ---------- */
+// How many entries the Calls / SDS pages list (UI.show.calls / .sds): 25, 50, 100, 500 or 'all' (everything kept).
+const SHOW_N=[25,50,100,500,'all'];
+const showN=k=>{const v=(UI.show||{})[k];return SHOW_N.includes(v)?v:50;};
+function statusUrl(){
+  // Pool calls have one entry per group: ask for more so the merged list still fills the page.
+  if(UI.page==='calls'){const n=showN('calls');return '/api/status?calls='+(n==='all'?'all':n*4);}
+  if(UI.page==='sds')return '/api/status?sds='+showN('sds');
+  return '/api/status';}
+function showSel(k){const st=D.status||{},days=st.keep_days;
+  return `<label class="mut" style="font-size:12.5px;display:flex;gap:6px;align-items:center">Show <select class="f" aria-label="How many to show" onchange="UI.show=UI.show||{};UI.show['${k}']=this.value==='all'?'all':+this.value;refreshFast();render(true)">${SHOW_N.map(n=>`<option value="${n}" ${showN(k)===n?'selected':''}>${n==='all'?'All'+(days?` (${days} days)`:''):n}</option>`).join('')}</select></label>`;}
+async function clearHistory(k){
+  const what=k==='calls'?'every call':'every SDS (with delivery reports and the telemetry SDS log)';
+  if(!confirm(`Delete ${what} from the history? The totals stay. This cannot be undone.`))return;
+  try{await postJ('/api/history/clear',k==='calls'?{calls:true}:{sds:true});setMsg(k+'-msg','ok',k==='calls'?'Calls deleted.':'SDS deleted.');await refreshFast();}catch(e){setMsg(k+'-msg','err',e.message);}
+  render(true);}
+const keptNote=(st,k)=>{const d=st.keep_days;return `${k==='calls'?st.kept_calls:st.kept_sds} kept${d?` · up to ${d} days`:''}`;};
+
 /* ---------- render ---------- */
 let lastSig='';
+// Phones (iOS Safari): replacing the page while it scrolls leaves blank areas. Live updates wait until the
+// finger is off and the scroll has come to rest; a forced render (a click) still happens at once.
+let scrollBusy=0,touchOn=false,renderLater=false;
+function scrollRest(){clearTimeout(scrollBusy);scrollBusy=setTimeout(()=>{scrollBusy=0;if(!touchOn&&renderLater){renderLater=false;render();}},500);}
+(()=>{const m=document.querySelector('main');if(!m)return;
+  m.addEventListener('scroll',scrollRest,{passive:true});
+  m.addEventListener('touchstart',()=>{touchOn=true;clearTimeout(scrollBusy);scrollBusy=1;},{passive:true});
+  const up=()=>{touchOn=false;scrollRest();};m.addEventListener('touchend',up,{passive:true});m.addEventListener('touchcancel',up,{passive:true});})();
 function render(force){
   const p=UI.page;if(PG[p][4])return;
+  if(!force&&(scrollBusy||touchOn)){renderLater=true;return;}
   // Keep focus and typing alive: pages with inputs only re-render when forced or nothing is focused inside.
   const a=document.activeElement;
   if(!force&&a&&$('content').contains(a)&&(a.tagName==='INPUT'||a.tagName==='SELECT'||a.tagName==='TEXTAREA'))return;
@@ -707,7 +779,7 @@ R.overview=()=>{
   </div>
   <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${calls.length}</span><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
-    ${calls.length?calls.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
+    ${calls.length?calls.map(x=>callRow(x,now)).join(''):`<div class="empty">No active calls<div class="tot"><b>${st.total_calls}</b> calls in total</div></div>`}</div>
    <div class="card"><div class="ch"><h2>Recent calls</h2><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
     ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiTxt(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgTxt(x.destination)}</span>`:`<b class="m">${issiTxt(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
   </div>
@@ -744,17 +816,19 @@ R.calls=()=>{
   const rec=mergePoolLegs(st.recent_calls).filter(c=>(k==='all'||c.kind===k)&&match(q,c.source,c.destination,c.pool,(c.legs||[]).map(tgTxt).join(' '),c.from_network,(c.to_networks||[]).join(' '),nameOf(c.source),c.kind==='group'?gName(c.destination):nameOf(c.destination),c.kind==='group'&&c.destination>16777215?tgTxt(c.destination):''));
   const nc=hasNet(rec);
   return `<div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${act.length}</span></div>${act.length?act.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
-  <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span></div>
-  <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${rec.length}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
-   ${rec.slice(0,300).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.pool?`<span class="chip" title="Pool: one call heard on ${c.legs.length} groups">${ic('routing')} ${esc(c.pool)}</span><span class="sub">${c.legs.map(g=>g>16777215?tgTxt(g):String(g)).join(' · ')}</span>`:c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td>${nc?`<td>${netChips(c)}</td>`:''}<td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="${nc?8:7}" class="mut">No calls yet</td></tr>'}
+  <div class="bar">${seg('callk',[['all','All'],['group','Group'],['private','Individual']])}${searchBox('calls','ISSI or group…')}<span class="sp"></span>${showSel('calls')}<span class="mut" style="font-size:12.5px">${st.total_calls} calls in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('calls')">${ic('trash')}Clear all calls</button>`:''}</div>
+  ${msgDiv('calls-msg','padding:0 4px')}
+  <div class="card"><div class="ch"><h2>Recent calls</h2><span class="cnt">${Math.min(rec.length,showN('calls')==='all'?1e9:showN('calls'))}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'calls')}</span></div><div class="tw"><table><thead><tr><th>Started</th><th>Type</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Duration</th><th>Prio</th><th>Voice frames</th></tr></thead><tbody>
+   ${rec.slice(0,showN('calls')==='all'?undefined:showN('calls')).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.pool?`<span class="chip" title="Pool: one call heard on ${c.legs.length} groups">${ic('routing')} ${esc(c.pool)}</span><span class="sub">${c.legs.map(g=>g>16777215?tgTxt(g):String(g)).join(' · ')}</span>`:c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td>${nc?`<td>${netChips(c)}</td>`:''}<td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="${nc?8:7}" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 R.sds=()=>{
   const st=D.status;if(!st)return '<div class="empty">Loading…</div>';
   const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));
   const nc=hasNet(list);
-  return `<div class="bar">${searchBox('sds','ISSI…')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span></div>
-  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
+  return `<div class="bar">${searchBox('sds','ISSI…')}<span class="sp"></span>${showSel('sds')}<span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('sds')">${ic('trash')}Clear all SDS</button>`:''}</div>
+  ${msgDiv('sds-msg','padding:0 4px')}
+  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'sds')}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
   ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="${nc?5:4}" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
 };
 R.radios=()=>{
@@ -771,7 +845,8 @@ R.radios=()=>{
   </tbody></table></div></div>`;
 };
 // Name of an ISSI from the directory, if any.
-const nameOf=issi=>(D.issi||{})[String(issi)]||'';
+// Directory names first (always!), then the ham callsign database (D.cs, only asked for ISSIs without one).
+const nameOf=issi=>(D.issi||{})[String(issi)]||(D.cs||{})[String(issi)]||'';
 const gName=g=>(D.gssi||{})[String(g)]||'';
 // A group of another network shows as "network:GSSI" (inside the server it
 // is an alias above the 24 GSSI bits, see netlink.rs).
@@ -1207,10 +1282,11 @@ R.issis=()=>{
     :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones (with <i>Only these</i>, listed listeners missing from the allow list are added to it on save); who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. <br><br>Which groups may be used at all (<b>managed talkgroups</b>) is set on the Routing page; naming a group here does not allow it, but a group with <i>Only these</i> counts as allowed there.<br><br><b>✕</b> hides a group without a name from this page while radios are on it (display only); the filter <i>Hidden</i> shows it again. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>, <code>[talkgroups]</code>).';
   return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']].concat(hid.size?[['hidden','Hidden ('+hid.size+')']]:[]):[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>
+  ${K==='issi'?csCard(adm):''}
   <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
    ${helpNote('dir'+K,help)}
    <div class="tw"><table><thead><tr><th>${d.what}</th><th>Name</th>${K==='gssi'?'<th>Access</th>':''}<th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
-   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):'<span class="mut">—</span>'}</td>${K==='gssi'?`<td>${accCell(k)}</td>`:''}<td class="hide-s">${where(seen.get(k))}</td>
+   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):K==='issi'&&(D.cs||{})[k]?`<span class="mut" title="From the ham callsign database (a Directory name comes first)">${esc(D.cs[k])} · database</span>`:'<span class="mut">—</span>'}</td>${K==='gssi'?`<td>${accCell(k)}</td>`:''}<td class="hide-s">${where(seen.get(k))}</td>
      ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete name">${ic('trash')}<span class="hide-s">Delete</span></button>`:acc[k]?`<button class="btn" onclick="editName('${k}')">Edit</button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}${K==='gssi'&&plain(k)?(hid.has(k)?` <button class="btn" onclick="hideGroup('${k}',false)">Show</button>`:` <button class="btn" onclick="hideGroup('${k}',true)" aria-label="Hide group ${k} from this page" title="Hide from this page">✕</button>`):''}</td>`:''}</tr>`).join('')||`<tr><td colspan="5" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
    </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
 };
@@ -1494,6 +1570,27 @@ mod tests {
         let dir = &PAGE_HTML[PAGE_HTML.find("R.issis=()=>{").unwrap()..];
         let dir = &dir[..dir.find("\n};\n").unwrap()];
         assert!(!dir.contains("setManaged") && !dir.contains("Refused"), "no managed switch on the Directory page");
+    }
+
+    #[test]
+    fn callsign_database_names_come_after_the_directory() {
+        assert!(PAGE_HTML.contains("const nameOf=issi=>(D.issi||{})[String(issi)]||(D.cs||{})[String(issi)]||'';"), "Directory name first");
+        assert!(PAGE_HTML.contains("filter(i=>!(D.issi||{})[i]&&!CS_ASKED.has(i))"), "asked only for ISSIs without a Directory name");
+        assert!(PAGE_HTML.contains("${K==='issi'?csCard(adm):''}"), "card on the Directory radios tab");
+        assert!(PAGE_HTML.contains("const open=!!UI.csOpen"), "closed by default");
+    }
+
+    #[test]
+    fn history_pages_choose_how_many_and_clear() {
+        assert!(PAGE_HTML.contains("const SHOW_N=[25,50,100,500,'all'];"));
+        for page in ["R.calls=()=>{", "R.sds=()=>{"] {
+            let body = &PAGE_HTML[PAGE_HTML.find(page).unwrap()..];
+            let body = &body[..body.find("\n};\n").unwrap()];
+            assert!(body.contains("showSel(") && body.contains("clearHistory("), "{page}: show selector and Clear button");
+            assert!(body.contains("D.who.admin?"), "{page}: Clear only for admins");
+        }
+        assert!(PAGE_HTML.contains("calls in total</div></div>`}"), "Overview: total under No active calls");
+        assert!(PAGE_HTML.contains("if(!force&&(scrollBusy||touchOn)){renderLater=true;return;}"), "no live re-render while scrolling");
     }
 
     #[test]

@@ -100,11 +100,17 @@ cert_path = "tls/dashboard-cert.pem"
 key_path = "tls/dashboard-key.pem"
 
 # Persistent history: append-only binary log of completed calls and SDS,
-# replayed on startup so history survives restarts. Keeps everything (no
-# rotation). Disable by setting enabled = false.
+# replayed on startup so history survives restarts. Disable by setting
+# enabled = false. Retention, applied at start and once an hour: calls and SDS
+# older than keep_days, and beyond max_calls / max_sds (newest kept), are
+# dropped from the log (0 = no limit). The totals keep counting them
+# (<path>.totals). Admins can also clear all calls or all SDS on the dashboard.
 [storage]
 enabled = true
 path = "brew-history.bin"
+keep_days = 7
+max_calls = 2000
+max_sds = 2000
 
 # ---------------------------------------------------------------------------
 # SIP / VoIP subsystem. Off by default. When enabled it binds a UDP SIP
@@ -365,6 +371,16 @@ lon = 23.7640
 # the attachment on the air. Off (the default) changes nothing and keeps the
 # list. Edited on the Routing page. hidden: groups hidden from the Directory
 # page (display only).
+# Ham callsign database: names radios without a Directory name by their call
+# sign from a list of ID;CALLSIGN lines (radioid.net dmrid.dat). Directory
+# names always come first. auto = fetch every day at 00:00 UTC. A new list
+# replaces the cache file. Set on the dashboard's Directory page.
+# [callsign_db]
+# enabled = false
+# url = "https://radioid.net/static/dmrid.dat"
+# auto = false
+# cache = "callsign-db.dat"
+
 # [talkgroups]
 # managed = false
 # allowed = [9, 2321]
