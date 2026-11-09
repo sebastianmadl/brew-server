@@ -753,15 +753,16 @@ function netChips(x){
   return from.concat(to).join(' ');
 }
 const hasNet=list=>list.some(x=>x.from_network||(x.to_networks||[]).length);
-const callRow=(c,now)=>{
+const callRow=(c,now,short)=>{
+  const who=short?issiShort:issiTxt;
   const pool=poolOf(c);
   const grp=c.kind==='group';
   const em=c.priority>=15;
   const legs=pool?pool.live.legs.map(g=>tgChip(g)).join(' '):'';
   const wait=pool&&pool.live.waiting.length?` <span class="mut">waiting: ${pool.live.waiting.join(', ')}</span>`:'';
   return `<div class="row"><div class="ric${em?' e':grp?'':' p'}">${ic(grp?'radios':'call')}</div><div class="rm">
-   <div class="rt">${grp?'TG '+tgTxt(c.destination):issiTxt(c.source)+' → '+issiTxt(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}${netChips(c)?' '+netChips(c):''}</div>
-   <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${issiTxt(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
+   <div class="rt">${grp?'TG '+tgTxt(c.destination):who(c.source)+' → '+who(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}${netChips(c)?' '+netChips(c):''}</div>
+   <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${who(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
    <div class="rr"><b>${dur(now-c.started_at_ms)}</b><br>${c.voice_frames} frames · prio ${c.priority}</div></div>`;
 };
 function stationsList(){
@@ -799,14 +800,14 @@ R.overview=()=>{
   </div>
   <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${calls.length}</span><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
-    ${calls.length?calls.map(x=>callRow(x,now)).join(''):`<div class="empty">No active calls<div class="tot"><b>${st.total_calls}</b> calls in total</div></div>`}</div>
+    ${calls.length?calls.map(x=>callRow(x,now,true)).join(''):`<div class="empty">No active calls<div class="tot"><b>${st.total_calls}</b> calls in total</div></div>`}</div>
    <div class="card"><div class="ch"><h2>Recent calls</h2><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
-    ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiTxt(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgTxt(x.destination)}</span>`:`<b class="m">${issiTxt(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
+    ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiShort(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgTxt(x.destination)}</span>`:`<b class="m">${issiShort(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
   </div>
   <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${stations.length}</span>${helpBtn('ovst')}<span class="sp"></span><a data-go="stations" href="#stations">Cells ›</a></div>
     ${helpNote('ovst',CELL_ID_HELP+' Cells are counted only for stations with the <code>bts-info</code> extension; a station without it is counted as a station, its cells are unknown. Apps and other terminals are not stations and have no cells.')}
-    ${stations.length?stations.map(s=>`<div class="row"><div class="ric s">${ic('bts')}</div><div class="rm"><div class="rt">${esc(s.name)}</div><div class="rs">${s.cells.length?s.cells.length+' cell'+(s.cells.length===1?'':'s')+' · '+s.cells.map(x=>esc(x.name)+' ('+x.carrier+')').join(', '):'cells unknown (no <code>bts-info</code>)'}${s.tele&&s.tele.version?' · FlowStation '+esc(s.tele.version):''}</div></div>
+    ${stations.length?stations.map(s=>`<div class="row"><div class="ric s">${ic('bts')}</div><div class="rm"><div class="rt">${esc(s.name)}${infoOf(s.name)?` <span class="mut" style="font-weight:500">(${esc(infoOf(s.name))})</span>`:''}</div><div class="rs">${s.cells.length?s.cells.length+' cell'+(s.cells.length===1?'':'s')+' · '+s.cells.map(x=>esc(x.name)+' ('+x.carrier+')').join(', '):'cells unknown (no <code>bts-info</code>)'}${s.tele&&s.tele.version?' · FlowStation '+esc(s.tele.version):''}</div></div>
       <div class="rr">${s.online?'<span class="st"><i></i>Online</span>':'<span class="st i"><i></i>Offline</span>'}<br>${s.online?s.regs+' radio'+(s.regs===1?'':'s'):(s.gone?'gone '+ago(s.gone):'')}</div></div>`).join(''):'<div class="empty">No stations connected</div>'}</div>
    <div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${ms.length}</span><span class="sp"></span><a data-go="radios" href="#radios">All radios ›</a></div>
     ${ms.length?ms.slice(0,6).map(m=>`<div class="ev"><b class="m">${issiTxt(m.issi)}</b>${m.cell&&m.cell.name?`<span class="chip">${esc(m.cell.name)}</span>`:m.basestation_name?`<span class="chip">${esc(m.basestation_name)}</span>`:''}<span class="ml mut">${(m.groups||[]).length?(m.groups||[]).length+' group'+((m.groups||[]).length===1?'':'s'):''}</span></div>`).join('')+(ms.length>6?`<div class="ev"><a data-go="radios" href="#radios" class="mut">+ ${ms.length-6} more</a></div>`:''):'<div class="empty">No radios registered</div>'}</div>
@@ -815,7 +816,7 @@ R.overview=()=>{
    <div class="card"><div class="ch"><h2>Recent cell changes</h2><span class="sp"></span><a data-go="roaming" href="#roaming">Roaming log ›</a></div>
     ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${issiTxt(r.issi)}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
    <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="sp"></span><a data-go="sds" href="#sds">All SDS ›</a></div>
-    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiTxt(s.source)}</b><span class="arrow">→</span><b class="m">${issiTxt(s.destination)}</b>${netChips(s)?' '+netChips(s):''}<span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
+    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiShort(s.source)}</b><span class="arrow">→</span><b class="m">${issiShort(s.destination)}</b>${netChips(s)?' '+netChips(s):''}<span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
   </div>`;
 };
 const RESEL={undeclared:['i','undeclared'],unannounced:['w','unannounced'],announced_type_1:['a','announced · type 1'],announced_type_2:['a','announced · type 2'],announced_type_3:['a','announced · type 3']};
@@ -875,6 +876,8 @@ const tgTxt=g=>{if(g>16777215){const n=netOfSlot(Math.floor(g/16777216));return 
 const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName(g))}"`:''}>${tgTxt(g)}</span>`;
 // "2320972 · OE4SXM" for running text, number and name stacked for tables.
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
+// Compact form for the Overview: the name alone when there is one (the ISSI stays in the tooltip).
+const issiShort=issi=>{const n=nameOf(issi);return n?`<span title="ISSI ${issi}">${esc(n)}</span>`:String(issi);};
 const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
 // Info text of a login (Accounts page), if any.
 // A login's name: its Accounts name ([bts_locations]), else a Directory name (bridge logins up to 12 digits).

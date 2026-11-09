@@ -35,6 +35,10 @@ Version 1.20.4 adds:
   larger touch area; a cell without LA or MCC/MNC shows "—"; the pages
   "Configuration" and "Settings" are called "Config file" and "Server
   settings"; the map card is called "Radio positions".
+- **Overview, live calls, recent calls and recent SDS:** a radio with a name or call sign shows the
+  name alone (the ISSI is in the tooltip and on the Calls page).
+- **Overview, stations:** a station with a name (Accounts, info) shows it
+  after its number: "1000002 (Name)".
 - **DGNA: saved talkgroups.** A "Saved TGs…" dropdown next to the GSSI
   field fills in GSSI and name from the groups the server knows.
 
