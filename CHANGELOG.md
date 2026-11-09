@@ -6,8 +6,11 @@ Unreleased:
 
 - **Managed talkgroups.** A card on the Routing page (folds to a thin bar:
   folded while off, open while on) closes the set of talkgroups: only
-  allowed groups may be used, i.e. the card's list and the groups of
-  talkgroup pools and linked talkgroups. Groups are allowed by GSSI with an
+  allowed groups may be used, i.e. the card's list, the groups of
+  talkgroup pools and linked talkgroups, and groups with the access "Only
+  these" (limited to their ISSIs anyway). Each group shows its access badges
+  ("Only N ISSIs", "N blocked", "RX only"); Edit / Rules opens the Directory
+  dialog (name, access, RX only) right on the Routing page. Groups are allowed by GSSI with an
   optional name (written to the Directory) or from the foldable "Saved TGs
   on server" (groups the server knows, including refused ones). Affiliations
   to any other group are not recorded and its group calls are dropped

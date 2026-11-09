@@ -2952,6 +2952,9 @@ mod group_access_tests {
         // A name or an access entry alone does not allow a group.
         config.gssi_names.insert(GSSI.to_string(), "District".into());
         config.group_access.insert("4000".into(), GroupAccessConfig { rx_only: true, ..Default::default() });
+        // A block list does not allow a group either; an allow list ("Only these") does.
+        config.group_access.insert("4100".into(), GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![5009], ..Default::default() });
+        config.group_access.insert("4200".into(), GroupAccessConfig { mode: GroupAccessMode::Allow, issis: vec![5003, 5004], ..Default::default() });
         config.talkgroup_pools.push(TalkgroupPoolConfig { name: "Link".into(), groups: vec![91, 2326406], linked: true, ..Default::default() });
         Arc::new(AppState::new(config, path.to_path_buf()).0)
     }
@@ -2981,6 +2984,13 @@ mod group_access_tests {
             sub(&state, st[(n % 10) as usize].0, SUB_AFFILIATE, 5000 + n, &[9, 232, 91, 2326406, 4000]).await;
         }
         assert_eq!(groups_of(&state, 5007).await, vec![9, 91, 232, 2326406], "allowed and linked/pool groups pass; 4000 (access entry only) does not");
+        for n in 0..25u32 {
+            sub(&state, st[(n % 10) as usize].0, SUB_AFFILIATE, 5000 + n, &[4100, 4200]).await;
+        }
+        assert_eq!(groups_of(&state, 5003).await, vec![9, 91, 232, 4200, 2326406], "Only these counts as allowed, for its ISSIs");
+        assert!(!groups_of(&state, 5005).await.contains(&4200), "Only these still admits only its ISSIs");
+        assert!((5000..5025).all(|i| state.inner.try_read().map_or(true, |inn| !inn.subscribers.get(&i).is_some_and(|s| s.groups.contains(&4100)))), "a block list does not allow a group");
+        assert!(state.listed_groups().contains(&4200) && !state.listed_groups().contains(&4100));
         talk(&state, st[0].0, 5000, 0).await;
         assert!(st.iter_mut().all(|(_, rx)| drain(rx) == 0), "no group call on an unlisted group");
         let id = talk(&state, st[0].0, 5000, EMERGENCY_PRIORITY).await;
@@ -3041,14 +3051,14 @@ mod group_access_tests {
         assert_eq!(groups_of(&state, 5000).await, vec![9], "the allowed group stays");
         let got = lists(&mut a_rx);
         assert_eq!(got.last().unwrap()["managed"], true);
-        assert_eq!(got.last().unwrap()["listed"], serde_json::json!([9, 91, 232, 2326406]));
+        assert_eq!(got.last().unwrap()["listed"], serde_json::json!([9, 91, 232, 4200, 2326406]));
 
         assert_eq!(set(serde_json::json!({"allow": "77x"})).await.status(), axum::http::StatusCode::BAD_REQUEST);
         set(serde_json::json!({"allow": " 2322 ", "name": "District South"})).await;
         assert_eq!(state.gssi_names.read().unwrap()["2322"], "District South", "the name goes to the Directory");
         set(serde_json::json!({"allow": "2321"})).await;
         assert_eq!(state.gssi_names.read().unwrap()[&GSSI.to_string()], "District", "no name: the old one stays");
-        assert_eq!(lists(&mut a_rx).last().unwrap()["listed"], serde_json::json!([9, 91, 232, 2321, 2322, 2326406]));
+        assert_eq!(lists(&mut a_rx).last().unwrap()["listed"], serde_json::json!([9, 91, 232, 2321, 2322, 4200, 2326406]));
         sub(&state, st[0].0, SUB_AFFILIATE, 5000, &[GSSI]).await;
         assert_eq!(groups_of(&state, 5000).await, vec![9, GSSI]);
 

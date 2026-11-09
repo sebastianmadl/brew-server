@@ -93,8 +93,8 @@ pub struct GroupAccessConfig {
 }
 
 /// `[talkgroups]`. `managed = true`: a closed set of talkgroups. Only an
-/// allowed group may be used: one in `allowed`, or one in a talkgroup pool or
-/// a linked talkgroup. An affiliation to any other group is not recorded and
+/// allowed group may be used: one in `allowed`, one in a talkgroup pool or
+/// a linked talkgroup, or one with an allow list in `[group_access]`. An affiliation to any other group is not recorded and
 /// its group calls are dropped (emergency calls pass); a Basestation with
 /// `group-access` refuses the attachment on the air. Groups of other networks
 /// (aliases) are left to their link. `managed = false` (the default) changes

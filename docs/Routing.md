@@ -155,8 +155,12 @@ Two more pages of the new dashboard, both for admins:
 - **Managed talkgroups** (Routing page, a card that folds to a thin bar:
   folded while off, open while on, foldable either way): a closed set of
   groups. Switched on, radios may only use allowed groups: the ones in the
-  card's list, and every group of a talkgroup pool or linked talkgroup
-  (listed as *automatic*). The server records no affiliation to any other
+  card's list, every group of a talkgroup pool or linked talkgroup, and
+  every group with the access *Only these* (only its ISSIs may use it
+  anyway); these are listed as *automatic*. Each row shows the access
+  badges of the group (*Only N ISSIs*, *N blocked*, *RX only*), and *Edit*
+  (group with rules) or *Rules* (open group) opens the same dialog as on the
+  Directory page. The server records no affiliation to any other
   group and drops its group calls (emergency calls pass); radios already on
   such a group are dropped from it, and a FlowStation with `group-access`
   refuses the attachment on the air. Switched off, every group is open and
@@ -164,7 +168,8 @@ Two more pages of the new dashboard, both for admins:
   with an optional name (written to the Directory), or with *+ Allow* from
   *Saved TGs on server*: the groups the server knows (a Directory name or
   access entry, in use now, or refused since the start) that are not allowed
-  yet. A Directory name alone does not allow a group.
+  yet. A Directory name, a block list or RX only alone does not allow a
+  group.
 
   ```toml
   [talkgroups]

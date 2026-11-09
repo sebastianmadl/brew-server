@@ -154,8 +154,9 @@ a.tile{color:inherit;cursor:pointer}
 .card.shut .ch.tgh{border-bottom:0}
 .tgadd{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--sep)}
 .tgsaved{border-top:1px solid var(--sep)}.tgsaved>summary{padding:12px 18px;cursor:pointer;font-weight:650;font-size:14px;list-style-position:inside}
-.tgt{table-layout:fixed}.tgt col.g{width:17%}.tgt col.n{width:35%}.tgt col.w{width:32%}.tgt col.a{width:16%}
-@media (max-width:760px){.tgt col.g{width:28%}.tgt col.n{width:44%}.tgt col.a{width:28%}}
+.tgt{table-layout:fixed}.tgt col.g{width:15%}.tgt col.n{width:37%}.tgt col.w{width:26%}.tgt col.a{width:22%}
+.tgt td.tga{text-align:right;white-space:nowrap}.tgc{margin-top:3px;display:flex;flex-wrap:wrap;gap:4px}
+@media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
 .tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
@@ -1178,6 +1179,12 @@ async function delAcc(i){
 const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
   gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'District North',ex2:'2322, District South',file:'gssi-directory.csv'}};
 const dirK=()=>UI.filter.dirk==='gssi'?'gssi':'issi';
+// Badges for the access entry of a group ([group_access]): "Only N ISSIs" / "N blocked" and "RX only"; '' when open.
+function accChips(a){if(!a)return '';const n=a.issis.length;
+  const join=!n?'':a.mode==='block'?`<span class="chip w" title="${a.issis.join(', ')}">${n} blocked</span>`:`<span class="chip a" title="${a.issis.join(', ')}">Only ${n} ISSI${n===1?'':'s'}</span>`;
+  const rx=!a.rx_only?'':a.rx_only_issis.length?`<span class="chip i" title="${a.rx_only_issis.join(', ')}">${a.rx_only_issis.length} RX only</span>`:'<span class="chip i">RX only</span>';
+  return [join,rx].filter(Boolean).join(' ');}
+const onlyThese=a=>!!(a&&a.mode!=='block'&&a.issis.length);
 const dirNames=()=>D[dirK()]||{};
 R.issis=()=>{
   const adm=D.who.admin;const K=dirK(),d=DIR[K];const q=UI.filter.issi||'';const f=UI.filter.issif||'all';
@@ -1193,14 +1200,11 @@ R.issis=()=>{
   const keys=[...new Set([...Object.keys(names),...seen.keys(),...Object.keys(acc),...hid])].sort((a,b)=>a-b);
   const plain=k=>!names[k]&&!acc[k];
   const rows=keys.filter(k=>(f==='hidden'?hid.has(k):!(hid.has(k)&&plain(k)))&&(f==='all'||f==='hidden'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k])||(f==='limited'&&acc[k]))&&match(q,k,names[k],...((acc[k]||{}).issis||[])));
-  const accCell=k=>{const a=acc[k];if(!a)return '<span class="mut">Open</span>';const n=a.issis.length;
-    const join=!n?'':a.mode==='block'?`<span class="chip w" title="${a.issis.join(', ')}">${n} blocked</span>`:`<span class="chip a" title="${a.issis.join(', ')}">Only ${n} ISSI${n===1?'':'s'}</span>`;
-    const rx=!a.rx_only?'':a.rx_only_issis.length?`<span class="chip i" title="${a.rx_only_issis.join(', ')}">${a.rx_only_issis.length} RX only</span>`:'<span class="chip i">RX only</span>';
-    return [join,rx].filter(Boolean).join(' ')||'<span class="mut">Open</span>';};
+  const accCell=k=>accChips(acc[k])||'<span class="mut">Open</span>';
   const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
   const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. The login of a bridge (Brew login in Network mode, up to 12 digits, for example a link to another network) can be named here too; the name shows under the login on Stations &amp; Cells. Terminals (apps) and base stations are named on the Accounts page. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
-    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones; who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. <br><br>Which groups may be used at all (<b>managed talkgroups</b>) is set on the Routing page; naming a group here does not allow it.<br><br><b>✕</b> hides a group without a name from this page while radios are on it (display only); the filter <i>Hidden</i> shows it again. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>, <code>[talkgroups]</code>).';
+    :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones (with <i>Only these</i>, listed listeners missing from the allow list are added to it on save); who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. <br><br>Which groups may be used at all (<b>managed talkgroups</b>) is set on the Routing page; naming a group here does not allow it, but a group with <i>Only these</i> counts as allowed there.<br><br><b>✕</b> hides a group without a name from this page while radios are on it (display only); the filter <i>Hidden</i> shows it again. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>, <code>[talkgroups]</code>).';
   return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']].concat(hid.size?[['hidden','Hidden ('+hid.size+')']]:[]):[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>
   <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
@@ -1210,8 +1214,9 @@ R.issis=()=>{
      ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete name">${ic('trash')}<span class="hide-s">Delete</span></button>`:acc[k]?`<button class="btn" onclick="editName('${k}')">Edit</button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}${K==='gssi'&&plain(k)?(hid.has(k)?` <button class="btn" onclick="hideGroup('${k}',false)">Show</button>`:` <button class="btn" onclick="hideGroup('${k}',true)" aria-label="Hide group ${k} from this page" title="Hide from this page">✕</button>`):''}</td>`:''}</tr>`).join('')||`<tr><td colspan="5" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
    </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
 };
-function editName(k){
-  const K=dirK(),d=DIR[K];const n=dirNames()[k]||'';const a=K==='gssi'?(D.access||{})[k]:null;
+// The Directory dialog; from the Routing page it opens with kind 'gssi' (name, access, RX only).
+function editName(k,kind){
+  const K=kind||dirK(),d=DIR[K];UI.edK=K;UI.edFrom=kind?'tg-msg':'issi-msg';const n=(D[K]||{})[k]||'';const a=K==='gssi'?(D.access||{})[k]:null;
   const am=a&&a.issis.length?a.mode:'open';
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${K==='gssi'?(k?'Group '+k:'Add group'):(k?(n?'Edit name':'Name for '+k):'Add name')}</h3></div><div class="sb">
    <div><label class="l" for="in-issi">${d.what}</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. ${d.ex}"></div>
@@ -1222,6 +1227,7 @@ function editName(k){
    <div class="mut" style="font-size:12px;margin-top:4px">Separated by commas, spaces or new lines. An empty list opens the group.</div></div>
    <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="in-rx" aria-checked="${!!(a&&a.rx_only)}" onclick="const on=this.getAttribute('aria-checked')!=='true';this.setAttribute('aria-checked',on);$('in-rx-box').hidden=!on"></button><span><b style="font-size:13.5px">RX only</b><br><span class="mut" style="font-size:12px">Listen only: these radios may not talk on the group</span></span></label>
    <div id="in-rx-box" ${a&&a.rx_only?'':'hidden'}><label class="l" for="in-rx-list">Listen-only ISSIs (empty = everyone)</label>
+   <div class="mut" style="font-size:12px;margin:0 0 4px">With <i>Only these</i>, ISSIs missing above are added there when you save (a listener must be allowed on the group).</div>
    <textarea class="f" id="in-rx-list" rows="3" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="empty = nobody may talk">${a?a.rx_only_issis.join(', '):''}</textarea></div>`:''}
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveName()">Save</button></div>`;
@@ -1230,19 +1236,22 @@ function editName(k){
 function setAcc(v){document.querySelectorAll('#in-acc button').forEach(x=>{const on=x.dataset.v===v;x.setAttribute('aria-pressed',on);x.setAttribute('aria-checked',on);});
   $('in-acc-box').hidden=v==='open';$('in-acc-l').textContent=v==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)';}
 async function saveName(){
-  const K=dirK();const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
-  let acc=null;
+  const K=UI.edK||dirK();const m=$('sheet-msg');const issi=$('in-issi').value.trim(),name=$('in-name').value.trim();
+  let acc=null,added=[];
   if(K==='gssi'){const b=document.querySelector('#in-acc button[aria-pressed="true"]');const v=b?b.dataset.v:'open';
     const rx=$('in-rx').getAttribute('aria-checked')==='true';
     acc={gssi:issi,mode:v==='block'?'block':'allow',issis:v==='open'?'':$('in-acc-list').value,rx_only:rx,rx_only_issis:rx?$('in-rx-list').value:''};
-    if(v!=='open'&&!acc.issis.trim()){m.className='msg err';m.textContent='Enter at least one ISSI, or choose Open.';return;}}
-  const had=dirNames()[issi]||'';
+    if(v!=='open'&&!acc.issis.trim()){m.className='msg err';m.textContent='Enter at least one ISSI, or choose Open.';return;}
+    // Only these + listen-only ISSIs: a listener must be admitted to listen, so add the missing ones to the allowed ISSIs.
+    if(v==='allow'&&rx){const sp=t=>t.split(/[\s,;]+/).filter(Boolean),have=sp(acc.issis),miss=sp(acc.rx_only_issis).filter(i=>!have.includes(i));
+      if(miss.length){acc.issis=have.concat(miss).join(', ');added=miss;}}}
+  const had=(D[K]||{})[issi]||'';
   if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||acc.rx_only||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
   m.className='msg mut';m.textContent='Saving…';
   try{
     if(name||had)D[K]=await postJ(DIR[K].api+'/set',{issi,name});
-    if(acc)D.access=await postJ('/api/group-access/set',acc);
-    closeSheet();setMsg('issi-msg','ok',`${issi} saved.`);render(true);
+    if(acc){D.access=await postJ('/api/group-access/set',acc);D.tg=await getJ('/api/talkgroups').catch(()=>D.tg);}
+    closeSheet();setMsg(UI.edFrom||'issi-msg','ok',`${issi} saved.`+(added.length?` ${added.join(', ')} also added to the allowed ISSIs (listen only).`:''));render(true);
   }catch(e){m.className='msg err';m.textContent=e.message;}
 }
 // Managed talkgroups (Routing page): one card that folds to a thin bar. Off it starts folded (open it to
@@ -1254,21 +1263,26 @@ function tgCard(adm,pools){
   const seen=new Map();
   for(const m of ((D.conn&&D.conn.mobile_stations)||[]))for(const g of (m.groups||[]))if(g<=16777215)seen.set(String(g),(seen.get(String(g))||0)+1);
   for(const c of ((D.status&&D.status.active_calls)||[]))if(c.kind==='group'&&c.destination<=16777215&&!seen.has(String(c.destination)))seen.set(String(c.destination),0);
+  // Allowed without being on the list: groups of pools / linked talkgroups, and groups with "Only these" (limited anyway).
   const auto=new Map();
   for(const p of (pools||[]))for(const g of (p.groups||[]))if(!allowed.has(String(g))&&!auto.has(String(g))){
-    const r=(p.remote||[])[0];auto.set(String(g),p.linked&&r?`Linked: ${esc(r.network)}:${r.gssi}`:`Pool: ${esc(p.name)}`);}
+    const r=(p.remote||[])[0];auto.set(String(g),`<span class="chip b">${p.linked&&r?`Linked: ${esc(r.network)}:${r.gssi}`:`Pool: ${esc(p.name)}`}</span>`);}
+  for(const k of Object.keys(acc))if(onlyThese(acc[k])&&+k>=1&&+k<=16777215&&!allowed.has(k)&&!auto.has(k))auto.set(k,'');
+  // Name with the badges (pool / linked, access) under it.
+  const cell=(k,extra)=>{const c=[extra||'',accChips(acc[k])].filter(Boolean).join(' ');return c?`${names[k]?esc(names[k])+'<div class="tgc">':'<div class="tgc" style="margin-top:0">'}${c}</div>`:nm(k);};
+  const ed=k=>adm?(acc[k]?`<button class="btn" onclick="editName('${k}','gssi')" aria-label="Edit group ${k}">Edit</button>`:`<button class="btn" onclick="editName('${k}','gssi')" aria-label="Access rules for group ${k}" title="Who may use or talk on the group">Rules</button>`):'';
   const now=k=>{const n=seen.get(k);return n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`;};
   const nm=k=>names[k]?esc(names[k]):'<span class="mut">—</span>';
   const cols='<colgroup><col class="g"><col class="n"><col class="w hide-s"><col class="a"></colgroup>';
-  const rows=[...allowed].sort((a,b)=>a-b).map(k=>`<tr><td><b class="m">${k}</b></td><td>${nm(k)}</td><td class="hide-s">${now(k)}</td><td style="text-align:right">${adm?`<button class="btn" onclick="disallowTg(${k})" aria-label="Remove ${k} from the allowed talkgroups" title="Remove">✕</button>`:''}</td></tr>`)
-    .concat([...auto.keys()].sort((a,b)=>a-b).map(k=>`<tr class="off"><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k])+'<div style="margin-top:2px">':''}<span class="chip b">${auto.get(k)}</span>${names[k]?'</div>':''}</td><td class="hide-s">${now(k)}</td><td style="text-align:right"><span class="mut" style="font-size:12px" title="Allowed because the group is in a pool or linked talkgroup">automatic</span></td></tr>`));
+  const rows=[...allowed].sort((a,b)=>a-b).map(k=>`<tr><td><b class="m">${k}</b></td><td>${cell(k)}</td><td class="hide-s">${now(k)}</td><td class="tga">${ed(k)}${adm?` <button class="btn" onclick="disallowTg(${k})" aria-label="Remove ${k} from the allowed talkgroups" title="Remove">✕</button>`:''}</td></tr>`)
+    .concat([...auto.keys()].sort((a,b)=>a-b).map(k=>`<tr class="off"><td><b class="m">${k}</b></td><td>${cell(k,auto.get(k))}</td><td class="hide-s">${now(k)}</td><td class="tga">${ed(k)}<div class="mut" style="font-size:12px" title="${auto.get(k)?'Allowed because the group is in a pool or linked talkgroup':'Allowed because only the listed ISSIs may use the group (Only these)'}">automatic</div></td></tr>`));
   const saved=[...new Set([...Object.keys(names),...Object.keys(acc),...seen.keys(),...Object.keys(refused)])].filter(k=>+k>=1&&+k<=16777215&&!allowed.has(k)&&!auto.has(k)).sort((a,b)=>a-b);
-  const savedRows=saved.map(k=>`<tr><td><b class="m">${k}</b></td><td>${refused[k]?`${names[k]?esc(names[k])+'<div style="margin-top:2px">':''}<span class="chip d">refused · ${refused[k]} radio${refused[k]===1?'':'s'} tried</span>${names[k]?'</div>':''}`:nm(k)}</td><td class="hide-s">${now(k)}</td><td style="text-align:right">${adm?`<button class="btn" onclick="allowTg('${k}','')">${ic('plus')}Allow</button>`:''}</td></tr>`).join('');
+  const savedRows=saved.map(k=>`<tr><td><b class="m">${k}</b></td><td>${cell(k,refused[k]?`<span class="chip d">refused · ${refused[k]} radio${refused[k]===1?'':'s'} tried</span>`:'')}</td><td class="hide-s">${now(k)}</td><td class="tga">${acc[k]?ed(k)+' ':''}${adm?`<button class="btn" onclick="allowTg('${k}','')">${ic('plus')}Allow</button>`:''}</td></tr>`).join('');
   const n=allowed.size+auto.size;
   return `<div class="card${open?'':' shut'}"><div class="ch tgh" role="button" tabindex="0" aria-expanded="${open}" onclick="UI.tgOpen=!(${open});render(true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
     <span class="chev" aria-hidden="true">▸</span><h2>Managed talkgroups</h2><span class="cnt">${n} allowed</span>${tg.managed?'<span class="chip a">on</span>':'<span class="chip i">off</span>'}<span onclick="event.stopPropagation()">${helpBtn('tgm')}</span><span class="sp"></span>
     <label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600" onclick="event.stopPropagation()"><button class="tog" role="switch" aria-checked="${!!tg.managed}" ${adm?'':'disabled'} onclick="setManaged(this.getAttribute('aria-checked')!=='true')"></button><span class="hide-s">Only allowed talkgroups</span></label></div>
-   ${helpNote('tgm','<b>Managed talkgroups</b>: a closed set of talkgroups. Switched on, radios may only use the allowed groups: the ones in this list, and every group of a talkgroup pool or linked talkgroup (marked <i>automatic</i>). The server records no affiliation to any other group and drops its group calls (emergency calls pass); radios already on such a group are dropped from it, and a FlowStation with <code>group-access</code> refuses the attachment on the air. Switched off, every group is open as before and the list is kept, so it can be prepared first. A name given with <i>Allow</i> goes to the Directory. <i>Saved TGs on server</i> lists groups the server knows (with a name or access entry on the Directory page, in use now, or refused) that are not allowed yet. Written to the config file (<code>[talkgroups]</code>), no restart.')}
+   ${helpNote('tgm','<b>Managed talkgroups</b>: a closed set of talkgroups. Switched on, radios may only use the allowed groups: the ones in this list, every group of a talkgroup pool or linked talkgroup, and every group with the access <i>Only these</i> (only the listed ISSIs may use it anyway); these are marked <i>automatic</i>. The badges show the access rules of a group (<i>Only N ISSIs</i>, <i>N blocked</i>, <i>RX only</i>); <i>Edit</i> or <i>Rules</i> opens the same dialog as on the Directory page. The server records no affiliation to any other group and drops its group calls (emergency calls pass); radios already on such a group are dropped from it, and a FlowStation with <code>group-access</code> refuses the attachment on the air. Switched off, every group is open as before and the list is kept, so it can be prepared first. A name given with <i>Allow</i> goes to the Directory. <i>Saved TGs on server</i> lists groups the server knows (with a name or access entry on the Directory page, in use now, or refused) that are not allowed yet. Written to the config file (<code>[talkgroups]</code>), no restart.')}
    ${open?`${adm?`<div class="tgadd"><input class="f" id="tg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" onkeydown="if(event.key==='Enter')allowTg($('tg-gssi').value,$('tg-name').value)"><input class="f" id="tg-name" maxlength="60" placeholder="Name (optional, goes to the Directory)" style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')allowTg($('tg-gssi').value,$('tg-name').value)"><button class="btn pri" onclick="allowTg($('tg-gssi').value,$('tg-name').value)">${ic('plus')}Allow</button></div>`:''}
    ${rows.length?`<div class="tw"><table class="tgt">${cols}<thead><tr><th>GSSI</th><th>Name</th><th class="hide-s">Now</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<div class="empty">No talkgroups allowed yet${tg.managed?': radios can use none (except emergency calls)':''}.</div>`}
    <details class="tgsaved" ${UI.tgSaved?'open':''} ontoggle="UI.tgSaved=this.open"><summary>Saved TGs on server <span class="cnt" style="font:600 11.5px var(--mono);color:var(--text3)">${saved.length} not allowed</span></summary>
@@ -1277,7 +1291,7 @@ function tgCard(adm,pools){
 }
 async function setManaged(on){
   const n=((D.tg&&D.tg.listed)||[]).length;
-  if(on&&!confirm(`Managed talkgroups: radios may only use the ${n} allowed group${n===1?'':'s'} (this list, and the groups of pools and linked talkgroups). Radios on any other group are dropped from it. Switch on?`))return;
+  if(on&&!confirm(`Managed talkgroups: radios may only use the ${n} allowed group${n===1?'':'s'} (this list, the groups of pools and linked talkgroups, and groups with Only these). Radios on any other group are dropped from it. Switch on?`))return;
   try{D.tg=await postJ('/api/talkgroups/set',{managed:on});UI.tgOpen=undefined;setMsg('tg-msg','ok',on?'Managed talkgroups on.':'Managed talkgroups off: every group is open again, the list is kept.');}catch(e){setMsg('tg-msg','err',e.message);}
   render(true);
 }
@@ -1480,5 +1494,16 @@ mod tests {
         let dir = &PAGE_HTML[PAGE_HTML.find("R.issis=()=>{").unwrap()..];
         let dir = &dir[..dir.find("\n};\n").unwrap()];
         assert!(!dir.contains("setManaged") && !dir.contains("Refused"), "no managed switch on the Directory page");
+    }
+
+    #[test]
+    fn routing_talkgroups_show_access_badges_and_edit() {
+        let card = &PAGE_HTML[PAGE_HTML.find("function tgCard(").unwrap()..];
+        let card = &card[..card.find("\n}\n").unwrap()];
+        assert!(card.contains("accChips(acc[k])"), "badges of the access entry");
+        assert!(card.contains("onlyThese(acc[k])"), "Only these groups are allowed automatically");
+        assert!(card.contains("editName('${k}','gssi')") && card.contains(">Rules</button>"), "Edit / Rules opens the Directory dialog");
+        assert!(PAGE_HTML.contains("function editName(k,kind){"));
+        assert!(PAGE_HTML.contains("if(v==='allow'&&rx){"), "listen-only ISSIs are added to an allow list");
     }
 }

@@ -165,6 +165,9 @@ pub async fn set(State(state): State<Arc<AppState>>, Json(req): Json<AccessReque
             g.insert(gssi.to_string(), entry.clone());
         }
     }
+    if state.group_listed(gssi) {
+        if let Ok(mut r) = state.refused_groups.write() { r.remove(&gssi); }
+    }
     tracing::warn!(gssi, mode = ?entry.mode, issis = entry.issis.len(), rx_only = entry.rx_only, rx_only_issis = entry.rx_only_issis.len(), "group access changed from the dashboard");
     refresh(&state).await;
     let cfg = state.config_snapshot();

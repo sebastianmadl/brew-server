@@ -443,11 +443,20 @@ impl AppState {
     }
 
     /// Whether `gssi` is allowed for managed talkgroups: in
-    /// `[talkgroups] allowed`, or a group of a talkgroup pool or linked
-    /// talkgroup.
+    /// `[talkgroups] allowed`, a group of a talkgroup pool or linked
+    /// talkgroup, or a group with an allow list (`[group_access]` "Only
+    /// these": limited to the listed ISSIs anyway).
     pub fn group_listed(&self, gssi: u32) -> bool {
         self.talkgroups.read().is_ok_and(|t| t.allowed.contains(&gssi))
             || self.pools.read().is_ok_and(|p| p.iter().any(|p| p.groups.contains(&gssi)))
+            || self.only_these_groups().contains(&gssi)
+    }
+
+    /// Groups with an allow list (`[group_access]` mode allow, ISSIs listed).
+    pub fn only_these_groups(&self) -> Vec<u32> {
+        self.group_access.read().map(|g| g.iter()
+            .filter(|(_, a)| a.mode == crate::config::GroupAccessMode::Allow && !a.issis.is_empty())
+            .filter_map(|(k, _)| k.parse().ok()).collect()).unwrap_or_default()
     }
 
     /// Every allowed group (see `group_listed`), sorted.
@@ -455,6 +464,7 @@ impl AppState {
         let mut out: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         if let Ok(t) = self.talkgroups.read() { out.extend(t.allowed.iter().copied()); }
         if let Ok(p) = self.pools.read() { out.extend(p.iter().flat_map(|p| p.groups.iter().copied())); }
+        out.extend(self.only_these_groups());
         out.into_iter().collect()
     }
 
