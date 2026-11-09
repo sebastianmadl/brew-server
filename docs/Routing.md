@@ -150,18 +150,26 @@ Two more pages of the new dashboard, both for admins:
   rx_only_issis = [2321100] # optional, empty = everyone listens only
   ```
 
-  **Managed talkgroups** (switch at the top of the Groups list): a closed
-  set of groups. Only a listed group may be used: one with a name or an
-  access entry on the Directory page, or a group of a talkgroup pool or
-  linked talkgroup. The server records no affiliation to any other group and
-  drops its group calls (emergency calls pass); radios already on such a
-  group are dropped from it, and a FlowStation with `group-access` refuses
-  the attachment on the air. Off, nothing changes. Unnamed groups radios are
-  on can be hidden from the list with ✕ (display only, filter "Hidden").
+  Unnamed groups radios are on can be hidden from the Directory with ✕
+  (display only, filter "Hidden", `[talkgroups] hidden`).
+- **Managed talkgroups** (Routing page, a card that folds to a thin bar:
+  folded while off, open while on, foldable either way): a closed set of
+  groups. Switched on, radios may only use allowed groups: the ones in the
+  card's list, and every group of a talkgroup pool or linked talkgroup
+  (listed as *automatic*). The server records no affiliation to any other
+  group and drops its group calls (emergency calls pass); radios already on
+  such a group are dropped from it, and a FlowStation with `group-access`
+  refuses the attachment on the air. Switched off, every group is open and
+  the list is kept, so it can be prepared first. A group is allowed by GSSI
+  with an optional name (written to the Directory), or with *+ Allow* from
+  *Saved TGs on server*: the groups the server knows (a Directory name or
+  access entry, in use now, or refused since the start) that are not allowed
+  yet. A Directory name alone does not allow a group.
 
   ```toml
   [talkgroups]
   managed = true
+  allowed = [9, 232, 2321]
   hidden = [4000]   # hidden from the Directory page
   ```
 - **System -> Configuration:** the whole config file. Save checks it and

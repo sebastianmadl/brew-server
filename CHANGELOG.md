@@ -4,15 +4,19 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
-- **Managed talkgroups.** A switch on the Directory page (Groups) closes the
-  set of talkgroups: only listed groups may be used, i.e. groups with a name
-  or an access entry, and groups of talkgroup pools and linked talkgroups.
-  Affiliations to any other group are not recorded and its group calls are
-  dropped (emergency calls pass); radios already on such a group are dropped
-  from it. Basestations with `group-access` get `"managed"` and `"listed"`
-  in `SERVICE_GROUP_ACCESS` and refuse the attachment on the air (FlowStation
-  0.5.6 from this change on); older ones ignore the fields. Off (the default)
-  nothing changes. Config `[talkgroups] managed`.
+- **Managed talkgroups.** A card on the Routing page (folds to a thin bar:
+  folded while off, open while on) closes the set of talkgroups: only
+  allowed groups may be used, i.e. the card's list and the groups of
+  talkgroup pools and linked talkgroups. Groups are allowed by GSSI with an
+  optional name (written to the Directory) or from the foldable "Saved TGs
+  on server" (groups the server knows, including refused ones). Affiliations
+  to any other group are not recorded and its group calls are dropped
+  (emergency calls pass); radios already on such a group are dropped from
+  it. Basestations with `group-access` get `"managed"` and `"listed"` in
+  `SERVICE_GROUP_ACCESS` and refuse the attachment on the air (FlowStation
+  0.5.6 from this change on); older ones ignore the fields. Off (the
+  default) nothing changes and the list is kept. Config `[talkgroups]
+  managed`, `allowed`.
 - **Directory: hide groups.** A group without a name that radios are on can
   be hidden from the list with ✕ (`[talkgroups] hidden`, display only); the
   filter "Hidden" shows it again. Groups of other networks (`network:GSSI`)

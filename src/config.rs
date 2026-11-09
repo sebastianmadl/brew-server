@@ -92,19 +92,21 @@ pub struct GroupAccessConfig {
     pub rx_only_issis: Vec<u32>,
 }
 
-/// `[talkgroups]`. `managed = true`: a closed set of talkgroups. Only a
-/// listed group may be used: one with a name (`[gssi_names]`) or an access
-/// entry (`[group_access]`) on the Directory page, or one in a talkgroup pool
-/// or a linked talkgroup. An affiliation to any other group is not recorded
-/// and its group calls are dropped (emergency calls pass); a Basestation with
+/// `[talkgroups]`. `managed = true`: a closed set of talkgroups. Only an
+/// allowed group may be used: one in `allowed`, or one in a talkgroup pool or
+/// a linked talkgroup. An affiliation to any other group is not recorded and
+/// its group calls are dropped (emergency calls pass); a Basestation with
 /// `group-access` refuses the attachment on the air. Groups of other networks
 /// (aliases) are left to their link. `managed = false` (the default) changes
-/// nothing. `hidden`: groups no longer listed on the Directory page while
-/// radios are on them (display only).
+/// nothing; `allowed` is kept, so the list can be prepared before it is
+/// switched on. Edited on the Routing page. `hidden`: groups no longer listed
+/// on the Directory page while radios are on them (display only).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct TalkgroupsConfig {
     pub managed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden: Vec<u32>,
 }

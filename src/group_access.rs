@@ -13,9 +13,9 @@
 //! Brew has no such message, so a Basestation without it still lets the radio
 //! attach and talk locally.
 //!
-//! Managed talkgroups (`[talkgroups] managed`): only listed groups may be
-//! used (`AppState::group_listed`: a Directory name, an access entry, a pool
-//! or linked talkgroup). The same checks then refuse every other group, and
+//! Managed talkgroups (`[talkgroups] managed`): only allowed groups may be
+//! used (`AppState::group_listed`: `[talkgroups] allowed`, or a group of a
+//! pool or linked talkgroup). The same checks then refuse every other group, and
 //! `SERVICE_GROUP_ACCESS` carries `"managed":true` and the `"listed"` GSSIs so
 //! a Basestation refuses the attachment on the air too. A Basestation that
 //! does not know these fields ignores them. Off, nothing changes.
@@ -186,7 +186,13 @@ pub async fn talkgroups(State(state): State<Arc<AppState>>) -> Json<serde_json::
 
 fn talkgroups_view(state: &AppState) -> serde_json::Value {
     let t = state.talkgroups.read().map(|t| t.clone()).unwrap_or_default();
-    serde_json::json!({ "managed": t.managed, "hidden": t.hidden, "listed": state.listed_groups() })
+    let refused: BTreeMap<String, usize> = state.refused_groups.read()
+        .map(|r| r.iter().map(|(g, i)| (g.to_string(), i.len())).collect())
+        .unwrap_or_default();
+    serde_json::json!({
+        "managed": t.managed, "allowed": t.allowed, "hidden": t.hidden,
+        "listed": state.listed_groups(), "refused": refused,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +200,16 @@ pub struct TalkgroupsRequest {
     /// Switch managed talkgroups on or off.
     #[serde(default)]
     pub managed: Option<bool>,
+    /// Allow a group (GSSI as text, so a typed value can be checked).
+    #[serde(default)]
+    pub allow: Option<String>,
+    /// With `allow`: a name for the group, written to `[gssi_names]`
+    /// (empty keeps the name it has).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Take a group off the allowed list.
+    #[serde(default)]
+    pub disallow: Option<u32>,
     /// Hide a group from the Directory page.
     #[serde(default)]
     pub hide: Option<u32>,
@@ -202,23 +218,50 @@ pub struct TalkgroupsRequest {
     pub unhide: Option<u32>,
 }
 
-/// `POST /api/talkgroups/set` (admins): the managed switch, hide / unhide.
+/// `POST /api/talkgroups/set` (admins): the managed switch, allow (with an
+/// optional name for the Directory) / disallow, hide / unhide.
 pub async fn set_talkgroups(State(state): State<Arc<AppState>>, Json(req): Json<TalkgroupsRequest>) -> Response {
-    for g in [req.hide, req.unhide].into_iter().flatten() {
-        if !(1..=0xFF_FFFF).contains(&g) {
+    let gssi_ok = |g: u32| (1..=0xFF_FFFF).contains(&g);
+    for g in [req.hide, req.unhide, req.disallow].into_iter().flatten() {
+        if !gssi_ok(g) {
             return (StatusCode::BAD_REQUEST, format!("'{g}' is not a GSSI (1 to 16777215)")).into_response();
         }
     }
-    let switched = {
+    let allow = match req.allow.as_deref().map(str::trim) {
+        None => None,
+        Some(t) => match t.parse::<u32>() {
+            Ok(g) if gssi_ok(g) => Some(g),
+            _ => return (StatusCode::BAD_REQUEST, format!("'{t}' is not a GSSI (1 to 16777215)")).into_response(),
+        },
+    };
+    let name = req.name.as_deref().map(str::trim).unwrap_or("").to_owned();
+    if name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return (StatusCode::BAD_REQUEST, "name: up to 60 characters").into_response();
+    }
+    if let (Some(g), false) = (allow, name.is_empty()) {
+        if let Ok(mut n) = state.gssi_names.write() { n.insert(g.to_string(), name); }
+    }
+    let (switched, list_changed) = {
         let Ok(mut t) = state.talkgroups.write() else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         if let Some(g) = req.hide { if !t.hidden.contains(&g) { t.hidden.push(g); t.hidden.sort_unstable(); } }
         if let Some(g) = req.unhide { t.hidden.retain(|h| *h != g); }
+        let before = t.allowed.clone();
+        if let Some(g) = allow { if !t.allowed.contains(&g) { t.allowed.push(g); t.allowed.sort_unstable(); } }
+        if let Some(g) = req.disallow { t.allowed.retain(|a| *a != g); }
         let was = t.managed;
         if let Some(m) = req.managed { t.managed = m; }
-        (was != t.managed).then_some(t.managed)
+        ((was != t.managed).then_some(t.managed), before != t.allowed)
     };
+    if let Some(g) = allow {
+        if let Ok(mut r) = state.refused_groups.write() { r.remove(&g); }
+    }
     if let Some(on) = switched {
-        tracing::warn!(managed = on, listed = state.listed_groups().len(), "managed talkgroups switched from the dashboard");
+        tracing::warn!(managed = on, allowed = state.listed_groups().len(), "managed talkgroups switched from the dashboard");
+    }
+    if list_changed {
+        tracing::warn!(allow = ?allow, disallow = ?req.disallow, "allowed talkgroups changed from the dashboard");
+    }
+    if switched.is_some() || (list_changed && state.talkgroups_managed()) {
         refresh(&state).await;
     }
     let cfg = state.config_snapshot();

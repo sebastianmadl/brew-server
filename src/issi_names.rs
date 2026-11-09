@@ -127,8 +127,6 @@ async fn set_name(state: &Arc<AppState>, kind: Kind, req: NameRequest) -> Respon
             n.insert(issi, name);
         }
     }
-    // A group name lists the group for managed talkgroups.
-    if kind == Kind::Gssi && state.talkgroups_managed() { crate::group_access::refresh(state).await; }
     match save(state).await {
         Ok(()) => Json(snapshot(state, kind)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
@@ -167,8 +165,6 @@ async fn import_names(state: &Arc<AppState>, kind: Kind, req: ImportRequest) -> 
         *n = next;
     }
     tracing::warn!(replace = req.replace, list = kind.label(), "names imported from the dashboard");
-    // A group name lists the group for managed talkgroups.
-    if kind == Kind::Gssi && state.talkgroups_managed() { crate::group_access::refresh(state).await; }
     match save(state).await {
         Ok(()) => Json(snapshot(state, kind)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),

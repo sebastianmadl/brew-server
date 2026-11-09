@@ -373,8 +373,11 @@ pub struct AppState {
     pub gssi_names: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
     /// `[group_access]` as it is right now (see `group_access`).
     pub group_access: std::sync::RwLock<std::collections::BTreeMap<String, crate::config::GroupAccessConfig>>,
-    /// `[talkgroups]` as it is right now (managed switch, hidden groups).
+    /// `[talkgroups]` as it is right now (managed switch, allowed and hidden groups).
     pub talkgroups: std::sync::RwLock<crate::config::TalkgroupsConfig>,
+    /// Groups managed talkgroups refused since the start, with the ISSIs that
+    /// tried (in memory only, for the Routing page).
+    pub refused_groups: std::sync::RwLock<std::collections::BTreeMap<u32, std::collections::BTreeSet<u32>>>,
     /// The ISSI allowlist as enforced right now (`[allowlist]`), edited live
     /// like `blocked`. `enabled` false: kept, not enforced.
     pub allowlist: std::sync::RwLock<Allowlist>,
@@ -439,23 +442,30 @@ impl AppState {
         gssi > 0xFF_FFFF || !self.talkgroups_managed() || self.group_listed(gssi)
     }
 
-    /// Whether `gssi` is listed: a Directory name, an access entry, or a
-    /// group of a talkgroup pool or linked talkgroup.
+    /// Whether `gssi` is allowed for managed talkgroups: in
+    /// `[talkgroups] allowed`, or a group of a talkgroup pool or linked
+    /// talkgroup.
     pub fn group_listed(&self, gssi: u32) -> bool {
-        let key = gssi.to_string();
-        self.gssi_names.read().is_ok_and(|n| n.contains_key(&key))
-            || self.group_access.read().is_ok_and(|g| g.contains_key(&key))
+        self.talkgroups.read().is_ok_and(|t| t.allowed.contains(&gssi))
             || self.pools.read().is_ok_and(|p| p.iter().any(|p| p.groups.contains(&gssi)))
     }
 
-    /// Every listed group (see `group_listed`), sorted.
+    /// Every allowed group (see `group_listed`), sorted.
     pub fn listed_groups(&self) -> Vec<u32> {
         let mut out: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        let num = |k: &String| k.trim().parse::<u32>().ok();
-        if let Ok(n) = self.gssi_names.read() { out.extend(n.keys().filter_map(num)); }
-        if let Ok(g) = self.group_access.read() { out.extend(g.keys().filter_map(num)); }
+        if let Ok(t) = self.talkgroups.read() { out.extend(t.allowed.iter().copied()); }
         if let Ok(p) = self.pools.read() { out.extend(p.iter().flat_map(|p| p.groups.iter().copied())); }
         out.into_iter().collect()
+    }
+
+    /// Notes that `issi` tried to affiliate to `gssi` and managed talkgroups
+    /// refused it (shown on the Routing page so the group can be allowed).
+    pub fn note_refused_group(&self, gssi: u32, issi: u32) {
+        if let Ok(mut r) = self.refused_groups.write() {
+            if r.len() >= 1000 && !r.contains_key(&gssi) { return; }
+            let set = r.entry(gssi).or_default();
+            if set.len() < 100 { set.insert(issi); }
+        }
     }
 
     /// Whether `issi` is barred from communicating through this server, by the
@@ -623,6 +633,7 @@ impl AppState {
                 gssi_names: std::sync::RwLock::new(gssi_names),
                 group_access: std::sync::RwLock::new(group_access),
                 talkgroups: std::sync::RwLock::new(talkgroups),
+                refused_groups: std::sync::RwLock::new(std::collections::BTreeMap::new()),
                 allowlist: std::sync::RwLock::new(allowlist),
             },
             aprs_rx,
