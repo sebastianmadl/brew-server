@@ -69,6 +69,9 @@ pub struct Config {
     /// `[group_access."GSSI"]`: which radios may use a group. No entry (or an
     /// empty list) = open to everyone. See `group_access`.
     pub group_access: std::collections::BTreeMap<String, GroupAccessConfig>,
+    /// `[talkgroups]`: managed talkgroups (only listed groups may be used)
+    /// and groups hidden from the Directory page. See `group_access`.
+    pub talkgroups: TalkgroupsConfig,
     /// `[multi_network]`: other Brew networks this server connects to itself
     /// and bridges talkgroups with (see `netlink`). Edited live from the
     /// dashboard (no restart).
@@ -87,6 +90,23 @@ pub struct GroupAccessConfig {
     pub issis: Vec<u32>,
     pub rx_only: bool,
     pub rx_only_issis: Vec<u32>,
+}
+
+/// `[talkgroups]`. `managed = true`: a closed set of talkgroups. Only a
+/// listed group may be used: one with a name (`[gssi_names]`) or an access
+/// entry (`[group_access]`) on the Directory page, or one in a talkgroup pool
+/// or a linked talkgroup. An affiliation to any other group is not recorded
+/// and its group calls are dropped (emergency calls pass); a Basestation with
+/// `group-access` refuses the attachment on the air. Groups of other networks
+/// (aliases) are left to their link. `managed = false` (the default) changes
+/// nothing. `hidden`: groups no longer listed on the Directory page while
+/// radios are on them (display only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct TalkgroupsConfig {
+    pub managed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1107,6 +1127,7 @@ impl Default for Config {
             issi_names: std::collections::BTreeMap::new(),
             gssi_names: std::collections::BTreeMap::new(),
             group_access: std::collections::BTreeMap::new(),
+            talkgroups: TalkgroupsConfig::default(),
             multi_network: MultiNetworkConfig::default(),
         }
     }

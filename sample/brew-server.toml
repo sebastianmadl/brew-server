@@ -358,6 +358,17 @@ lon = 23.7640
 # rx_only = false
 # rx_only_issis = []
 
+# Managed talkgroups: a closed set of groups. managed = true lets radios use
+# only listed groups (a [gssi_names] name, a [group_access] entry, or a group
+# of a talkgroup pool / linked talkgroup); affiliations to others are not
+# recorded and their group calls dropped (emergency calls pass), and
+# Basestations with group-access refuse the attachment on the air. Off (the
+# default) changes nothing. hidden: groups hidden from the Directory page
+# (display only). Switch and hide are on the Directory page.
+# [talkgroups]
+# managed = false
+# hidden = []
+
 # Talkgroup pools: a call on one group is played 1:1 on the other groups of
 # the pool. both_ways = false copies only calls on the first group. A group
 # with its own running call is joined when that over ends. Managed on the

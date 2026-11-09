@@ -4,6 +4,19 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Managed talkgroups.** A switch on the Directory page (Groups) closes the
+  set of talkgroups: only listed groups may be used, i.e. groups with a name
+  or an access entry, and groups of talkgroup pools and linked talkgroups.
+  Affiliations to any other group are not recorded and its group calls are
+  dropped (emergency calls pass); radios already on such a group are dropped
+  from it. Basestations with `group-access` get `"managed"` and `"listed"`
+  in `SERVICE_GROUP_ACCESS` and refuse the attachment on the air (FlowStation
+  0.5.6 from this change on); older ones ignore the fields. Off (the default)
+  nothing changes. Config `[talkgroups] managed`.
+- **Directory: hide groups.** A group without a name that radios are on can
+  be hidden from the list with ✕ (`[talkgroups] hidden`, display only); the
+  filter "Hidden" shows it again. Groups of other networks (`network:GSSI`)
+  are no longer listed there as raw numbers.
 - **Directory: names for bridge logins.** The Radios (ISSI) list takes
   numbers up to 12 digits, so the Brew login of a bridge (Network mode, such
   as 232099709) can be named; the name shows under the login on Stations &

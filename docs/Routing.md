@@ -149,6 +149,21 @@ Two more pages of the new dashboard, both for admins:
   rx_only = true            # optional
   rx_only_issis = [2321100] # optional, empty = everyone listens only
   ```
+
+  **Managed talkgroups** (switch at the top of the Groups list): a closed
+  set of groups. Only a listed group may be used: one with a name or an
+  access entry on the Directory page, or a group of a talkgroup pool or
+  linked talkgroup. The server records no affiliation to any other group and
+  drops its group calls (emergency calls pass); radios already on such a
+  group are dropped from it, and a FlowStation with `group-access` refuses
+  the attachment on the air. Off, nothing changes. Unnamed groups radios are
+  on can be hidden from the list with ✕ (display only, filter "Hidden").
+
+  ```toml
+  [talkgroups]
+  managed = true
+  hidden = [4000]   # hidden from the Directory page
+  ```
 - **System -> Configuration:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign
   in again).
