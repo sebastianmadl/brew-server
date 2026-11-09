@@ -149,6 +149,7 @@ a.tile{color:inherit;cursor:pointer}
 .note svg{color:var(--accent2);width:16px;height:16px;margin-top:1px}
 .empty{padding:16px 18px;color:var(--text3);font-size:13px}
 .grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:18px}
+.grid2.ov{grid-template-columns:repeat(2,minmax(0,1fr))}
 .tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
@@ -309,7 +310,7 @@ td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-t
   .hide-s{display:none!important}
   .content{padding:14px 16px 100px;gap:14px}
   .tiles{grid-template-columns:1fr 1fr;gap:10px}
-  .grid2{grid-template-columns:1fr}
+  .grid2,.grid2.ov{grid-template-columns:1fr}
   th,td{padding-left:12px;padding-right:12px}
   .search input{width:100%}
   .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) - 13px);height:62px;border-radius:31px;z-index:30;
@@ -685,6 +686,8 @@ R.overview=()=>{
   const radios=c?c.mobile_stations.length:0;
   const grpCalls=calls.filter(x=>x.kind==='group').length;
   const sdsToday=st.recent_sds.filter(s=>isToday(s.at_ms)).length;
+  const recent=mergePoolLegs(st.recent_calls).slice(0,5);
+  const ms=c?[...c.mobile_stations].sort((a,b)=>a.issi-b.issi):[];
   return `<div class="tiles">
    <a class="tile" data-go="stations"><div class="k">${ic('bts')}Stations</div><div class="v">${on}</div><div class="s">${cells} cell${cells===1?'':'s'}${off?' · '+off+' offline':''}</div></a>
    <a class="tile" data-go="radios"><div class="k">${ic('radios')}Radios</div><div class="v">${radios}</div><div class="s">registered now</div></a>
@@ -693,15 +696,21 @@ R.overview=()=>{
    <a class="tile" data-go="roaming"><div class="k">${ic('roam')}Cell changes</div><div class="v">${roamToday.length}</div><div class="s">today · ${roamToday.filter(r=>r.kind==='handover'||String(r.reselection||'').startsWith('announced')).length} announced</div></a>
    <a class="tile" data-go="sds"><div class="k">${ic('sds')}SDS</div><div class="v">${sdsToday}</div><div class="s">today · ${st.total_sds} total</div></a>
   </div>
-  <div class="grid2">
+  <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${calls.length}</span><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
     ${calls.length?calls.map(x=>callRow(x,now)).join(''):'<div class="empty">No active calls</div>'}</div>
+   <div class="card"><div class="ch"><h2>Recent calls</h2><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
+    ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiTxt(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgTxt(x.destination)}</span>`:`<b class="m">${issiTxt(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
+  </div>
+  <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${stations.length}</span>${helpBtn('ovst')}<span class="sp"></span><a data-go="stations" href="#stations">Cells ›</a></div>
     ${helpNote('ovst',CELL_ID_HELP+' Cells are counted only for stations with the <code>bts-info</code> extension; a station without it is counted as a station, its cells are unknown. Apps and other terminals are not stations and have no cells.')}
     ${stations.length?stations.map(s=>`<div class="row"><div class="ric s">${ic('bts')}</div><div class="rm"><div class="rt">${esc(s.name)}</div><div class="rs">${s.cells.length?s.cells.length+' cell'+(s.cells.length===1?'':'s')+' · '+s.cells.map(x=>esc(x.name)+' ('+x.carrier+')').join(', '):'cells unknown (no <code>bts-info</code>)'}${s.tele&&s.tele.version?' · FlowStation '+esc(s.tele.version):''}</div></div>
       <div class="rr">${s.online?'<span class="st"><i></i>Online</span>':'<span class="st i"><i></i>Offline</span>'}<br>${s.online?s.regs+' radio'+(s.regs===1?'':'s'):(s.gone?'gone '+ago(s.gone):'')}</div></div>`).join(''):'<div class="empty">No stations connected</div>'}</div>
+   <div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${ms.length}</span><span class="sp"></span><a data-go="radios" href="#radios">All radios ›</a></div>
+    ${ms.length?ms.slice(0,6).map(m=>`<div class="ev"><b class="m">${issiTxt(m.issi)}</b>${m.cell&&m.cell.name?`<span class="chip">${esc(m.cell.name)}</span>`:m.basestation_name?`<span class="chip">${esc(m.basestation_name)}</span>`:''}<span class="ml mut">${(m.groups||[]).length?(m.groups||[]).length+' group'+((m.groups||[]).length===1?'':'s'):''}</span></div>`).join('')+(ms.length>6?`<div class="ev"><a data-go="radios" href="#radios" class="mut">+ ${ms.length-6} more</a></div>`:''):'<div class="empty">No radios registered</div>'}</div>
   </div>
-  <div class="grid2">
+  <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Recent cell changes</h2><span class="sp"></span><a data-go="roaming" href="#roaming">Roaming log ›</a></div>
     ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${issiTxt(r.issi)}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
    <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="sp"></span><a data-go="sds" href="#sds">All SDS ›</a></div>
@@ -764,7 +773,8 @@ const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
 const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
 // Info text of a login (Accounts page), if any.
-const infoOf=login=>(D.names||{})[login]||'';
+// A login's name: its [bts_locations] name, else a Directory name (logins up to 12 digits).
+const infoOf=login=>(D.names||{})[login]||nameOf(login);
 // Station and cell naming, the same on every page: a station is named by its Brew login; a cell by
 // its global cell ID <login>/<cell number in the station>. The global ID is a brew-server and
 // FlowStation name for Brew and the dashboard, not an ETSI identity.
@@ -1156,7 +1166,7 @@ async function delAcc(i){
 }
 
 /* ---------- directory: ISSI and GSSI names ---------- */
-const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
+const DIR={issi:{api:'/api/issi-names',what:'ISSI / login',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
   gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'District North',ex2:'2322, District South',file:'gssi-directory.csv'}};
 const dirK=()=>UI.filter.dirk==='gssi'?'gssi':'issi';
 const dirNames=()=>D[dirK()]||{};
@@ -1176,7 +1186,7 @@ R.issis=()=>{
     return [join,rx].filter(Boolean).join(' ')||'<span class="mut">Open</span>';};
   const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
-  const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
+  const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. A Brew login (up to 12 digits, for example a link to another network or an app) can be named here too; the name shows under the login on Stations &amp; Cells. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
     :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones; who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>).';
   return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']]:[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>
@@ -1376,5 +1386,21 @@ mod tests {
         for needle in ["Carrier / TS", "[1,2,3,4]", "c.carrier_num", "c.ts", "available"] {
             assert!(f.contains(needle), "{needle}");
         }
+    }
+
+    /// The Overview shows three pairs side by side, in this order (stacked the same way on a
+    /// phone): live calls | recent calls, stations | radios, cell changes | recent SDS.
+    #[test]
+    fn overview_pairs_in_order() {
+        let start = PAGE_HTML.find("R.overview=()=>{").expect("overview");
+        let body = &PAGE_HTML[start..];
+        let body = &body[..body.find("\n};\n").expect("end of overview")];
+        let mut at = 0;
+        for h in ["Live calls", "Recent calls", "Stations</h2>", "Radios</h2>", "Recent cell changes", "Recent SDS"] {
+            let i = body[at..].find(h).unwrap_or_else(|| panic!("{h} missing or out of order"));
+            at += i + h.len();
+        }
+        assert_eq!(body.matches("<div class=\"grid2 ov\">").count(), 3);
+        assert!(PAGE_HTML.contains(".grid2,.grid2.ov{grid-template-columns:1fr}"), "phone stacks the pairs");
     }
 }

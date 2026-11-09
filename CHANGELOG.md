@@ -2,6 +2,18 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased:
+
+- **Directory: names for logins up to 12 digits.** The Radios (ISSI) list
+  takes numbers up to 12 digits, so a Brew login longer than an ISSI (a link
+  to another network such as 232099709, an app) can be named; the name shows
+  under the login on Stations & Cells when it has no `[bts_locations]` name.
+  Groups stay 24-bit GSSIs.
+- **Overview in three pairs.** Live calls | recent calls, stations | radios,
+  cell changes | recent SDS, side by side in equal columns; on a phone they
+  stack in that order. Recent calls (last 5, pool legs merged) and radios
+  (first 6, with cell and group count) are new on the Overview.
+
 Version 1.20.3 adds:
 
 - **Federation peers: `path` sent as written.** The trailing slash of a
