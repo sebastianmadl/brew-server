@@ -761,7 +761,7 @@ const callRow=(c,now,short)=>{
   const legs=pool?pool.live.legs.map(g=>tgChip(g)).join(' '):'';
   const wait=pool&&pool.live.waiting.length?` <span class="mut">waiting: ${pool.live.waiting.join(', ')}</span>`:'';
   return `<div class="row"><div class="ric${em?' e':grp?'':' p'}">${ic(grp?'radios':'call')}</div><div class="rm">
-   <div class="rt">${grp?'TG '+tgTxt(c.destination):who(c.source)+' → '+who(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}${netChips(c)?' '+netChips(c):''}</div>
+   <div class="rt">${grp?(short&&gName(c.destination)?tgShort(c.destination):'TG '+tgTxt(c.destination)):who(c.source)+' → '+who(c.destination)} <span class="chip ${em?'d':grp?'a':'b'}">${em?'Emergency':grp?'Group':'Individual'}</span>${pool?`<span class="chip">${ic('routing')} ${esc(pool.name)}</span>`:''}${netChips(c)?' '+netChips(c):''}</div>
    <div class="rs">${grp?`<span class="talk"><span class="bars"><b></b><b></b><b></b><b></b></span>${who(c.source)} talking</span>`:''}${pool?`<span class="mut">also on</span> ${legs}${wait}`:''}</div></div>
    <div class="rr"><b>${dur(now-c.started_at_ms)}</b><br>${c.voice_frames} frames · prio ${c.priority}</div></div>`;
 };
@@ -802,7 +802,7 @@ R.overview=()=>{
    <div class="card"><div class="ch"><h2>Live calls</h2><span class="cnt">${calls.length}</span><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
     ${calls.length?calls.map(x=>callRow(x,now,true)).join(''):`<div class="empty">No active calls<div class="tot"><b>${st.total_calls}</b> calls in total</div></div>`}</div>
    <div class="card"><div class="ch"><h2>Recent calls</h2><span class="sp"></span><a data-go="calls" href="#calls">All calls ›</a></div>
-    ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiShort(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgTxt(x.destination)}</span>`:`<b class="m">${issiShort(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
+    ${recent.length?recent.map(x=>`<div class="ev"><time>${tm(x.started_at_ms)}</time><b class="m">${issiShort(x.source)}</b><span class="arrow">→</span>${x.pool?`<span class="chip" title="Pool: one call heard on ${x.legs.length} groups">${ic('routing')} ${esc(x.pool)}</span>`:x.kind==='group'?`<span class="tg">${tgShort(x.destination)}</span>`:`<b class="m">${issiShort(x.destination)}</b>`}${netChips(x)?' '+netChips(x):''}<span class="ml m mut">${x.ended_at_ms?dur(x.ended_at_ms-x.started_at_ms):'—'}</span></div>`).join(''):'<div class="empty">No calls yet</div>'}</div>
   </div>
   <div class="grid2 ov">
    <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${stations.length}</span>${helpBtn('ovst')}<span class="sp"></span><a data-go="stations" href="#stations">Cells ›</a></div>
@@ -873,6 +873,8 @@ const gName=g=>(D.gssi||{})[String(g)]||'';
 // is an alias above the 24 GSSI bits, see netlink.rs).
 const netOfSlot=s=>((D.nets&&D.nets.networks)||[]).find(n=>n.slot===s);
 const tgTxt=g=>{if(g>16777215){const n=netOfSlot(Math.floor(g/16777216));return `${esc(n?n.name:'net '+Math.floor(g/16777216))}:${g%16777216}`;}const n=gName(g);return n?`${g} · ${esc(n)}`:String(g);};
+// Compact form for the Overview: the group name alone when there is one (the GSSI stays in the tooltip).
+const tgShort=g=>{const n=g>16777215?'':gName(g);return n?`<span title="GSSI ${g}">${esc(n)}</span>`:tgTxt(g);};
 const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName(g))}"`:''}>${tgTxt(g)}</span>`;
 // "2320972 · OE4SXM" for running text, number and name stacked for tables.
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};

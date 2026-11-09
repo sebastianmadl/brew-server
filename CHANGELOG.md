@@ -35,21 +35,21 @@ Version 1.20.4 adds:
   larger touch area; a cell without LA or MCC/MNC shows "—"; the pages
   "Configuration" and "Settings" are called "Config file" and "Server
   settings"; the map card is called "Radio positions".
-- **Overview, live calls, recent calls and recent SDS:** a radio with a name or call sign shows the
-  name alone (the ISSI is in the tooltip and on the Calls page).
-- **Overview, stations:** a station with a name (Accounts, info) shows it
-  after its number: "1000002 (Name)".
+- **Overview: names instead of numbers.** Live calls, recent calls and
+  recent SDS show the name or call sign of a radio alone when there is one
+  (the ISSI is in the tooltip and on the Calls / SDS pages); a group with a
+  name in the Directory likewise (GSSI in the tooltip). A station with a
+  name (Accounts, info) shows it after its number: "1000002 (Name)".
 - **DGNA: saved talkgroups.** A "Saved TGs…" dropdown next to the GSSI
   field fills in GSSI and name from the groups the server knows.
-
 - **Managed talkgroups.** A card on the Routing page (folds to a thin bar:
   folded while off, open while on) closes the set of talkgroups: only
   allowed groups may be used, i.e. the card's list, the groups of
   talkgroup pools and linked talkgroups, and groups with the access "Only
   these" (limited to their ISSIs anyway). Each group shows its access badges
   ("Only N ISSIs", "N blocked", "RX only"); Edit / Rules opens the Directory
-  dialog (name, access, RX only) right on the Routing page. Groups are allowed by GSSI with an
-  optional name (written to the Directory) or from the foldable "Saved TGs
+  dialog (name, access, RX only) right on the Routing page. Groups are
+  allowed by GSSI with an optional name (written to the Directory) or from the foldable "Saved TGs
   on server" (groups the server knows, including refused ones). Affiliations
   to any other group are not recorded and its group calls are dropped
   (emergency calls pass); radios already on such a group are dropped from
