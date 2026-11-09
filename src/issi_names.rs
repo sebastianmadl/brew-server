@@ -33,9 +33,9 @@ fn snapshot(state: &AppState, kind: Kind) -> BTreeMap<String, String> {
     kind.names(state).read().map(|n| n.clone()).unwrap_or_default()
 }
 
-/// Highest number the radio list takes: up to 12 digits, so a Brew login
-/// longer than an ISSI (a network link such as 232099709, an app) can be
-/// named too. Groups stay 24-bit GSSIs.
+/// Highest number the radio list takes: up to 12 digits, so the Brew login of
+/// a bridge (Network mode, such as 232099709) can be named too. Terminals and
+/// base stations are named on the Accounts page. Groups stay 24-bit GSSIs.
 const MAX_ISSI_KEY: u64 = 999_999_999_999;
 
 fn parse_ssi(s: &str, kind: Kind) -> Result<String, String> {
@@ -43,7 +43,7 @@ fn parse_ssi(s: &str, kind: Kind) -> Result<String, String> {
     match s.trim().parse::<u64>() {
         Ok(n) if (1..=max).contains(&n) => Ok(n.to_string()),
         _ => Err(match kind {
-            Kind::Issi => format!("'{}' is not an ISSI or login (1 to 12 digits)", s.trim()),
+            Kind::Issi => format!("'{}' is not an ISSI (up to 12 digits for a bridge login)", s.trim()),
             Kind::Gssi => format!("'{}' is not a GSSI (1 to 16777215)", s.trim()),
         }),
     }
@@ -188,7 +188,7 @@ mod tests {
         assert!(parse_list("16777216 too big", Kind::Gssi).is_err());
     }
 
-    /// The radio list also names Brew logins longer than an ISSI, up to 12 digits.
+    /// The radio list also names bridge logins longer than an ISSI, up to 12 digits.
     #[test]
     fn radio_names_take_up_to_12_digits() {
         assert_eq!(parse_ssi("232099709", Kind::Issi).unwrap(), "232099709");

@@ -773,7 +773,7 @@ const tgChip=(g,cls)=>`<span class="tg${cls||''}"${gName(g)?` title="${esc(gName
 const issiTxt=issi=>{const n=nameOf(issi);return n?`${issi} · ${esc(n)}`:String(issi);};
 const issiCell=(issi,bold)=>{const n=nameOf(issi);return `${bold?'<b class="m">':'<span class="m">'}${issi}${bold?'</b>':'</span>'}${n?`<span class="sub">${esc(n)}</span>`:''}`;};
 // Info text of a login (Accounts page), if any.
-// A login's name: its [bts_locations] name, else a Directory name (logins up to 12 digits).
+// A login's name: its Accounts name ([bts_locations]), else a Directory name (bridge logins up to 12 digits).
 const infoOf=login=>(D.names||{})[login]||nameOf(login);
 // Station and cell naming, the same on every page: a station is named by its Brew login; a cell by
 // its global cell ID <login>/<cell number in the station>. The global ID is a brew-server and
@@ -1166,7 +1166,7 @@ async function delAcc(i){
 }
 
 /* ---------- directory: ISSI and GSSI names ---------- */
-const DIR={issi:{api:'/api/issi-names',what:'ISSI / login',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
+const DIR={issi:{api:'/api/issi-names',what:'ISSI',who:'radio',ex:'2320972',exn:'OE4SXM Sebastian',ex2:'2321100, Relay North',file:'issi-directory.csv'},
   gssi:{api:'/api/gssi-names',what:'GSSI',who:'group',ex:'2321',exn:'District North',ex2:'2322, District South',file:'gssi-directory.csv'}};
 const dirK=()=>UI.filter.dirk==='gssi'?'gssi':'issi';
 const dirNames=()=>D[dirK()]||{};
@@ -1186,7 +1186,7 @@ R.issis=()=>{
     return [join,rx].filter(Boolean).join(' ')||'<span class="mut">Open</span>';};
   const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
-  const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. A Brew login (up to 12 digits, for example a link to another network or an app) can be named here too; the name shows under the login on Stations &amp; Cells. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
+  const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. The login of a bridge (Brew login in Network mode, up to 12 digits, for example a link to another network) can be named here too; the name shows under the login on Stations &amp; Cells. Terminals (apps) and base stations are named on the Accounts page. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
     :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones; who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>).';
   return `<div class="bar">${seg('dirk',[['issi','Radios (ISSI)'],['gssi','Groups (GSSI)']])}${seg('issif',[['all','All'],['named','With name'],['unnamed','Without name']].concat(K==='gssi'?[['limited','Limited']]:[]))}${searchBox('issi',d.what+' or name…')}<span class="sp"></span>
     ${adm?`<button class="btn" onclick="exportNames()">Export</button><button class="btn" onclick="importNames()">Import list</button><button class="btn pri" onclick="editName('')">${ic('plus')}${K==='gssi'?'Add group':'Add name'}</button>`:''}</div>

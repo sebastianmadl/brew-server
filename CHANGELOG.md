@@ -4,11 +4,11 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
-- **Directory: names for logins up to 12 digits.** The Radios (ISSI) list
-  takes numbers up to 12 digits, so a Brew login longer than an ISSI (a link
-  to another network such as 232099709, an app) can be named; the name shows
-  under the login on Stations & Cells when it has no `[bts_locations]` name.
-  Groups stay 24-bit GSSIs.
+- **Directory: names for bridge logins.** The Radios (ISSI) list takes
+  numbers up to 12 digits, so the Brew login of a bridge (Network mode, such
+  as 232099709) can be named; the name shows under the login on Stations &
+  Cells. Terminals and base stations are named on the Accounts page. Groups
+  stay 24-bit GSSIs.
 - **Overview in three pairs.** Live calls | recent calls, stations | radios,
   cell changes | recent SDS, side by side in equal columns; on a phone they
   stack in that order. Recent calls (last 5, pool legs merged) and radios
