@@ -1,6 +1,6 @@
 # Routing: DGNA and talkgroup pools
 
-The **Routing** page of the dashboard (new UI, sidebar **Network -> Routing**)
+The **Routing** page of the dashboard (new UI, sidebar **Infrastructure -> Routing**)
 does two things:
 
 - assign a group to several radios at once with DGNA, and
@@ -93,7 +93,7 @@ new one under `/ui`.
 
 Two more pages of the new dashboard, both for admins:
 
-- **Network -> Accounts:** the logins Basestations and terminals connect with.
+- **Infrastructure -> Accounts:** the logins Basestations and terminals connect with.
   One login can be on Brew (the station's or terminal's number, 1 to 7
   digits), telemetry and control at once. Changes apply to the next
   connection without a restart and are written to the config file;
@@ -177,6 +177,6 @@ Two more pages of the new dashboard, both for admins:
   allowed = [9, 232, 2321]
   hidden = [4000]   # hidden from the Directory page
   ```
-- **System -> Configuration:** the whole config file. Save checks it and
+- **System -> Config file:** the whole config file. Save checks it and
   applies it with a restart (running calls drop, stations reconnect, you sign
   in again).

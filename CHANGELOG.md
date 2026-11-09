@@ -29,6 +29,12 @@ Version 1.20.4 adds:
   fixed-height page: the header could move away and parts stayed blank), so
   the header stays at the top.
 - **Sidebar:** the group "Network" is called "Infrastructure".
+- **Dashboard clean-up:** Accounts and the registration log on Radios load
+  when the page opens (before, up to 5 s of "Loading…"); on phones the page
+  titles fit, search fields take the full width and the "?" buttons have a
+  larger touch area; a cell without LA or MCC/MNC shows "—"; the pages
+  "Configuration" and "Settings" are called "Config file" and "Server
+  settings"; the map card is called "Radio positions".
 - **DGNA: saved talkgroups.** A "Saved TGs…" dropdown next to the GSSI
   field fills in GSSI and name from the groups the server knows.
 

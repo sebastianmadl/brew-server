@@ -395,7 +395,7 @@ static MAP_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| forma
 <style>#map{{height:70vh;border:1px solid #203047;border-radius:12px}}.map-note{{font-size:12px;color:#8fa2b8;margin-top:10px}}.leaflet-popup-content{{color:#0d1826}}.emg-pin{{animation:emgpulse 1.2s ease-in-out infinite}}@keyframes emgpulse{{0%,100%{{box-shadow:0 0 0 0 rgba(229,57,53,.8)}}50%{{box-shadow:0 0 0 14px rgba(229,57,53,0)}}}}.emg-pop{{color:#c62828;font-weight:700}}</style>
 </head><body><header><h1>MS MAP</h1><div class=hdr-status><span class=live></span><span id=status>Live</span><div class=hdr-user><span id=whoami></span><button id=login-btn onclick="doLogin()">Login</button><button id=logout-btn onclick="doLogout()">Logout</button></div><div class=ver>v{ver}</div></div></header><main class=wrap>
 <p><a class=backlink href="/">&larr; Back to dashboard</a></p>
-<section class=panel><h2>Mobile station positions</h2><div id=map></div>
+<section class=panel><h2>Radio positions</h2><div id=map></div>
 <div class=map-note id=note>Loading positions&hellip;</div>
 <div class=map-note>Positions come from decoded LIP (binary short &amp; long reports) and textual beacons over the Brew channel. Radios that beacon but can't be plotted (no GPS fix, or coordinates not relayed to this server) are listed below.</div>
 </section>

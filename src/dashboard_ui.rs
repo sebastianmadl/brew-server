@@ -329,13 +329,19 @@ body{touch-action:manipulation}
   #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow);z-index:35;padding-bottom:env(safe-area-inset-bottom)}
   body.sbopen #sb{transform:none}
   .top{padding-left:16px;padding-right:16px;padding-bottom:12px}
-  .top h1{font-size:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .top h1{font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .top{gap:8px}
+  #acct-name,#acctbtn>svg{display:none}
   .hide-s{display:none!important}
   .content{padding:14px 16px 100px;gap:14px}
   .tiles{grid-template-columns:1fr 1fr;gap:10px}
   .grid2,.grid2.ov{grid-template-columns:1fr}
   th,td{padding-left:12px;padding-right:12px}
   .search input{width:100%}
+  .bar>.search{flex:1 1 100%}
+  /* Small round buttons keep their look and get a 42px touch area. */
+  .help{position:relative}
+  .help::after{content:"";position:absolute;inset:-10px}
   .tabbar{display:flex;position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) - 13px);height:62px;border-radius:31px;z-index:30;
     background:color-mix(in srgb,var(--bg2) 76%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);border:1px solid var(--border);box-shadow:var(--shadow);justify-content:space-around;align-items:center}
   .tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;color:var(--text3);font-weight:600;min-width:56px;min-height:44px;justify-content:center;border:0;background:none;cursor:pointer}
@@ -464,7 +470,7 @@ const PAGES=[
  ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['accounts','Accounts','key','Infrastructure',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
  ['sms','SMS Center','sms','Integrations','/sms-center'],['tsds','Telemetry SDS','tsds','Integrations','/telemetry-sds'],
- ['ha','High Availability','ha','System','/ha'],['config','Configuration','file','System',null,true],['settings','Settings','set','System','/settings',true]
+ ['ha','High Availability','ha','System','/ha'],['config','Config file','file','System',null,true],['settings','Server settings','set','System','/settings',true]
 ];
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 const $=id=>document.getElementById(id);
@@ -564,6 +570,9 @@ function show(p){
   else render(true);
   $('content').parentElement.scrollTop=0;window.scrollTo(0,0);
   if(p==='calls'||p==='sds')refreshFast();
+  // Lists only this page shows: ask for them now, not at the next slow refresh (up to 5 s of "Loading…").
+  if(p==='radios')getJ('/api/registrations').then(v=>{D.regs=v;if(UI.page===p)render();}).catch(()=>{});
+  if(p==='accounts'&&D.who.admin)getJ('/api/accounts').then(v=>{D.acc=v;if(UI.page===p)render();}).catch(()=>{});
 }
 function fitFrame(){const f=document.querySelector('iframe.embed');if(!f)return;f.onload=()=>{try{const d=f.contentDocument;const fit=()=>{f.style.height=Math.max(window.innerHeight-130,d.documentElement.scrollHeight+20)+'px';};fit();new ResizeObserver(fit).observe(d.body);}catch(e){}};}
 function helpBtn(key){return `<button class="help" aria-expanded="${!!UI.help[key]}" aria-controls="h-${key}" onclick="UI.help['${key}']=!UI.help['${key}'];render(true)" title="What is this?">?<span class="sr">Explain</span></button>`;}
@@ -620,9 +629,9 @@ async function csLookup(){
 function csCard(adm){
   const c=D.csdb;if(!c)return '';
   const open=!!UI.csOpen,when=c.updated_ms?new Date(c.updated_ms).toLocaleString():'never';
-  const state=c.running?'updating…':c.enabled?`${c.entries.toLocaleString()} call signs · updated ${esc(when)}`:'off';
+  const state=c.running?'updating…':c.enabled?`${c.entries.toLocaleString()} call signs · updated ${esc(when)}`:'';
   return `<div class="card${open?'':' shut'}"><div class="ch tgh" role="button" tabindex="0" aria-expanded="${open}" onclick="UI.csOpen=!${open};render(true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
-    <span class="chev" aria-hidden="true">▸</span><h2>Ham callsign database</h2>${c.enabled?'<span class="chip a">on</span>':'<span class="chip i">off</span>'}<span class="cnt hide-s">${state}</span><span onclick="event.stopPropagation()">${helpBtn('csdb')}</span><span class="sp"></span>
+    <span class="chev" aria-hidden="true">▸</span><h2>Ham callsign database</h2>${c.enabled?'<span class="chip a">on</span>':'<span class="chip i">off</span>'}${state?`<span class="cnt hide-s">${state}</span>`:''}<span onclick="event.stopPropagation()">${helpBtn('csdb')}</span><span class="sp"></span>
     <label style="display:flex;gap:10px;align-items:center" onclick="event.stopPropagation()"><button class="tog" role="switch" aria-checked="${!!c.enabled}" aria-label="Ham callsign database" ${adm?'':'disabled'} onclick="csSet({enabled:this.getAttribute('aria-checked')!=='true'})"></button></label></div>
    ${helpNote('csdb','Names radios without a Directory name by their call sign from a list of <code>ID;CALLSIGN</code> lines (default: radioid.net <code>dmrid.dat</code>, the DMR IDs that amateur TETRA networks use as ISSIs). <b>Directory names always come first.</b> <i>Now</i> fetches the list, <i>Automatic</i> every day at 00:00 UTC. A new list replaces the old one (one file, <code>[callsign_db] cache</code>); nothing else is stored or collected. Config <code>[callsign_db]</code>, no restart.')}
    ${open?`<div class="tgadd"><input class="f" id="cs-url" value="${esc(c.url)}" placeholder="${esc(c.default_url)}" style="flex:1;min-width:200px" ${adm?'':'disabled'} onkeydown="if(event.key==='Enter')csSet({url:this.value})" onchange="csSet({url:this.value})">
@@ -893,7 +902,7 @@ R.stations=()=>{
   ${cells.map(x=>{const key='c'+x.name;const open=UI.open[key];const offc=x.online===false;
    const ci=infoOf(String(x.name).split('/')[0]);
    return `<tr class="click${offc?' off':''}" onclick="UI.open['${esc(key)}']=!UI.open['${esc(key)}'];render(true)" aria-expanded="${!!open}"><td><b>${esc(x.name)}</b> ${x.cell===0&&!offc?'<span class="chip i">primary</span>':''}${x.duplicate?' <span class="chip w">duplicate</span>':''}${ci?`<span class="sub">${esc(ci)}</span>`:''}</td>
-   <td>${offc?'<span class="st i"><i></i>Offline</span>':'<span class="st"><i></i>Online</span>'}</td><td class="m">${x.carrier}</td><td class="num">${mhz(x.downlink_hz)}</td><td>${x.location_area}</td><td class="num">${x.mcc} / ${x.mnc}</td>
+   <td>${offc?'<span class="st i"><i></i>Offline</span>':'<span class="st"><i></i>Online</span>'}</td><td class="m">${x.carrier}</td><td class="num">${mhz(x.downlink_hz)}</td><td>${x.location_area??'—'}</td><td class="num">${x.mcc!=null&&x.mnc!=null?x.mcc+' / '+x.mnc:'—'}</td>
    <td>${x.neighbours?(x.neighbours.map(n=>`<span class="chip">${esc(n)}</span>`).join(' ')||'<span class="mut">none</span>'):'<span class="mut">—</span>'}</td><td class="num">${offc?'—':x.registered_issis}</td></tr>
    ${open?`<tr class="exp"><td colspan="8"><div class="kv"><div><span class="l">Station address</span>${offc?'—':`<span class="m">${esc(x.remote_addr||'—')}</span>`}</div><div><span class="l">${offc?'Gone':'Connected'}</span>${offc?(x.last_seen_ms?ago(x.last_seen_ms)+' ago':'—'):ago(x.connected_at_ms)}</div>
     <div><span class="l">Extensions</span>${caps(x)}</div><div><span class="l">Access level / MS power</span>${x.rxlev_access_min_dbm!=null?x.rxlev_access_min_dbm+' dBm':'—'} · ${x.ms_txpwr_max_dbm!=null?x.ms_txpwr_max_dbm+' dBm':'—'}</div></div></td></tr>`:''}`;}).join('')||'<tr><td colspan="8" class="mut">No cells announced</td></tr>'}
@@ -943,7 +952,7 @@ R.telemetry=()=>{
    <div class="kv tight" style="padding:12px 18px"><div><span class="l">Version</span>${esc(s.build||s.version||'—')}</div><div><span class="l">Address</span><span class="m">${esc(s.ip||'—')}</span></div><div><span class="l">Connected</span>${ago(s.connected_at_ms)}</div><div><span class="l">Backhaul</span>${s.backhaul_connected==null?'—':s.backhaul_connected?'connected':'down'}</div>
     <div><span class="l">Radios</span>${s.registration_count}</div><div><span class="l">Calls</span>${Object.keys(s.active_calls||{}).length}</div><div><span class="l">TX EVM</span>${s.evm_pct!=null?s.evm_pct.toFixed(1)+' %':'—'}</div><div><span class="l">Emergencies</span>${(s.emergencies||[]).length||'none'}</div></div>
    ${(h.domains||[]).length?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${h.domains.map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
-   <div class="tw"><table><thead><tr><th title="Local cell number in this station, global cell ID in brackets">Cell (local / global ID)</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${gcidOf(x.main_carrier)?` <span class="mut">(${esc(gcidOf(x.main_carrier))})</span>`:''}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;}).join('')}</div>`
+   <div class="tw"><table><thead><tr><th title="Local cell number in this station, global cell ID in brackets">Cell (local / global ID)</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${gcidOf(x.main_carrier)?` <span class="mut">(${esc(gcidOf(x.main_carrier))})</span>`:''}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area??'—'}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;}).join('')}</div>`
   :'<div class="card"><div class="empty">No station telemetry connections. Stations report here with FlowStation <code>[telemetry]</code>.</div></div>';
 };
 R.control=()=>{
