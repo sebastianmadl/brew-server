@@ -313,12 +313,22 @@ td .sub{display:block;font-size:12px;color:var(--text3);font-weight:400;margin-t
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{touch-action:manipulation}
 @media (max-width:760px){
+  /* Phones: the page itself scrolls (one scroller). A scrolling <main> inside a fixed-height body gave iOS two
+     nested scrollers: the header moved away and parts of the page stayed blank while scrolling. */
+  html{overscroll-behavior-y:none}
+  html,body{height:auto;min-height:100%}
+  body{display:block}
+  main{display:block;height:auto;min-height:100vh;min-height:100dvh;overflow:visible}
+  .top{position:sticky;top:0;z-index:25;padding-top:calc(12px + env(safe-area-inset-top));background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none}
+  .menu{position:fixed;top:calc(60px + env(safe-area-inset-top))}
+  body.sbopen{overflow:hidden}
+  #sb{padding-top:env(safe-area-inset-top)}
   /* iOS zooms into a field with text under 16px when it gets focus, and stays zoomed. */
   input.f,select.f,textarea.f,textarea.cfg,.sheet input,.sheet textarea,.sheet select{font-size:16px}
   #rochip{display:none}
   #sb{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow);z-index:35;padding-bottom:env(safe-area-inset-bottom)}
   body.sbopen #sb{transform:none}
-  .top{padding:12px 16px}
+  .top{padding-left:16px;padding-right:16px;padding-bottom:12px}
   .top h1{font-size:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .hide-s{display:none!important}
   .content{padding:14px 16px 100px;gap:14px}
@@ -450,8 +460,8 @@ const ic=(n,cls)=>`<svg class="i${cls?' '+cls:''}" viewBox="0 0 24 24" aria-hidd
 const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
- ['stations','Stations & Cells','bts','Network'],['routing','Routing','routing','Network'],['roaming','Roaming','roam','Network'],['multinet','Multi Network','globe','Network',null,true],
- ['telemetry','Telemetry','tele','Network'],['control','Control','ctl','Network',null,true],['accounts','Accounts','key','Network',null,true],
+ ['stations','Stations & Cells','bts','Infrastructure'],['routing','Routing','routing','Infrastructure'],['roaming','Roaming','roam','Infrastructure'],['multinet','Multi Network','globe','Infrastructure',null,true],
+ ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['accounts','Accounts','key','Infrastructure',null,true],
  ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
  ['sms','SMS Center','sms','Integrations','/sms-center'],['tsds','Telemetry SDS','tsds','Integrations','/telemetry-sds'],
  ['ha','High Availability','ha','System','/ha'],['config','Configuration','file','System',null,true],['settings','Settings','set','System','/settings',true]
@@ -552,7 +562,7 @@ function show(p){
   if(emb&&PG[p][5]&&!D.who.admin){$('content').innerHTML=`<div class="card"><div class="empty">${esc(PG[p][1])} is for admins. <button class="btn pri" onclick="openLogin(false)">Log in</button></div></div>`;return;}
   if(emb){const fixed=emb==='/map';$('content').innerHTML=`<iframe class="embed${fixed?' fixed':''}" title="${esc(PG[p][1])}" src="${emb}?embed=1${document.documentElement.dataset.theme?'&theme='+document.documentElement.dataset.theme:''}"></iframe>`;if(!fixed)fitFrame();}
   else render(true);
-  $('content').parentElement.scrollTop=0;
+  $('content').parentElement.scrollTop=0;window.scrollTo(0,0);
   if(p==='calls'||p==='sds')refreshFast();
 }
 function fitFrame(){const f=document.querySelector('iframe.embed');if(!f)return;f.onload=()=>{try{const d=f.contentDocument;const fit=()=>{f.style.height=Math.max(window.innerHeight-130,d.documentElement.scrollHeight+20)+'px';};fit();new ResizeObserver(fit).observe(d.body);}catch(e){}};}
@@ -712,7 +722,8 @@ let lastSig='';
 let scrollBusy=0,touchOn=false,renderLater=false;
 function scrollRest(){clearTimeout(scrollBusy);scrollBusy=setTimeout(()=>{scrollBusy=0;if(!touchOn&&renderLater){renderLater=false;render();}},500);}
 (()=>{const m=document.querySelector('main');if(!m)return;
-  m.addEventListener('scroll',scrollRest,{passive:true});
+  // Desktop scrolls <main>, phones the page itself.
+  m.addEventListener('scroll',scrollRest,{passive:true});window.addEventListener('scroll',scrollRest,{passive:true});
   m.addEventListener('touchstart',()=>{touchOn=true;clearTimeout(scrollBusy);scrollBusy=1;},{passive:true});
   const up=()=>{touchOn=false;scrollRest();};m.addEventListener('touchend',up,{passive:true});m.addEventListener('touchcancel',up,{passive:true});})();
 function render(force){
@@ -1583,6 +1594,8 @@ mod tests {
     fn dgna_offers_the_saved_talkgroups() {
         assert!(PAGE_HTML.contains("${dgSaved(f)}<input class=\"f\" id=\"dg-gssi\""));
         assert!(PAGE_HTML.contains("maximum-scale=1"), "no zoom (test, Sebastian)");
+        assert!(PAGE_HTML.contains("main{display:block;height:auto;min-height:100vh;min-height:100dvh;overflow:visible}"), "phones: the page scrolls, not <main>");
+        assert!(PAGE_HTML.contains(",'Infrastructure'],") && !PAGE_HTML.contains(",'Network'],"), "sidebar group renamed");
     }
 
     #[test]

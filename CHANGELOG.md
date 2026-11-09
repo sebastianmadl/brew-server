@@ -24,7 +24,11 @@ Version 1.20.4 adds:
   ISSI directory (or the callsign database), e.g. "ISSI 2320972 (OE4SXM)".
 - **Phone fixes.** Live updates wait while the page is scrolled (iOS left
   blank areas), fields use 16 px text so iOS no longer zooms in on them,
-  double-tap zoom is off and the page does not zoom (`maximum-scale=1`).
+  double-tap zoom is off and the page does not zoom (`maximum-scale=1`). On
+  phones the page itself scrolls now (before, a scrolling area inside a
+  fixed-height page: the header could move away and parts stayed blank), so
+  the header stays at the top.
+- **Sidebar:** the group "Network" is called "Infrastructure".
 - **DGNA: saved talkgroups.** A "Saved TGs…" dropdown next to the GSSI
   field fills in GSSI and name from the groups the server knows.
 
