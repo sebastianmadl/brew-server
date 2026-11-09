@@ -23,8 +23,10 @@ Unreleased:
 - **Map: names.** The popup of a radio shows its call sign / name from the
   ISSI directory (or the callsign database), e.g. "ISSI 2320972 (OE4SXM)".
 - **Phone fixes.** Live updates wait while the page is scrolled (iOS left
-  blank areas), fields use 16 px text so iOS no longer zooms in on them, and
-  double-tap zoom is off.
+  blank areas), fields use 16 px text so iOS no longer zooms in on them,
+  double-tap zoom is off and the page does not zoom (`maximum-scale=1`).
+- **DGNA: saved talkgroups.** A "Saved TGs…" dropdown next to the GSSI
+  field fills in GSSI and name from the groups the server knows.
 
 - **Managed talkgroups.** A card on the Routing page (folds to a thin bar:
   folded while off, open while on) closes the set of talkgroups: only

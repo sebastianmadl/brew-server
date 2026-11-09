@@ -20,7 +20,7 @@ pub async fn page() -> Html<&'static str> {
 
 // The classic pages' embedded form lives in `dashboard::STYLE` (`html.embed`).
 const PAGE_HTML: &str = r##"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>__SERVERNAME__</title>
 <style>
@@ -1006,7 +1006,7 @@ R.routing=()=>{
    ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><b class="m">${esc(r.station||'—')}</b></td><td>${r.cell?`<span class="chip">${esc(r.cell)}</span>`:`<span class="mut">${r.radio?'—':'— (terminal)'}</span>`}</td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
    </tbody></table></div>
    ${adm?`<div class="selbar"><b>${sel} selected</b><span class="arrow">→</span>
-    <input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
+    ${dgSaved(f)}<input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
     <input class="f" id="dg-name" placeholder="Name (optional)" maxlength="15" style="width:160px" value="${esc(f.name)}" oninput="UI.dgf.name=this.value">
     <div class="seg" role="group" aria-label="Assign or remove"><button aria-pressed="${f.assign}" onclick="UI.dgf.assign=true;render(true)">Assign</button><button aria-pressed="${!f.assign}" onclick="UI.dgf.assign=false;render(true)">Remove</button></div>
     <label class="mut" style="font-size:12.5px">Attachment <select class="f" id="dg-mode" style="max-width:220px" onchange="UI.dgf.mode=+this.value">${['0 · attached permanently','1 · attach on next ITSI attach','2 · not allowed on next ITSI attach','3 · attach on next location update','4 · not attached, radio may request','5 · not attached, radio may not request'].map((t,i)=>`<option value="${i}" ${f.mode===i?'selected':''}>${t}</option>`).join('')}</select></label>
@@ -1332,6 +1332,13 @@ async function saveName(){
 }
 // Managed talkgroups (Routing page): one card that folds to a thin bar. Off it starts folded (open it to
 // prepare the list), on it starts open; either way the header folds it.
+// DGNA: every talkgroup saved on the server to pick from (Directory names and access entries, allowed
+// talkgroups, pool groups), not only the allowed ones.
+function dgSaved(f){
+  const names=D.gssi||{},ks=[...new Set([...Object.keys(names),...Object.keys(D.access||{}),...((D.tg&&D.tg.allowed)||[]).map(String),...(D.pools||[]).flatMap(p=>(p.groups||[]).map(String))])].filter(k=>+k>=1&&+k<=16777215).sort((a,b)=>a-b);
+  if(!ks.length)return '';
+  return `<select class="f" aria-label="Saved talkgroups" style="max-width:220px" onchange="if(this.value){UI.dgf.gssi=this.value;UI.dgf.name=((D.gssi||{})[this.value]||'').slice(0,15);render(true)}"><option value="">Saved TGs…</option>${ks.map(k=>`<option value="${k}" ${String(f.gssi)===k?'selected':''}>${k}${names[k]?' · '+esc(names[k]):''}</option>`).join('')}</select>`;
+}
 function tgCard(adm,pools){
   const tg=D.tg||{},open=UI.tgOpen??!!tg.managed;
   const names=D.gssi||{},acc=D.access||{},refused=tg.refused||{};
@@ -1570,6 +1577,12 @@ mod tests {
         let dir = &PAGE_HTML[PAGE_HTML.find("R.issis=()=>{").unwrap()..];
         let dir = &dir[..dir.find("\n};\n").unwrap()];
         assert!(!dir.contains("setManaged") && !dir.contains("Refused"), "no managed switch on the Directory page");
+    }
+
+    #[test]
+    fn dgna_offers_the_saved_talkgroups() {
+        assert!(PAGE_HTML.contains("${dgSaved(f)}<input class=\"f\" id=\"dg-gssi\""));
+        assert!(PAGE_HTML.contains("maximum-scale=1"), "no zoom (test, Sebastian)");
     }
 
     #[test]
