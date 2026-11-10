@@ -12,9 +12,6 @@ Version 1.21.1 adds:
   only this server takes, e.g. a telemetry ISSI that positions are sent to,
   which "forward unknown targets" would otherwise hand to that network.
   Group calls are not affected.
-- **Fix: live updates on phones.** After the first touch the dashboard no
-  longer stopped fetching calls, SDS and emergencies (until a reload); the
-  scroll handling cleared the live refresh timer by mistake (since 1.21.0).
 
 Version 1.21.0 adds:
 
