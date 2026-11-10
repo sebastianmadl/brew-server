@@ -728,12 +728,14 @@ const keptNote=(st,k)=>{const d=st.keep_days;return `${k==='calls'?st.kept_calls
 let lastSig='';
 // Phones (iOS Safari): replacing the page while it scrolls leaves blank areas. Live updates wait until the
 // finger is off and the scroll has come to rest; a forced render (a click) still happens at once.
-let scrollBusy=0,touchOn=false,renderLater=false;
-function scrollRest(){clearTimeout(scrollBusy);scrollBusy=setTimeout(()=>{scrollBusy=0;if(!touchOn&&renderLater){renderLater=false;render();}},500);}
+// scrollTimer only ever holds a real timer id: clearing a made-up id (such as 1) would stop
+// whatever timer has that id, for example the live refresh interval.
+let scrollBusy=false,scrollTimer=0,touchOn=false,renderLater=false;
+function scrollRest(){clearTimeout(scrollTimer);scrollBusy=true;scrollTimer=setTimeout(()=>{scrollTimer=0;scrollBusy=false;if(!touchOn&&renderLater){renderLater=false;render();}},500);}
 (()=>{const m=document.querySelector('main');if(!m)return;
   // Desktop scrolls <main>, phones the page itself.
   m.addEventListener('scroll',scrollRest,{passive:true});window.addEventListener('scroll',scrollRest,{passive:true});
-  m.addEventListener('touchstart',()=>{touchOn=true;clearTimeout(scrollBusy);scrollBusy=1;},{passive:true});
+  m.addEventListener('touchstart',()=>{touchOn=true;clearTimeout(scrollTimer);scrollTimer=0;scrollBusy=true;},{passive:true});
   const up=()=>{touchOn=false;scrollRest();};m.addEventListener('touchend',up,{passive:true});m.addEventListener('touchcancel',up,{passive:true});})();
 function render(force){
   const p=UI.page;if(PG[p][4])return;
@@ -1632,6 +1634,12 @@ mod tests {
         }
         assert!(PAGE_HTML.contains("calls in total</div></div>`}"), "Overview: total under No active calls");
         assert!(PAGE_HTML.contains("if(!force&&(scrollBusy||touchOn)){renderLater=true;return;}"), "no live re-render while scrolling");
+        // A made-up timer id (scrollBusy=1) cleared with clearTimeout stopped the live refresh
+        // interval that had id 1: after one touch the page never updated again.
+        assert!(!PAGE_HTML.contains("scrollBusy=1"), "no fake timer id");
+        for clear in PAGE_HTML.match_indices("clearTimeout(").map(|(i, _)| &PAGE_HTML[i..]) {
+            assert!(!clear.starts_with("clearTimeout(scrollBusy)"), "scrollBusy is a flag, not a timer id");
+        }
     }
 
     #[test]
