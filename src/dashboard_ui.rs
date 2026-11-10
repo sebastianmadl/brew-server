@@ -678,13 +678,18 @@ function legIds(){
     for(const c of D.status.active_calls){if(c.kind==='group'&&c.source===l.talker&&l.legs.includes(c.destination))out.add(c.uuid);}}
   return out;
 }
-function poolOf(call){return D.pools.find(p=>p.live&&p.live.gssi===call.destination&&p.live.talker===call.source);}
+// The pool(s) a live call is heard on: a group in several pools carries the call on all of them,
+// shown as one pool named "A + B" with all its legs.
+function poolOf(call){const ps=D.pools.filter(p=>p.live&&p.live.gssi===call.destination&&p.live.talker===call.source);
+  if(ps.length<2)return ps[0];
+  return {name:ps.map(p=>p.name).join(' + '),live:{gssi:call.destination,talker:call.source,legs:[...new Set(ps.flatMap(p=>p.live.legs))],waiting:[...new Set(ps.flatMap(p=>p.live.waiting))]}};}
 // The pool a call's group belongs to: one of its own groups, or a group of another network (alias
 // above the 24 GSSI bits, slot << 24 | gssi). The network list is only loaded for admins, so without
 // it the network name comes from the call itself, and failing that the GSSI alone decides.
-function poolOfGroup(c){const g=c.destination;return D.pools.find(p=>g<=16777215?p.groups.includes(g):(p.remote||[]).some(r=>{
+function inPool(p,c){const g=c.destination;return g<=16777215?p.groups.includes(g):(p.remote||[]).some(r=>{
   const n=netOfSlot(Math.floor(g/16777216)),name=(n&&n.name)||(c.to_networks||[])[0]||c.from_network;
-  return g%16777216===r.gssi&&(!name||name===r.network);}));}
+  return g%16777216===r.gssi&&(!name||name===r.network);});}
+const poolsOfGroup=c=>D.pools.filter(p=>inPool(p,c));
 // Recent calls: the legs of one pool call (same talker, groups of one pool, started within 3 s)
 // become one row naming the pool, so a bridge does not fill the log with a row per group. A bridge
 // whose pool is unknown here (same talker, same GSSI on another network) is joined too.
@@ -693,13 +698,20 @@ function mergePoolLegs(list){
   list.forEach((c,i)=>{
     if(used.has(i))return;
     if(c.kind!=='group'){out.push(c);return;}
-    const p=poolOfGroup(c);
+    // A group can be in several pools: every pool of a collected leg is a candidate, until no
+    // further leg (same talker, within 3 s) joins.
+    const cand=poolsOfGroup(c);
     const legs=[c];
-    for(let j=i+1;j<list.length&&j<=i+50;j++){const o=list[j];
-      if(used.has(j)||o.kind!=='group'||o.source!==c.source||Math.abs(o.started_at_ms-c.started_at_ms)>3000)continue;
-      if(p?poolOfGroup(o)!==p:(o.destination===c.destination||low(o.destination)!==low(c.destination)))continue;
-      legs.push(o);used.add(j);}
+    for(let grew=true;grew;){grew=false;
+      for(let j=i+1;j<list.length&&j<=i+50;j++){const o=list[j];
+        if(used.has(j)||o.kind!=='group'||o.source!==c.source||Math.abs(o.started_at_ms-c.started_at_ms)>3000)continue;
+        if(cand.length?!cand.some(p=>inPool(p,o)):(o.destination===c.destination||low(o.destination)!==low(c.destination)))continue;
+        legs.push(o);used.add(j);grew=true;
+        for(const q of poolsOfGroup(o))if(!cand.includes(q))cand.push(q);}}
     if(legs.length<2){out.push(c);return;}
+    // The pools that carried it hold at least two of its groups; the others only share a group.
+    const real=cand.filter(p=>legs.filter(x=>inPool(p,x)).length>=2);
+    const p=real.length?{name:real.map(x=>x.name).join(' + ')}:cand[0];
     const ends=legs.map(x=>x.ended_at_ms).filter(Boolean);
     out.push(Object.assign({},c,{pool:p?p.name:'TG '+low(c.destination),legs:legs.map(x=>x.destination),
       started_at_ms:Math.min(...legs.map(x=>x.started_at_ms)),ended_at_ms:ends.length===legs.length?Math.max(...ends):null,
@@ -1804,10 +1816,11 @@ mod tests {
         assert!(body.contains("mergePoolLegs(st.recent_calls)"), "recent calls merged");
         assert!(body.contains("c.pool?"), "pool name in the To column");
         // Without the admin-only network list the alias network comes from the call.
-        let pg = &PAGE_HTML[PAGE_HTML.find("function poolOfGroup(c){").expect("poolOfGroup")..];
+        let pg = &PAGE_HTML[PAGE_HTML.find("function inPool(p,c){").expect("inPool")..];
         assert!(pg[..pg.find("\n}").unwrap_or(pg.len()).max(400).min(pg.len())].contains("(c.to_networks||[])[0]||c.from_network"), "works logged out");
         let f = &PAGE_HTML[PAGE_HTML.find("function mergePoolLegs(list){").expect("mergePoolLegs")..start];
-        for needle in ["o.source!==c.source", "3000", "poolOfGroup(o)!==p", "low(o.destination)!==low(c.destination)"] {
+        // A group in several pools: the pools holding at least two of the call's groups name it.
+        for needle in ["o.source!==c.source", "3000", "!cand.some(p=>inPool(p,o))", "low(o.destination)!==low(c.destination)", "legs.filter(x=>inPool(p,x)).length>=2"] {
             assert!(f.contains(needle), "{needle}");
         }
     }
