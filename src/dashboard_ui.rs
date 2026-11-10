@@ -1,9 +1,9 @@
 //! The redesigned dashboard, served at `/` (unless `[dashboard] legacy_ui =
 //! true`) and always at `/ui`. One page with a sidebar (FlowStation's layout), light
 //! and dark following the system. Its own pages read the same JSON APIs as
-//! the classic dashboard; the classic sub-pages (SIP, SMS Center, HA,
-//! Settings, Map, Telemetry SDS) are shown inside it in their embedded form
-//! (`?embed=1`, see `EMBED_STYLE`).
+//! the classic dashboard. Only the classic map is shown inside it in its
+//! embedded form (`?embed=1`, see `EMBED_STYLE`); SIP, SMS Center, Telemetry
+//! SDS, HA and Server settings are native pages with the same APIs.
 
 use axum::response::Html;
 
@@ -158,7 +158,7 @@ a.tile{color:inherit;cursor:pointer}
 .tgt td.tga{text-align:right;white-space:nowrap}.tgc{margin-top:3px;display:flex;flex-wrap:wrap;gap:4px}
 @media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
-.tw{overflow-x:auto}
+.tw{overflow-x:auto;position:relative}
 .empty .tot{margin-top:6px;font-size:12.5px}.empty .tot b{font:600 15px var(--mono,ui-monospace,monospace);color:var(--text2)}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
@@ -243,6 +243,7 @@ tr.exp td{background:var(--bg3);border-top:0}
 .sheet label.l{font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px}
 .sheet .acts{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--sep)}
 .sheet input.f{width:100%}
+.row2{display:flex;gap:10px}.row2>div{flex:1;min-width:0}
 
 /* Account button (top right) and login window */
 .acctbtn{display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 10px 0 4px;border-radius:99px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font:600 12.5px var(--sans);cursor:pointer}
@@ -468,9 +469,9 @@ const PAGES=[
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Infrastructure'],['routing','Routing','routing','Infrastructure'],['roaming','Roaming','roam','Infrastructure'],['multinet','Multi Network','globe','Infrastructure',null,true],
  ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['accounts','Accounts','key','Infrastructure',null,true],
- ['sip','SIP / VoIP','sip','Integrations','/sip'],['sipcfg','SIP Config','sipcfg','Integrations','/sip-config'],
- ['sms','SMS Center','sms','Integrations','/sms-center'],['tsds','Telemetry SDS','tsds','Integrations','/telemetry-sds'],
- ['ha','High Availability','ha','System','/ha'],['config','Config file','file','System',null,true],['settings','Server settings','set','System','/settings',true]
+ ['sip','SIP / VoIP','sip','Integrations'],['sipcfg','SIP Config','sipcfg','Integrations'],
+ ['sms','SMS Center','sms','Integrations'],['tsds','Telemetry SDS','tsds','Integrations'],
+ ['ha','High Availability','ha','System'],['config','Config file','file','System',null,true],['settings','Server settings','set','System',null,true]
 ];
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 const $=id=>document.getElementById(id);
@@ -570,6 +571,7 @@ function show(p){
   else render(true);
   $('content').parentElement.scrollTop=0;window.scrollTo(0,0);
   if(p==='calls'||p==='sds')refreshFast();
+  loadPageData(p,true);
   // Lists only this page shows: ask for them now, not at the next slow refresh (up to 5 s of "Loading…").
   if(p==='radios')getJ('/api/registrations').then(v=>{D.regs=v;if(UI.page===p)render();}).catch(()=>{});
   if(p==='accounts'&&D.who.admin)getJ('/api/accounts').then(v=>{D.acc=v;if(UI.page===p)render();}).catch(()=>{});
@@ -586,6 +588,7 @@ async function refreshFast(){
     D.status=st;D.pools=pools;D.emg=emg;ok=true;
   }catch(e){ok=false;}
   $('live').className='pill'+(ok?'':' d');$('live').lastChild.textContent=ok?'Live':'Offline';
+  if(['sip','sms','ha'].includes(UI.page))loadPageData(UI.page,false);
   $('emg').classList.toggle('on',D.emg.length>0);
   $('emg-list').innerHTML=D.emg.map(e=>`<span class="c">ISSI ${e.issi}${e.destination!=null?' → '+e.destination:''}${e.bts?' · '+esc(e.bts):''}</span>`).join('');
   render();
@@ -594,12 +597,13 @@ async function refreshSlow(){
   if(document.body.classList.contains('locked'))return;
   const tasks=[getJ('/api/connections').then(v=>D.conn=v),getJ('/api/telemetry').then(v=>D.tele=v),getJ('/api/radios').then(v=>D.radios=v),
     getJ('/api/ha').then(v=>D.ha=v),getJ('/api/whoami').then(v=>{const was=D.who.admin,first=!D.whoLoaded;D.who=v;D.whoLoaded=true;
-      if(was!==v.admin&&PG[UI.page][4])show(UI.page);else if(first&&PG[UI.page][5]&&!v.admin&&!v.need_login)openLogin(false);
+      if(was!==v.admin)show(UI.page);else if(first&&PG[UI.page][5]&&!v.admin&&!v.need_login)openLogin(false);
       // Admin-only route: asking it without a login answers 401 and opens the login window,
       // so an open (read-only) dashboard would get it every 5 s. Ask only once whoami says admin.
       if(v.admin)return getJ('/api/networks').then(n=>D.nets=n).catch(()=>{});})];
   if(UI.page==='radios')tasks.push(getJ('/api/registrations').then(v=>D.regs=v));
   if(UI.page==='accounts'&&D.who.admin)tasks.push(getJ('/api/accounts').then(v=>D.acc=v));
+  if(UI.page==='sipcfg')loadPageData('sipcfg',false);
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
   tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
@@ -1494,6 +1498,250 @@ async function waitRestart(){
   }
 }
 
+/* ---------- SIP, SMS Center, Telemetry SDS, High Availability, Server settings (native, were classic frames) ---------- */
+// Page data that only these pages need: asked when the page opens and with the live refresh.
+function loadPageData(p,first){
+  const t=[];const set=(k,u)=>t.push(getJ(u).then(v=>{D[k]=v;}).catch(e=>{D[k+'Err']=e.message;}));
+  if(p==='sip')set('sip','/api/sip');
+  if(p==='sipcfg'){set('sipc','/api/sip/config');if(first&&D.who.admin)set('sipFull','/api/config/sip/full');}
+  if(p==='sms')set('smsc','/api/sms-center');
+  if(p==='tsds'&&first)set('tele','/api/telemetry');
+  if(p==='ha'){set('ha','/api/ha');if(first&&D.who.admin)set('haCfg','/api/config/ha');}
+  if(p==='settings'&&first&&D.who.admin){set('blk','/api/config/blacklist');set('allow','/api/config/allowlist');set('btsLocs','/api/bts-locations?config_only=1');}
+  if(t.length)Promise.all(t).then(()=>{if(UI.page===p)render(first);});
+}
+const adminOnly=what=>`<div class="card"><div class="empty">${what} is for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
+const loading='<div class="card"><div class="empty">Loading…</div></div>';
+const kvRow=(k,v)=>`<div><span class="l">${k}</span>${v}</div>`;
+const pwChip=b=>b?'<span class="chip a">set</span>':'<span class="chip d">none</span>';
+const sipState=s=>{const m={up:'',registering:' w',failed:' d',down:' i'};return `<span class="st${m[s]??' i'}"><i></i>${esc(s)}</span>`;};
+function sipLeg(e){if(!e)return '—';switch(e.type){case 'sip_extension':return 'ext '+esc(e.aor);case 'sip_trunk':return 'trunk '+esc(e.trunk)+(e.number?' / '+esc(e.number):'');
+  case 'brew_private':return 'ISSI '+issiTxt(e.issi);case 'brew_group':return 'TG '+tgTxt(e.gssi);case 'sip_external':return esc(e.uri);default:return esc(JSON.stringify(e));}}
+const sipOff=(d,how)=>d&&!d.enabled?`<div class="card"><div class="note">${ic('info')}<div>The SIP gateway is switched off. ${how}</div></div></div>`:'';
+
+R.sip=()=>{
+  const d=D.sip;if(!d)return loading;
+  const up=d.trunks.filter(t=>t.status==='up').length,now=Date.now();
+  return `${sipOff(d,'Turn it on with <code>[sip] enabled = true</code> on the <a data-go="config" href="#config">Config file</a> page.')}
+  <div class="tiles">
+   <div class="tile"><div class="k">${ic('sip')}Listen</div><div class="v m" style="font-size:17px">${esc(d.listen||'—')}</div><div class="s">realm ${esc(d.realm||'—')}</div></div>
+   <div class="tile"><div class="k">${ic('radios')}Registrations</div><div class="v">${d.registrations.length}</div><div class="s">SIP extensions</div></div>
+   <div class="tile"><div class="k">${ic('routing')}Trunks up</div><div class="v">${up} / ${d.trunks.length}</div><div class="s">provisioned</div></div>
+   <div class="tile${d.active_calls.length?' live':''}"><div class="k">${ic('call')}Active calls</div><div class="v">${d.active_calls.length}</div><div class="s">${d.total_calls} in total</div></div>
+  </div>
+  <div class="card"><div class="ch"><h2>Extension registrations</h2><span class="cnt">${d.registrations.length}</span>${helpBtn('sipreg')}<span class="sp"></span><a data-go="sipcfg" href="#sipcfg">SIP Config ›</a></div>${helpNote('sipreg','SIP phones and softphones registered to this server as an extension (address of record, AOR). <i>Auth</i>: the registration passed digest authentication. Extensions, trunks and voice routes are set on the <a data-go="sipcfg" href="#sipcfg">SIP Config</a> page.')}
+   <div class="tw"><table><thead><tr><th>AOR</th><th>Contact</th><th class="hide-s">Source</th><th class="hide-s">User-Agent</th><th>Auth</th><th>Expires in</th></tr></thead><tbody>
+   ${d.registrations.map(r=>`<tr><td class="m"><b>${esc(r.aor)}</b></td><td class="m mut" style="font-size:12px">${esc(r.contact)}</td><td class="m hide-s">${esc(r.source)}</td><td class="mut hide-s">${esc(r.user_agent)}</td><td>${yn(r.authenticated)}</td><td class="num">${Math.max(0,Math.floor((r.expires_at_ms-now)/1000))} s</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No registrations</td></tr>'}
+   </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Trunks</h2><span class="cnt">${d.trunks.length}</span></div>
+   <div class="tw"><table><thead><tr><th>Name</th><th>Direction</th><th class="hide-s">Remote</th><th>Status</th><th class="hide-s">Peer</th><th class="hide-s">Detail</th><th>Calls</th></tr></thead><tbody>
+   ${d.trunks.map(t=>`<tr><td><b>${esc(t.name)}</b></td><td>${esc(t.direction)}</td><td class="m hide-s">${esc(t.remote_host||'—')}</td><td>${sipState(t.status)}</td><td class="m mut hide-s">${esc(t.peer_addr||'—')}</td><td class="mut hide-s">${esc(t.detail||'')}</td><td class="num">${t.active_calls}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No trunks provisioned</td></tr>'}
+   </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Active calls</h2><span class="cnt">${d.active_calls.length}</span></div>
+   <div class="tw"><table><thead><tr><th>From</th><th>To</th><th>State</th><th>Duration</th><th class="hide-s">RTP A / B</th><th class="hide-s">Call-ID</th></tr></thead><tbody>
+   ${d.active_calls.map(c=>`<tr><td>${sipLeg(c.from)}</td><td>${sipLeg(c.to)}</td><td>${esc(c.state)}</td><td class="num">${dur(now-(c.answered_at_ms||c.started_at_ms))}</td><td class="m mut hide-s">${c.rtp_a_port||'—'} / ${c.rtp_b_port||'—'}</td><td class="m mut hide-s" style="font-size:12px">${esc(String(c.call_id).slice(0,18))}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No active calls</td></tr>'}
+   </tbody></table></div></div>`;
+};
+
+// SIP Config: read-only for everyone; an admin adds, edits and deletes extensions, trunks and routes here.
+// Endpoints as written in the forms: ext:USER, trunk:NAME[/NUMBER], issi:N, group:N.
+function sipEp(s){s=(s||'').trim();if(!s)return null;const i=s.indexOf(':');if(i<0)return undefined;const k=s.slice(0,i),r=s.slice(i+1);
+  if(k==='ext'&&r)return {kind:'sip_extension',user:r};
+  if(k==='trunk'&&r){const [trunk,number]=r.split('/');return {kind:'sip_trunk',trunk,number:number||''};}
+  if(k==='issi'&&+r>0)return {kind:'brew_private',issi:+r};
+  if(k==='group'&&+r>0)return {kind:'brew_group',gssi:+r};
+  return undefined;}
+function sipEpTxt(ep){if(!ep)return '';if(ep.kind==='sip_extension')return 'ext:'+ep.user;if(ep.kind==='sip_trunk')return ep.number?`trunk:${ep.trunk}/${ep.number}`:'trunk:'+ep.trunk;
+  if(ep.kind==='brew_private')return 'issi:'+ep.issi;if(ep.kind==='brew_group')return 'group:'+ep.gssi;return '';}
+R.sipcfg=()=>{
+  const d=D.sipc;if(!d)return loading;
+  const adm=D.who.admin,F=D.sipFull;
+  const act=(kind,key)=>adm&&F?`<td style="text-align:right;white-space:nowrap"><button class="btn" onclick="sipEdit('${kind}',${esc(JSON.stringify(key))})">Edit</button> <button class="btn danger hide-s" onclick="sipDel('${kind}',${esc(JSON.stringify(key))})">Delete</button></td>`:'';
+  const addBtn=kind=>adm&&F?`<span class="sp"></span><button class="btn pri" onclick="sipEdit('${kind}',null)">${ic('plus')}Add</button>`:'';
+  const restart='Saving writes the config file and restarts the server within a few seconds (Brew and SIP connections drop briefly and reconnect).';
+  return `${sipOff(d,'Set <code>[sip] enabled = true</code> on the <a data-go="config" href="#config">Config file</a> page.')}
+  <div class="card"><div class="ch"><h2>General</h2>${helpBtn('sipgen')}<span class="sp"></span><a data-go="sip" href="#sip">SIP / VoIP ›</a></div>${helpNote('sipgen',(adm?'Extensions, trunks and voice routes are edited on this page. '+restart:'Read only. An admin edits extensions, trunks and voice routes here (log in).')+' The general settings are in <code>[sip]</code> on the Config file page. Passwords are never shown.')}
+   <div class="kv" style="padding:12px 18px">${kvRow('Enabled',yn(d.enabled))}${kvRow('Listen',`<span class="m">${esc(d.listen)}</span>`)}${kvRow('Advertised host',`<span class="m">${esc(d.advertised_host||'local socket address')}</span>`)}${kvRow('Realm',esc(d.realm))}${kvRow('RTP ports',`<span class="m">${esc(d.rtp_port_min)}–${esc(d.rtp_port_max)}</span>`)}${kvRow('Registration TTL',esc(d.registration_ttl_seconds)+' s')}</div>
+   ${msgDiv('sip-msg')}</div>
+  <div class="card"><div class="ch"><h2>Extensions</h2><span class="cnt">${d.extensions.length}</span>${addBtn('ext')}</div>
+   <div class="tw"><table><thead><tr><th>User</th><th>Display name</th><th>ISSI</th><th>Outbound</th><th class="hide-s">Password</th>${adm&&F?'<th></th>':''}</tr></thead><tbody>
+   ${d.extensions.map(e=>`<tr><td class="m"><b>${esc(e.user)}</b></td><td>${esc(e.display_name||'—')}</td><td class="m">${e.issi?issiTxt(e.issi):'—'}</td><td>${yn(e.allow_outbound)}</td><td class="hide-s">${pwChip(e.has_password)}</td>${act('ext',e.user)}</tr>`).join('')||`<tr><td colspan="6" class="mut">No extensions provisioned</td></tr>`}
+   </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Trunks</h2><span class="cnt">${d.trunks.length}</span>${addBtn('trunk')}</div>
+   <div class="tw"><table><thead><tr><th>Name</th><th>Direction</th><th class="hide-s">Remote host</th><th class="hide-s">Username</th><th class="hide-s">Realm</th><th class="hide-s">Registration</th><th>Enabled</th><th class="hide-s">Password</th>${adm&&F?'<th></th>':''}</tr></thead><tbody>
+   ${d.trunks.map(t=>`<tr><td><b>${esc(t.name)}</b></td><td>${esc(t.direction)}</td><td class="m hide-s">${esc(t.remote_host||'—')}</td><td class="m hide-s">${esc(t.username||'—')}</td><td class="mut hide-s">${esc(t.realm||'—')}</td><td class="num hide-s">every ${esc(t.register_interval_seconds)} s</td><td>${yn(t.enabled)}</td><td class="hide-s">${pwChip(t.has_password)}</td>${act('trunk',t.name)}</tr>`).join('')||'<tr><td colspan="9" class="mut">No trunks provisioned</td></tr>'}
+   </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Voice routes</h2><span class="cnt">${d.routes.length}</span>${helpBtn('siprt')}${addBtn('route')}</div>${helpNote('siprt','Routes are checked from top to bottom; the first enabled route whose match pattern (and optional <i>from</i>) fits the dialled number wins. Endpoints: <code>ext:USER</code> (SIP extension), <code>trunk:NAME</code> or <code>trunk:NAME/NUMBER</code>, <code>issi:N</code> (individual call to a radio), <code>group:N</code> (group call). <i>Strip prefix</i> removes a leading literal (e.g. the outside line digit "9") only from the number handed to a <code>trunk:NAME</code> without a number. Editing keeps a route\'s position; a new route goes to the end (reorder it on the Config file page).')}
+   <div class="tw"><table><thead><tr><th>#</th><th>Name</th><th>Match</th><th class="hide-s">Strip prefix</th><th>From</th><th>To</th><th>Enabled</th>${adm&&F?'<th></th>':''}</tr></thead><tbody>
+   ${d.routes.map((r,i)=>`<tr><td class="mut num">${i+1}</td><td><b>${esc(r.name||'—')}</b></td><td><code>${esc(r.match_pattern)}</code></td><td class="m mut hide-s">${esc(r.strip_prefix||'—')}</td><td class="m">${esc(r.from||'any')}</td><td class="m">${esc(r.to||'—')}</td><td>${yn(r.enabled)}</td>${act('route',r.name)}</tr>`).join('')||'<tr><td colspan="8" class="mut">No voice routes</td></tr>'}
+   </tbody></table></div></div>`;
+};
+const sel=(id,label,val,opts)=>`<div><label class="l" for="${id}">${label}</label><select class="f" id="${id}" style="width:100%">${opts.map(o=>`<option value="${o}"${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+const swRow=(id,on,label,hint)=>`<label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="${id}" aria-checked="${!!on}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button><span><b style="font-size:13.5px">${label}</b>${hint?`<br><span class="mut" style="font-size:12px">${hint}</span>`:''}</span></label>`;
+function sipEdit(kind,key){
+  const F=D.sipFull||{extensions:{},trunks:{},routes:[]};const isNew=key==null;let body='',title='';
+  if(kind==='ext'){const e=isNew?{display_name:'',issi:0,allow_outbound:true,password:''}:F.extensions[key]||{};title=isNew?'New extension':'Extension '+esc(key);
+    body=`${fld('se-user','User (extension number)',isNew?'':key,(isNew?'':'disabled ')+'placeholder="e.g. 1001" autocomplete="off"')}${fld('se-name','Display name',e.display_name||'','placeholder="optional"')}
+     ${fld('se-issi','ISSI (radio this extension stands for)',e.issi||'','inputmode="numeric" placeholder="optional"')}${fld('se-pw','Password',isNew?'':(e.password||''),'type="password" autocomplete="new-password" spellcheck="false"')}
+     ${swRow('se-out',e.allow_outbound!==false,'Outbound calls','May call out through trunks')}`;}
+  else if(kind==='trunk'){const t=isNew?{direction:'outbound',remote_host:'',username:'',password:'',realm:'',register_interval_seconds:300,enabled:true}:F.trunks[key]||{};title=isNew?'New trunk':'Trunk '+esc(key);
+    body=`${fld('st-name','Name',isNew?'':key,(isNew?'':'disabled ')+'placeholder="e.g. provider" autocomplete="off"')}${sel('st-dir','Direction',t.direction||'outbound',['outbound','inbound','peer'])}
+     ${fld('st-host','Remote host (host:port)',t.remote_host||'','placeholder="sip.example.net:5060" autocomplete="off" spellcheck="false"')}
+     <div class="row2">${fld('st-user','Username',t.username||'','autocomplete="off" spellcheck="false"')}${fld('st-pw','Password',isNew?'':(t.password||''),'type="password" autocomplete="new-password" spellcheck="false"')}</div>
+     <div class="row2">${fld('st-realm','Realm',t.realm||'','placeholder="optional"')}${fld('st-int','Registration interval (s)',t.register_interval_seconds||300,'inputmode="numeric"')}</div>
+     ${swRow('st-en',t.enabled!==false,'Enabled','')}`;}
+  else{const r=isNew?{name:'',match_pattern:'',strip_prefix:'',from:null,to:null,enabled:true}:(F.routes||[]).find(x=>x.name===key)||{};title=isNew?'New voice route':'Voice route '+esc(key);
+    body=`${fld('sr-name','Name',r.name||'',(isNew?'':'disabled ')+'placeholder="e.g. outside line" autocomplete="off"')}
+     <div class="row2">${fld('sr-match','Match pattern',r.match_pattern||'','placeholder="e.g. 9*" spellcheck="false"')}${fld('sr-strip','Strip prefix',r.strip_prefix||'','placeholder="e.g. 9" spellcheck="false"')}</div>
+     ${fld('sr-from','From (optional)',sipEpTxt(r.from),'placeholder="any, or ext:1001 / trunk:NAME / issi:N / group:N" spellcheck="false"')}
+     ${fld('sr-to','To',sipEpTxt(r.to),'placeholder="ext:1001 / trunk:NAME[/NUMBER] / issi:N / group:N" spellcheck="false"')}
+     ${swRow('sr-en',r.enabled!==false,'Enabled','')}`;}
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${title}</h3></div><div class="sb">${body}
+   <div class="mut" style="font-size:12px">Saving writes the config file and restarts the server within a few seconds.</div><div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts">${isNew?'':`<button class="btn danger" style="margin-right:auto" onclick="closeSheet();sipDel('${kind}',${esc(JSON.stringify(key))})">${ic('trash')}Delete</button>`}<button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="sipSave('${kind}',${esc(JSON.stringify(key))})">Save</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>{const f=$('sheet').querySelector('input.f:not([disabled])');if(f)f.focus();},30);
+}
+async function sipSave(kind,key){
+  const m=$('sheet-msg'),v=id=>$(id).value.trim(),bad=t=>{m.className='msg err';m.textContent=t;};
+  let url,body;
+  if(kind==='ext'){const user=key??v('se-user');if(!user)return bad('The extension needs a user (number).');
+    url='/api/config/sip/extensions/'+encodeURIComponent(user);body={password:$('se-pw').value,display_name:v('se-name'),issi:parseInt(v('se-issi'),10)||0,allow_outbound:on('se-out')};}
+  else if(kind==='trunk'){const name=key??v('st-name');if(!name)return bad('The trunk needs a name.');
+    url='/api/config/sip/trunks/'+encodeURIComponent(name);body={direction:$('st-dir').value,remote_host:v('st-host'),username:v('st-user'),password:$('st-pw').value,realm:v('st-realm'),register_interval_seconds:parseInt(v('st-int'),10)||300,enabled:on('st-en')};}
+  else{const name=key??v('sr-name');if(!name)return bad('The route needs a name.');
+    const from=sipEp(v('sr-from')),to=sipEp(v('sr-to'));
+    if(from===undefined)return bad('From: write ext:USER, trunk:NAME, issi:N or group:N, or leave it empty.');
+    if(!to)return bad('To: write ext:USER, trunk:NAME[/NUMBER], issi:N or group:N.');
+    url='/api/config/sip/routes';body={name,match_pattern:v('sr-match')||'*',strip_prefix:v('sr-strip'),from,to,enabled:on('sr-en')};}
+  m.className='msg mut';m.textContent='Saving…';
+  try{await postJ(url,body);closeSheet();sipSaved();}catch(e){bad(e.message);}
+}
+async function sipDel(kind,key){
+  const what=kind==='ext'?'extension':kind==='trunk'?'trunk':'voice route';
+  if(!confirm(`Delete ${what} "${key}"? The server restarts within a few seconds to apply it.`))return;
+  const path=kind==='ext'?'extensions':kind==='trunk'?'trunks':'routes';
+  try{await api(`/api/config/sip/${path}/${encodeURIComponent(key)}`,{method:'DELETE'});sipSaved();}catch(e){setMsg('sip-msg','err',e.message);render(true);}
+}
+function sipSaved(){setMsg('sip-msg','ok','Saved. The server restarts to apply it; this page updates once it is back.');render(true);
+  setTimeout(()=>{getJ('/api/config/sip/full').then(v=>{D.sipFull=v;}).catch(()=>{});loadPageData('sipcfg',false);},4000);}
+
+R.sms=()=>{
+  const d=D.smsc;if(!d)return loading;
+  const adm=D.who.admin,list=(d.messages||[]).slice().sort((a,b)=>b.stored_at_ms-a.stored_at_ms);
+  return `${!d.enabled?`<div class="card"><div class="note">${ic('info')}<div>The SMS Center is switched off (<code>[sms_center]</code> on the Config file page).</div></div></div>`:''}
+  <div class="card"><div class="ch"><h2>Stored messages</h2><span class="cnt">${list.length}</span>${helpBtn('smsc')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${d.known_issis} radios known</span></div>${helpNote('smsc','SDS to a radio that is not reachable are kept here and delivered when it registers again, until they expire. <i>Delivering</i>: a delivery attempt is running. Admins can delete a stored message.')}
+   <div class="tw"><table><thead><tr><th>Stored</th><th>From</th><th>To</th><th>Message</th><th>Status</th><th class="hide-s">Attempts</th><th class="hide-s">Expires</th>${adm?'<th></th>':''}</tr></thead><tbody>
+   ${list.map(x=>`<tr><td class="m">${tmd(x.stored_at_ms)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${issiTxt(x.destination)}</td><td>${x.text?esc(x.text):`<span class="m mut">${esc(String(x.data_hex||'').slice(0,24))}</span>`}</td><td>${x.in_flight?'<span class="chip w">Delivering</span>':'<span class="chip">Waiting</span>'}</td><td class="num hide-s">${x.attempts}</td><td class="m hide-s">${tmd(x.expires_at_ms)}</td>${adm?`<td style="text-align:right"><button class="btn danger" onclick="smsDel('${esc(x.id)}')">Delete</button></td>`:''}</tr>`).join('')||`<tr><td colspan="8" class="mut">No stored messages</td></tr>`}
+   </tbody></table></div>${msgDiv('sms-msg','padding:12px 18px')}</div>`;
+};
+async function smsDel(id){if(!confirm('Delete this stored message? It will not be delivered.'))return;
+  try{await api('/api/sms-center/'+id,{method:'DELETE'});setMsg('sms-msg','ok','Deleted.');}catch(e){setMsg('sms-msg','err',e.message);}loadPageData('sms',false);}
+
+R.tsds=()=>{
+  const t=D.tele;if(!t)return loading;
+  const list=t.flatMap(s=>(s.recent_sds_out||[]).map(x=>({...x,bts:s.id}))).sort((a,b)=>b.at_ms-a.at_ms).slice(0,100);
+  return `<div class="card"><div class="ch"><h2>Telemetry SDS</h2><span class="cnt">${list.length}</span>${helpBtn('tsds')}</div>${helpNote('tsds','The last SDS each station reports over its telemetry link (FlowStation <code>[telemetry]</code>), newest first, up to 100. <i>Position</i>: a location information protocol (LIP, protocol identifier 10) report; binary LIP is shown as undecoded.')}
+   <div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th class="hide-s">Direction</th><th>From</th><th>To</th><th>Type</th><th>Text</th></tr></thead><tbody>
+   ${list.map(x=>`<tr><td class="m">${tmd(x.at_ms)}</td><td><b>${esc(x.bts)}</b></td><td class="hide-s">${esc(x.direction)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${x.is_group?'TG '+tgTxt(x.dest_issi):issiTxt(x.dest_issi)}</td><td>${x.protocol_id===10?'<span class="chip b">Position</span>':`<span class="chip">SDS</span> <span class="mut">PI ${x.protocol_id}</span>`}</td><td>${x.protocol_id===10&&!(x.text||'').trim()?'<span class="mut">binary LIP (undecoded)</span>':esc(x.text)}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No telemetry SDS yet</td></tr>'}
+   </tbody></table></div></div>`;
+};
+
+// High Availability: both nodes, controls and the [ha] settings (admin), role changes.
+const haRole=r=>{const m={active:'a',standby:'b',down:'d',starting:'w'};return `<span class="chip ${m[r]||'i'}">${esc(String(r||'unknown'))}</span>`;};
+function haRepl(d){const r=d.replication;if(!r)return '—';if(!r.needed)return '<span class="mut">nothing to copy</span>';
+  if(d.role==='active')return r.connected?'serving the Standby':'<b>no Standby connected</b>';
+  const a=r.last_rx_ms_ago!=null?` <span class="mut">(${Math.round(r.last_rx_ms_ago/1000)} s ago)</span>`:'';
+  return (r.synced?'in sync':r.connected?'<b>catching up</b>':'<b>not connected</b>')+a;}
+const HA_F=[['enabled','sw','HA enabled'],['node_name','t','Node name'],['weight','n','Weight'],['persist','sw','Persist'],['vip','t','Virtual IP (a.b.c.d/nn)'],['vip_interface','t','Interface'],['real_ip','t','This node\'s real IP'],['peer_ip','t','Peer\'s real IP'],
+  ['heartbeat_port','n','Heartbeat port'],['heartbeat_interval_ms','n','Heartbeat interval (ms)'],['dead_after_ms','n','Peer dead after (ms)'],['shared_secret','pw','Shared secret'],['check_gateway','t','Gateway check IP (optional)']];
+R.ha=()=>{
+  const d=D.ha;if(!d)return loading;
+  const adm=D.who.admin,p=d.peer;
+  const warn=[];const list=a=>a&&a.length?': '+a.map(x=>`<code>${esc(x)}</code>`).join(', '):'';
+  if(d.pending_changes)warn.push('The config file has saved changes that are not applied yet'+list(d.pending_diff));
+  if(d.peer_config_differs)warn.push('The peer runs a different configuration'+(d.peer_config_diff&&d.peer_config_diff.length?list(d.peer_config_diff):' (details follow within a few seconds)'));
+  if(d.enabled&&!d.gateway_ok)warn.push('Gateway check failing: this node cannot become Active.');
+  const node=(title,chip,rows)=>`<div class="card"><div class="ch"><h2>${title}</h2><span class="sp"></span>${chip}</div><div class="kv tight" style="padding:12px 18px">${rows.map(([k,v])=>kvRow(k,v)).join('')}</div></div>`;
+  const nodes=d.enabled?`<div class="grid2">${node('This node: '+esc(d.node),haRole(d.role),[['Weight',d.weight],['Persist',`${d.persist?'on':'off'} <span class="mut">(${d.persist_source==='override'?'dashboard':'config'})</span>`],['Manual hold',d.hold?'yes':'no'],
+     ['Virtual IP',`<span class="m">${esc(d.vip)}</span> ${d.vip_held?'<b>held here</b>':'<span class="mut">not held</span>'}`],['Gateway check',d.gateway_ok?'ok':'<b>failing</b>'],['Handing over to',esc(d.handover_to||'—')],
+     ['Replication',haRepl(d)],['Records from peer',d.replication&&d.replication.needed?`${d.replication.records_received} <span class="mut">(+${d.replication.sms_snapshots_received} SMS queue copies)</span>`:'—']])}
+    ${node('Peer'+(p?': '+esc(p.node):''),p?(p.alive?haRole(p.role):haRole('down')):'<span class="chip i">never heard</span>',p?[['Address',`<span class="m">${esc(p.ip)}</span>`],['Weight',p.weight],['Persist',p.persist?'on':'off'],['Manual hold',p.hold?'yes':'no'],['Copy up to date',p.synced?'yes':'no'],['Last heartbeat',(p.last_seen_ms_ago/1000).toFixed(1)+' s ago']]:[['Status','no heartbeat received yet']])}</div>`
+    :`<div class="card"><div class="empty">HA is not enabled on this node.${adm?' Fill in the settings below and switch <i>HA enabled</i> on; the node restarts to apply it.':' An admin can turn it on here.'}</div></div>`;
+  const ctl=adm&&d.enabled?`<div class="card"><div class="ch"><h2>Controls</h2>${helpBtn('hactl')}</div>${helpNote('hactl','<i>Make Active</i> / <i>Make Standby</i> hand the virtual IP over to the other node, which then keeps it (manual hold) until it leaves Active. <i>Persist</i> keeps the Active node Active even when a peer with a higher weight comes back; the buttons override the config value until <i>Config default</i>, and each of them ends a manual hold. While HA is enabled, configuration changes take effect only through <i>Apply saved config</i>: an Active node hands over to the Standby first, then restarts. A node that leaves Active restarts into Standby and its sessions reconnect to the new Active node through the virtual IP. The Standby keeps a copy of the call and SDS history and the SMS Center queue; a returning node with a higher weight takes over only once its copy is up to date (manual switches do not wait).')}
+    <div class="tgadd"><button class="btn" ${d.role!=='standby'?'disabled':''} onclick="haAct('active')">Make Active</button><button class="btn" ${d.role!=='active'?'disabled':''} onclick="haAct('standby')">Make Standby</button>
+     <span class="mut" style="font-size:12.5px">Persist</span><div class="seg" role="group"><button onclick="haPersist(true)" aria-pressed="${d.persist_source==='override'&&d.persist}">On</button><button onclick="haPersist(false)" aria-pressed="${d.persist_source==='override'&&!d.persist}">Off</button><button onclick="haPersist(null)" aria-pressed="${d.persist_source!=='override'}">Config default</button></div>
+     <span class="sp"></span><button class="btn pri" onclick="haApply(false)">Apply saved config</button></div>${msgDiv('ha-act','padding:12px 18px')}</div>`:'';
+  const c=D.haCfg;
+  const form=adm&&c?`<div class="card"><div class="ch"><h2>Settings</h2>${helpBtn('hacfg')}<span class="sp"></span><button class="btn" onclick="haEditCfg()">Edit</button></div>${helpNote('hacfg','Both nodes need the same virtual IP, heartbeat port and shared secret; node name, weight and the two real IPs are per node (swap them on the other node). Saving writes <code>[ha]</code> to the config file only; apply it with <i>Apply saved config</i>.')}
+    <div class="kv tight" style="padding:12px 18px">${HA_F.map(([k,t,l])=>kvRow(l,t==='sw'?(c[k]?'on':'off'):t==='pw'?(c[k]?'set':'<span class="no">none</span>'):`<span class="m">${esc(c[k]??'')||'—'}</span>`)).join('')}</div>${msgDiv('ha-cfg','padding:0 18px 12px')}</div>`:'';
+  return `${warn.length?`<div class="card"><div class="note" style="border-top:0">${ic('alert')}<div>${warn.join('<br>')}</div></div></div>`:''}${nodes}${ctl}${form}
+   <div class="card"><div class="ch"><h2>Role changes</h2><span class="cnt">${(d.transitions||[]).length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Reason</th></tr></thead><tbody>
+   ${(d.transitions||[]).map(t=>`<tr><td class="m">${tmd(t.ts_ms)}</td><td>${haRole(t.from)}</td><td>${haRole(t.to)}</td><td>${esc(t.reason)}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No role changes yet</td></tr>'}
+   </tbody></table></div></div>`;
+};
+const haMe=()=>D.ha?D.ha.node:'this node',haPeer=()=>D.ha&&D.ha.peer?D.ha.peer.node:'the peer';
+async function haPost(url,body,msg){try{const r=await postJ(url,body);setMsg(msg,'ok',r&&typeof r.result==='string'?r.result:'Done.');}catch(e){setMsg(msg,'err',e.message);}loadPageData('ha',false);}
+function haAct(which){const d=D.ha||{},p=d.peer||{},r=d.replication||{};
+  const repl=(who,ok)=>ok?'':`\n\nWarning: the copy of the call history and SMS Center queue on ${who} is not up to date; anything not copied yet stays behind.`;
+  const msg=which==='active'
+    ?`Make ${haMe()} Active?\n\n${haPeer()} hands the virtual IP over to ${haMe()}. Basestations, peers and SIP calls on ${haPeer()} are dropped and reconnect here; ${haPeer()} restarts into Standby.\n\n${haMe()} then keeps the virtual IP (manual hold) until it leaves Active or a Persist button is pressed.`+repl(haMe(),!r.needed||r.synced)
+    :`Make ${haMe()} Standby?\n\n${haPeer()} takes over the virtual IP. Basestations, peers and SIP calls on ${haMe()} are dropped and reconnect to ${haPeer()}; ${haMe()} restarts into Standby.\n\n${haPeer()} then keeps the virtual IP (manual hold) until it leaves Active or a Persist button is pressed.`+repl(haPeer(),p.synced!==false);
+  if(confirm(msg))haPost('/api/ha/'+which,{},'ha-act');}
+function haPersist(v){
+  if(v===null){const c=D.haCfg?(D.haCfg.persist?'on':'off'):'the config file value';
+    if(!confirm(`Reset Persist on ${haMe()} to the config default (${c})?\n\nThis removes the dashboard override and ends any manual hold. If Persist ends up off and ${haPeer()} has the higher weight, ${haPeer()} takes over the virtual IP once its copy of the data is up to date, and sessions on ${haMe()} reconnect there.`))return;}
+  haPost('/api/ha/persist',{persist:v},'ha-act');}
+async function haApply(force){
+  const d=D.ha||{},changes=(d.pending_diff||[]).join(', ');
+  const what=changes?`Changes to apply: ${changes}`:'No setting changes are pending; this only restarts the node.';
+  const how=d.role==='active'?`${haMe()} is Active: it hands the virtual IP over to ${haPeer()} first, then restarts. Sessions on ${haMe()} reconnect to ${haPeer()}.`:`${haMe()} is ${d.role||'not Active'}: it restarts; service on ${haPeer()} is not affected.`;
+  if(!force&&!confirm(`Apply the saved config on ${haMe()}?\n\n${what}\n\n${how}`))return;
+  const r=await fetch('/api/ha/apply',{method:'POST',headers:{'content-type':'application/json','x-brew-ui':'1'},body:JSON.stringify({force})});const t=await r.text();
+  if(!r.ok&&r.status===409&&!force){if(confirm(t+'\n\nRestart anyway?'))return haApply(true);}
+  let m=t;try{m=JSON.parse(t).result;}catch(e){}setMsg('ha-act',r.ok?'ok':'err',r.ok?String(m):t);render(true);}
+function haEditCfg(){const c=D.haCfg||{};
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">High Availability settings</h3></div><div class="sb">
+   ${HA_F.map(([k,t,l])=>t==='sw'?swRow('ha-'+k,c[k],l,''):fld('ha-'+k,l,c[k]??'',(t==='n'?'inputmode="numeric" ':'')+(t==='pw'?'type="password" autocomplete="new-password" ':'autocomplete="off" ')+'spellcheck="false"')).join('')}
+   <div class="mut" style="font-size:12px">Saving writes <code>[ha]</code> to the config file; apply it with "Apply saved config".</div><div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="haSave()">Save</button></div>`;
+  $('scrim').classList.add('on');}
+async function haSave(){
+  const c=Object.assign({},D.haCfg||{}),m=$('sheet-msg');
+  for(const [k,t] of HA_F){c[k]=t==='sw'?on('ha-'+k):t==='n'?Number($('ha-'+k).value):$('ha-'+k).value.trim();}
+  m.className='msg mut';m.textContent='Saving…';
+  try{await api('/api/config/ha',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(c)});D.haCfg=c;closeSheet();setMsg('ha-cfg','ok','Saved to the config file. Apply it with "Apply saved config".');render(true);}
+  catch(e){m.className='msg err';m.textContent=e.message;}}
+
+// Server settings: ISSI block list and allow list (live), static station positions.
+R.settings=()=>{
+  if(!D.who.admin)return adminOnly('Server settings');
+  const b=D.blk,a=D.allow,l=D.btsLocs;if(!b||!a||!l)return loading;
+  const issiRows=(list,btn,fn,empty)=>list.map(i=>`<tr><td class="m"><b>${issiTxt(i)}</b></td><td style="text-align:right"><button class="btn" onclick="${fn}(${i})">${btn}</button></td></tr>`).join('')||`<tr><td colspan="2" class="mut">${empty}</td></tr>`;
+  const alState=a.enabled?(a.issis.length?`<span class="chip a">Enforced</span> ${a.issis.length} ISSI${a.issis.length===1?'':'s'} admitted, every other radio is barred.`:'<span class="chip d">Enforced, empty</span> Every radio is barred until one is admitted.'):'<span class="chip i">Not enforced</span> The list is kept, every radio may communicate.';
+  return `<div class="card"><div class="ch"><h2>ISSI block list</h2><span class="cnt">${b.length}</span>${helpBtn('blk')}</div>${helpNote('blk','A blocked ISSI cannot transmit to groups, make or receive individual calls, or send or receive SDS through this server. Ambience listening (SS-AL) and LIP position reports still work, and it can still register. Applies at once, no restart (<code>[blacklist]</code>).')}
+    <div class="tgadd"><input class="f" id="blk-issi" placeholder="ISSI to block, e.g. 4013" inputmode="numeric" style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')issiList('blacklist','POST',this.value)"><button class="btn pri" onclick="issiList('blacklist','POST',$('blk-issi').value)">${ic('plus')}Block</button></div>
+    <div class="tw"><table><tbody>${issiRows(b,'Unblock','unblockIssi','No ISSI is blocked')}</tbody></table></div>${msgDiv('blk-msg','padding:12px 18px')}</div>
+   <div class="card"><div class="ch"><h2>ISSI allow list</h2><span class="cnt">${a.issis.length}</span>${helpBtn('alw')}<span class="sp"></span><label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600">Enforce<button class="tog" role="switch" aria-checked="${!!a.enabled}" aria-label="Enforce the allow list" onclick="allowEnforce(this.getAttribute('aria-checked')!=='true')"></button></label></div>${helpNote('alw','The closed-network counterpart of the block list: while enforced, only the listed ISSIs may transmit to groups, make or receive individual calls, or send or receive SDS through this server, whichever station they are on. Any other radio is barred like a blocked one (SS-AL, LIP and emergency calls still pass, and it can still register). The block list applies on top. Applies at once, no restart.')}
+    <div class="svc">${alState}</div>
+    <div class="tgadd"><input class="f" id="al-issi" placeholder="ISSI to admit, e.g. 4013" inputmode="numeric" style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')issiList('allowlist','POST',this.value)"><button class="btn pri" onclick="issiList('allowlist','POST',$('al-issi').value)">${ic('plus')}Admit</button></div>
+    <div class="tw"><table><tbody>${issiRows(a.issis,'Remove','disallowIssi','No ISSI is on the allow list')}</tbody></table></div>${msgDiv('al-msg','padding:12px 18px')}</div>
+   <div class="card"><div class="ch"><h2>Station positions (static)</h2><span class="cnt">${l.length}</span>${helpBtn('btsl')}<span class="sp"></span><a data-go="accounts" href="#accounts">Accounts ›</a></div>${helpNote('btsl','Configured names and positions of stations by Brew login (<code>[bts_locations]</code>), shown on the map. A position a station reports over telemetry, or one relayed by another server, comes first. Usually set together with the login on the <a data-go="accounts" href="#accounts">Accounts</a> page. Saving restarts the server.')}
+    <div class="tw"><table><thead><tr><th>Login</th><th>Name</th><th>Position</th><th></th></tr></thead><tbody>
+    ${l.map(x=>`<tr><td class="m"><b>${esc(x.username)}</b></td><td>${esc(x.name)}</td><td class="m" style="font-size:12px">${(+x.lat).toFixed(4)}, ${(+x.lon).toFixed(4)}</td><td style="text-align:right"><button class="btn danger" onclick="btsLocDel('${esc(x.username)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="4" class="mut">No static station positions</td></tr>'}
+    </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>`;
+};
+async function issiList(which,method,v){const i=parseInt(String(v).trim(),10);const msg=which==='blacklist'?'blk-msg':'al-msg';
+  if(!(i>0&&i<=16777215)){setMsg(msg,'err','An ISSI is a number from 1 to 16777215.');render(true);return;}
+  try{await api(`/api/config/${which}/${i}`,{method});setMsg(msg,'ok','Applied at once.');}catch(e){setMsg(msg,'err',e.message);}
+  [D.blk,D.allow]=await Promise.all([getJ('/api/config/blacklist'),getJ('/api/config/allowlist')]);render(true);}
+const unblockIssi=i=>issiList('blacklist','DELETE',i),disallowIssi=i=>issiList('allowlist','DELETE',i);
+async function allowEnforce(v){
+  if(v&&D.allow&&!D.allow.issis.length&&!confirm('The allow list is empty: enforcing it bars every radio until one is admitted. Enforce anyway?'))return;
+  try{await api('/api/config/allowlist/enabled',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:v})});setMsg('al-msg','ok','Applied at once.');}catch(e){setMsg('al-msg','err',e.message);}
+  D.allow=await getJ('/api/config/allowlist');render(true);}
+async function btsLocDel(u){if(!confirm(`Delete the static position of ${u}? The server restarts to apply it.`))return;
+  try{await api('/api/config/bts-locations/'+encodeURIComponent(u),{method:'DELETE'});setMsg('btsl-msg','ok','Deleted. The server restarts to apply it.');D.btsLocs=D.btsLocs.filter(x=>x.username!==u);}catch(e){setMsg('btsl-msg','err',e.message);}render(true);}
+
 buildNav();
 show(location.hash.slice(1)||'overview');
 refreshFast();refreshSlow();
@@ -1651,5 +1899,33 @@ mod tests {
         assert!(card.contains("editName('${k}','gssi')") && card.contains(">Rules</button>"), "Edit / Rules opens the Directory dialog");
         assert!(PAGE_HTML.contains("function editName(k,kind){"));
         assert!(PAGE_HTML.contains("if(v==='allow'&&rx){"), "listen-only ISSIs are added to an allow list");
+    }
+
+    /// The former classic sub-pages are native pages now: no frame, a renderer each, the SIP
+    /// editing on SIP Config (admin) with the same API as the classic Settings page. Only the
+    /// map stays a frame.
+    #[test]
+    fn former_classic_pages_are_native() {
+        let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
+        let pages = &pages[..pages.find("];").unwrap()];
+        for id in ["sip", "sipcfg", "sms", "tsds", "ha", "settings"] {
+            let entry = &pages[pages.find(&format!("['{id}',")).unwrap()..];
+            let entry = &entry[..entry.find(']').unwrap()];
+            assert!(!entry.contains("'/"), "{id} is not a frame any more: {entry}");
+            assert!(PAGE_HTML.contains(&format!("R.{id}=()=>{{")), "{id} has a renderer");
+        }
+        assert!(pages.contains("['map','Map','map','Monitor','/map']"), "the map stays a frame");
+        assert!(pages.contains("['settings','Server settings','set','System',null,true]"), "Server settings stays admin only");
+        for route in ["/api/config/sip/extensions/", "/api/config/sip/trunks/", "'/api/config/sip/routes'", "`/api/config/${which}/${i}`", "/api/config/allowlist/enabled", "/api/config/ha", "/api/ha/apply", "/api/sms-center/"] {
+            assert!(PAGE_HTML.contains(route), "{route} used");
+        }
+        // Admin-only data is asked only with an admin login.
+        let load = &PAGE_HTML[PAGE_HTML.find("function loadPageData(p,first){").unwrap()..];
+        let load = &load[..load.find("\n}\n").unwrap()];
+        for line in load.lines().filter(|l| l.contains("/api/config/")) {
+            assert!(line.contains("D.who.admin"), "admin route without admin check: {line}");
+        }
+        // A table that scrolls sideways keeps its screen-reader text inside: no page-wide overflow on phones.
+        assert!(PAGE_HTML.contains(".tw{overflow-x:auto;position:relative}"));
     }
 }

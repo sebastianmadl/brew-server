@@ -2,6 +2,21 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased:
+
+- **Dashboard: SIP / VoIP, SIP Config, SMS Center, Telemetry SDS, High
+  Availability and Server settings are native pages** in the look of the
+  rest (cards, labelled fields, light and dark, phone width) instead of
+  frames of the classic pages. SIP extensions, trunks and voice routes are
+  added, edited and deleted on SIP Config (admin; read only for others);
+  Server settings keeps the ISSI block and allow lists and the static
+  station positions. High Availability: settings in a dialog. The classic
+  dashboard (`/classic`) is unchanged; only the map is still a frame.
+- **Phones:** a table that scrolls sideways no longer widens the whole page.
+- **Fix: live updates on phones.** After the first touch the dashboard no
+  longer stopped fetching calls, SDS and emergencies (until a reload); the
+  scroll handling cleared the live refresh timer by mistake (since 1.21.0).
+
 Version 1.21.1 adds:
 
 - **Do not forward SDS and calls to other networks.** New `never_forward` list
