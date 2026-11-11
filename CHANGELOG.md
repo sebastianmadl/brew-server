@@ -18,6 +18,10 @@ Unreleased:
   232 in three pools, a call on 2327 shows "TG Pool" (its pool), a call on
   232 itself (heard on all three) "TGP1 + TG Pool + North", on Overview,
   Calls and the Routing page; each pool card shows only its own legs.
+- **Fix: networks of calls and SDS survive a restart.** The "→ / ← network"
+  of Recent calls and Recent SDS is saved in `<storage path>.nets` next to
+  the history file (unchanged, still readable by older versions); before,
+  every older entry lost it on a restart.
 - **Fix: live updates on phones.** After the first touch the dashboard no
   longer stopped fetching calls, SDS and emergencies (until a reload); the
   scroll handling cleared the live refresh timer by mistake (since 1.21.0).

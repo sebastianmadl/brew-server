@@ -20,17 +20,27 @@ pub struct Snapshot { pub connected_basestations: usize, pub subscribers: usize,
 
 /// Other Brew networks (Multi Network) a call or SDS crossed: the one it came
 /// from over a link, and the ones it was sent to.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NetTag {
-    #[serde(rename = "from_network", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "from_network", default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
-    #[serde(rename = "to_networks", skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "to_networks", default, skip_serializing_if = "Vec::is_empty")]
     pub to: Vec<String>,
 }
 
+/// One line of the networks file `<history path>.nets` (JSON lines): the
+/// whole tag of a record, the last line of a uuid wins.
+#[derive(Serialize, Deserialize)]
+struct NetLine {
+    uuid: Uuid,
+    #[serde(flatten)]
+    tag: NetTag,
+}
+
 /// A history record as the dashboard gets it, with its networks. The
-/// networks are kept in memory only: the history file stays readable by
-/// older versions (bincode has no optional fields).
+/// networks are not in the history file, which stays readable by older
+/// versions (bincode has no optional fields): they go to the sidecar file
+/// `<history path>.nets`, so they survive a restart.
 #[derive(Debug, Clone, Serialize)]
 pub struct Tagged<T> {
     #[serde(flatten)]
@@ -48,7 +58,9 @@ impl<T> std::ops::Deref for Tagged<T> {
 /// lists hold far fewer).
 const MAX_TAGS: usize = 1000;
 
-#[derive(Default)] struct Inner { active: HashMap<Uuid, CallRecord>, calls: VecDeque<CallRecord>, sds: VecDeque<SdsRecord>, total_calls: u64, total_sds: u64, voice_frames: u64, nets: HashMap<Uuid, NetTag>, keep: crate::config::StorageConfig }
+#[derive(Default)] struct Inner { active: HashMap<Uuid, CallRecord>, calls: VecDeque<CallRecord>, sds: VecDeque<SdsRecord>, total_calls: u64, total_sds: u64, voice_frames: u64, nets: HashMap<Uuid, NetTag>, keep: crate::config::StorageConfig,
+    /// Lines in the networks file (rewritten once it holds far more than the tags).
+    net_lines: usize }
 
 impl Inner {
     /// Trims the lists to the `[storage]` limits (count, and age when `age`).
@@ -74,6 +86,54 @@ impl Inner {
             .chain(self.calls.iter().map(|c| c.uuid)).chain(self.sds.iter().map(|s| s.uuid)).collect();
         self.nets.retain(|u, _| keep.contains(u));
     }
+
+    /// Drops the tags of every record no longer in the history.
+    fn drop_stale_tags(&mut self) {
+        let keep: std::collections::HashSet<Uuid> = self.active.keys().copied()
+            .chain(self.calls.iter().map(|c| c.uuid)).chain(self.sds.iter().map(|s| s.uuid)).collect();
+        self.nets.retain(|u, _| keep.contains(u));
+    }
+}
+
+/// The networks file next to the history file.
+fn nets_path(store: &crate::store::Store) -> std::path::PathBuf {
+    let mut p = store.path().as_os_str().to_owned();
+    p.push(".nets");
+    p.into()
+}
+
+/// Reads the networks file (missing or broken lines are skipped).
+fn read_nets(path: &std::path::Path) -> (HashMap<Uuid, NetTag>, usize) {
+    let mut nets = HashMap::new();
+    let mut lines = 0;
+    if let Ok(text) = std::fs::read_to_string(path) {
+        for l in text.lines() {
+            lines += 1;
+            if let Ok(n) = serde_json::from_str::<NetLine>(l) { nets.insert(n.uuid, n.tag); }
+        }
+    }
+    (nets, lines)
+}
+
+/// Rewrites the networks file with `nets` only (temporary file + rename).
+fn write_nets(path: &std::path::Path, nets: &HashMap<Uuid, NetTag>) -> std::io::Result<()> {
+    let mut out = String::new();
+    for (uuid, tag) in nets {
+        out.push_str(&serde_json::to_string(&NetLine { uuid: *uuid, tag: tag.clone() }).unwrap_or_default());
+        out.push('\n');
+    }
+    let tmp = path.with_extension("nets.tmp");
+    std::fs::write(&tmp, out)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Appends the tag of `uuid` to the networks file.
+fn append_net(path: &std::path::Path, uuid: Uuid, tag: &NetTag) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut line = serde_json::to_string(&NetLine { uuid, tag: tag.clone() }).unwrap_or_default();
+    line.push('\n');
+    f.write_all(line.as_bytes())
 }
 
 pub struct Monitor { inner: RwLock<Inner>, tx: broadcast::Sender<LiveEvent>, store: Option<std::sync::Arc<crate::store::Store>> }
@@ -103,6 +163,14 @@ impl Monitor {
             inner.trim(true);
             tracing::info!(path = %store.path().display(), calls = inner.total_calls, sds = inner.total_sds, "replayed persisted history");
         }
+        let np = nets_path(&store);
+        let (nets, lines) = read_nets(&np);
+        inner.nets = nets;
+        inner.drop_stale_tags();
+        if lines > 0 {
+            if let Err(e) = write_nets(&np, &inner.nets) { tracing::warn!(error = %e, "cannot rewrite the networks file"); }
+        }
+        inner.net_lines = inner.nets.len();
         Self { inner: RwLock::new(inner), tx, store: Some(store) }
     }
 
@@ -137,10 +205,23 @@ impl Monitor {
         if from.is_none() && to.is_empty() { return; }
         let mut i = self.inner.write().await;
         let tag = i.nets.entry(uuid).or_default();
+        let before = tag.clone();
         if tag.from.is_none() { tag.from = from; }
         for n in to { if !tag.to.contains(&n) { tag.to.push(n); } }
         tag.to.sort();
+        let (changed, tag) = (*tag != before, tag.clone());
         i.prune_tags();
+        let Some(store) = &self.store else { return; };
+        if !changed { return; }
+        let np = nets_path(store);
+        let res = if i.net_lines >= 2 * MAX_TAGS {
+            i.net_lines = i.nets.len();
+            write_nets(&np, &i.nets)
+        } else {
+            i.net_lines += 1;
+            append_net(&np, uuid, &tag)
+        };
+        if let Err(e) = res { tracing::warn!(error = %e, "cannot write the networks file"); }
     }
     #[cfg(test)]
     pub async fn snapshot(&self, clients: usize, subscribers: usize, groups: usize) -> Snapshot { self.snapshot_n(clients, subscribers, groups, 50, 50).await }
@@ -167,7 +248,14 @@ impl Monitor {
         if clear_calls { i.calls.clear(); }
         if clear_sds { i.sds.clear(); }
         i.trim(true);
-        i.prune_tags();
+        i.drop_stale_tags();
+        if let Some(store) = &self.store {
+            let np = nets_path(store);
+            if i.net_lines > 0 || np.exists() {
+                if let Err(e) = write_nets(&np, &i.nets) { tracing::warn!(error = %e, "cannot rewrite the networks file"); }
+            }
+            i.net_lines = i.nets.len();
+        }
         dropped
     }
 }
@@ -275,6 +363,44 @@ mod persist_tests {
             assert_eq!(snap.recent_sds[0].reports, 1, "sds report replayed");
         }
         std::fs::remove_file(&path).ok();
+    }
+
+    /// The networks of calls and SDS survive a restart (sidecar file), the
+    /// history file holds none, and Clear drops them with their records.
+    #[tokio::test]
+    async fn network_tags_survive_restart() {
+        let path = std::env::temp_dir().join(format!("brew-nets-test-{}.bin", Uuid::new_v4().simple()));
+        let nets = format!("{}.nets", path.display());
+        let (call, sds, plain) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        {
+            let m = Monitor::with_store(Arc::new(crate::store::Store::open(&path).unwrap()));
+            m.call_started(call, "group", 2320972, 91, 0).await;
+            m.note_networks(call, None, vec!["TetraPack".into()]).await;
+            m.note_networks(call, Some("Heim".into()), vec!["TetraPack".into()]).await;
+            m.call_ended(call).await;
+            m.sds(sds, 2320972, 9999).await;
+            m.note_networks(sds, None, vec!["TetraPack".into()]).await;
+            m.sds(plain, 2320972, 2320001).await;
+        }
+        assert!(!std::fs::read(&path).unwrap().windows(9).any(|w| w == b"TetraPack"), "history file unchanged");
+        {
+            let m = Monitor::with_store(Arc::new(crate::store::Store::open(&path).unwrap()));
+            let snap = m.snapshot(0, 0, 0).await;
+            assert_eq!(snap.recent_calls[0].nets, NetTag { from: Some("Heim".into()), to: vec!["TetraPack".into()] });
+            let tag = |u: Uuid| snap.recent_sds.iter().find(|s| s.uuid == u).unwrap().nets.clone();
+            assert_eq!(tag(sds).to, vec!["TetraPack".to_string()]);
+            assert_eq!(tag(plain), NetTag::default(), "a local SDS has no network");
+            assert_eq!(std::fs::read_to_string(&nets).unwrap().lines().count(), 2, "rewritten to one line per record");
+            m.apply_retention(true, false).await;
+        }
+        {
+            let m = Monitor::with_store(Arc::new(crate::store::Store::open(&path).unwrap()));
+            let snap = m.snapshot(0, 0, 0).await;
+            assert!(snap.recent_calls.is_empty());
+            assert_eq!(snap.recent_sds.iter().find(|s| s.uuid == sds).unwrap().nets.to, vec!["TetraPack".to_string()]);
+            assert_eq!(std::fs::read_to_string(&nets).unwrap().lines().count(), 1, "the cleared call's networks are gone");
+        }
+        for f in [path.display().to_string(), nets, format!("{}.totals", path.display())] { std::fs::remove_file(f).ok(); }
     }
 
     /// Retention: at most `max_calls` calls, nothing older than `keep_days`,

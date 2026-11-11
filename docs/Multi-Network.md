@@ -67,9 +67,10 @@ across networks.
   "→ name" for the network they went to, "← name" for the one they came
   from (live calls, Recent calls, Recent SDS; a call shows the networks of
   its pool legs too). The JSON of `/api/status` has `to_networks` and
-  `from_network` on those entries. Kept in memory only, so the history file
-  stays readable by older versions; after a restart older entries show no
-  network.
+  `from_network` on those entries. They are saved next to the history file
+  in `<storage path>.nets` (JSON lines), not in the history file itself, so
+  that stays readable by older versions; the networks survive a restart and
+  go with retention and Clear.
 - Networks are edited live (dashboard page **Multi Network**, admins only).
   Only a network whose settings changed reconnects; no restart. An empty
   password on save keeps the saved one.
