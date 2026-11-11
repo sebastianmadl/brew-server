@@ -136,7 +136,8 @@ there or carries another network's MNI.
 `forward_unknown` (per network, off by default) never sends back over the
 link a call came in on, and the same calling / called pair a second time
 within 5 s counts as a loop and is refused. Such an SDS is not stored by the
-SMS Center. A party that is here (a visitor, or one of this server's radios
+SMS Center: while it is on, an SDS to a radio that is not registered here
+goes to that network instead of being kept and resent here. A party that is here (a visitor, or one of this server's radios
 registered there) is never sent round the link: the far server would send
 it back over the same connection, which a Brew server does not do.
 
@@ -146,6 +147,13 @@ direction: a call is refused, an SDS goes nowhere (a position in it is still
 tracked). Meant for an ISSI only this server takes, such as a telemetry ISSI
 radios send their positions to, which `forward_unknown` would otherwise hand
 to that network. Group calls are not affected.
+
+`forward_lip` (per network, on by default) lets position reports cross that
+network's link. Off, an SDS whose protocol identifier is a location one
+(0x03 simple location system, 0x0A location information protocol, 0x83
+location system; TS 100 392-2 table 29.21) does not go to that network and
+one coming from it is dropped; text and other SDS still pass. The protocol
+identifier is in the payload, so the SDS header is held until it arrives.
 
 A visitor that dials a bare ISSI reaches a party of its own network (the
 cell's network, TS 100 392-2 clause 14.2.3); to reach a radio or the app of
@@ -187,6 +195,7 @@ export_stations = ["bs-wien", "2320997"]   # station logins for register_all; ap
 never_export = [2320002]  # ISSIs that network has itself
 forward_unknown = false   # individual calls / SDS nobody here takes go there
 never_forward = [200999]  # ISSIs whose individual calls / SDS never cross, either way
+forward_lip = true        # position reports (LIP) cross, either way
 reconnect_interval_seconds = 15
 tls = true                # wss://, settings as for [[federation.peers]]
 # tls_ca_path, tls_server_name, tls_pinned_cert_path

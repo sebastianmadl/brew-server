@@ -17,6 +17,11 @@ Unreleased:
   App or Other, on Overview, SDS and Telemetry SDS, with a Kind filter
   (hover for the value). Saved with the networks in `<storage path>.nets`;
   `/api/status` has `protocol_id` on SDS entries.
+- **Forward LIP per network** (Multi Network, Edit network): off, position
+  reports (protocol identifier 0x03, 0x0A, 0x83) do not cross that link in
+  either direction; text and other SDS still pass. On by default
+  (`forward_lip`). The dialog now says that "Forward unknown targets"
+  bypasses the SMS Center.
 - **Phones:** a table that scrolls sideways no longer widens the whole page.
 - **Fix: talkgroup pools sharing a group.** A call is named by the pool
   that really carries it, not by the first pool its group is listed in: with
