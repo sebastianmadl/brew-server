@@ -70,7 +70,8 @@ across networks.
   `from_network` on those entries. They are saved next to the history file
   in `<storage path>.nets` (JSON lines), not in the history file itself, so
   that stays readable by older versions; the networks survive a restart and
-  go with retention and Clear.
+  go with retention and Clear. The same file keeps the protocol identifier
+  of each SDS (`protocol_id`, shown as its kind on the dashboard).
 - Networks are edited live (dashboard page **Multi Network**, admins only).
   Only a network whose settings changed reconnects; no restart. An empty
   password on save keeps the saved one.

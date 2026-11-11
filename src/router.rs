@@ -582,6 +582,14 @@ async fn handle_sds_transfer(state: &Arc<AppState>, source: ClientId, id: uuid::
         state.monitor.note_networks(id, from_net, to_nets).await;
     }
     for tx in &txs { let _ = tx.send(raw.clone()); }
+    // The kind of SDS (text, position, WAP ...) for the dashboard: the
+    // protocol identifier, first byte of the type 4 user data (ETSI TS 100
+    // 392-2 clause 29.4.3.9).
+    if source_issi != 0 {
+        if let Ok(BrewMessage::Frame(f)) = protocol::parse(&raw) {
+            if let Some(&pid) = f.data.first() { state.monitor.note_protocol(id, pid).await; }
+        }
+    }
 
     if let Some(destination) = store_for {
         store_offline_sds(state, source, id, source_issi, destination, &raw).await;

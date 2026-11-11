@@ -19,13 +19,17 @@ pub struct Snapshot { pub connected_basestations: usize, pub subscribers: usize,
     pub keep_days: u32 }
 
 /// Other Brew networks (Multi Network) a call or SDS crossed: the one it came
-/// from over a link, and the ones it was sent to.
+/// from over a link, and the ones it was sent to; for an SDS also its
+/// protocol identifier (ETSI TS 100 392-2 clause 29.4.3.9, the first byte of
+/// the type 4 user data), which tells text, position, WAP and so on apart.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NetTag {
     #[serde(rename = "from_network", default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     #[serde(rename = "to_networks", default, skip_serializing_if = "Vec::is_empty")]
     pub to: Vec<String>,
+    #[serde(rename = "protocol_id", default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u8>,
 }
 
 /// One line of the networks file `<history path>.nets` (JSON lines): the
@@ -203,12 +207,24 @@ impl Monitor {
     /// networks `to` (added to what is known of it already).
     pub async fn note_networks(&self, uuid: Uuid, from: Option<String>, to: Vec<String>) {
         if from.is_none() && to.is_empty() { return; }
+        self.update_tag(uuid, |tag| {
+            if tag.from.is_none() { tag.from = from; }
+            for n in to { if !tag.to.contains(&n) { tag.to.push(n); } }
+            tag.to.sort();
+        }).await;
+    }
+
+    /// Notes the protocol identifier of SDS `uuid` (the first one stays).
+    pub async fn note_protocol(&self, uuid: Uuid, pid: u8) {
+        self.update_tag(uuid, |tag| { tag.pid.get_or_insert(pid); }).await;
+    }
+
+    /// Changes the tag of `uuid` and saves it to the networks file.
+    async fn update_tag(&self, uuid: Uuid, f: impl FnOnce(&mut NetTag)) {
         let mut i = self.inner.write().await;
         let tag = i.nets.entry(uuid).or_default();
         let before = tag.clone();
-        if tag.from.is_none() { tag.from = from; }
-        for n in to { if !tag.to.contains(&n) { tag.to.push(n); } }
-        tag.to.sort();
+        f(tag);
         let (changed, tag) = (*tag != before, tag.clone());
         i.prune_tags();
         let Some(store) = &self.store else { return; };
@@ -380,15 +396,18 @@ mod persist_tests {
             m.call_ended(call).await;
             m.sds(sds, 2320972, 9999).await;
             m.note_networks(sds, None, vec!["TetraPack".into()]).await;
+            m.note_protocol(sds, 0x0A).await;
+            m.note_protocol(sds, 0x82).await;
             m.sds(plain, 2320972, 2320001).await;
         }
         assert!(!std::fs::read(&path).unwrap().windows(9).any(|w| w == b"TetraPack"), "history file unchanged");
         {
             let m = Monitor::with_store(Arc::new(crate::store::Store::open(&path).unwrap()));
             let snap = m.snapshot(0, 0, 0).await;
-            assert_eq!(snap.recent_calls[0].nets, NetTag { from: Some("Heim".into()), to: vec!["TetraPack".into()] });
+            assert_eq!(snap.recent_calls[0].nets, NetTag { from: Some("Heim".into()), to: vec!["TetraPack".into()], pid: None });
             let tag = |u: Uuid| snap.recent_sds.iter().find(|s| s.uuid == u).unwrap().nets.clone();
             assert_eq!(tag(sds).to, vec!["TetraPack".to_string()]);
+            assert_eq!(tag(sds).pid, Some(0x0A), "the protocol identifier survives, the first one stays");
             assert_eq!(tag(plain), NetTag::default(), "a local SDS has no network");
             assert_eq!(std::fs::read_to_string(&nets).unwrap().lines().count(), 2, "rewritten to one line per record");
             m.apply_retention(true, false).await;

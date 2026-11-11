@@ -771,6 +771,17 @@ function netChips(x){
   return from.concat(to).join(' ');
 }
 const hasNet=list=>list.some(x=>x.from_network||(x.to_networks||[]).length);
+// Kind of an SDS from its protocol identifier (ETSI TS 100 392-2 table 29.21).
+const SDS_KINDS=[['text','Text','a'],['pos','Position','b'],['data','WAP / data',''],['multi','Multi-part',''],['sec','Security','w'],['sys','System','i'],['app','App',''],['other','Other','i']];
+const PID_NAMES={1:'OTAK (end-to-end re-keying)',2:'Simple text messaging',3:'Simple location system',4:'WAP',5:'WCMP',6:'Managed DMO',7:'PIN authentication',8:'End-to-end encrypted',9:'Simple immediate text',10:'Location information protocol (LIP)',11:'Net Assist Protocol 2',12:'Concatenated SDS',13:'DOTAM',14:'Simple AGNSS',130:'Text messaging (SDS-TL)',131:'Location system (SDS-TL)',132:'WAP (SDS-TL)',133:'WCMP (SDS-TL)',134:'Managed DMO (SDS-TL)',136:'End-to-end encrypted (SDS-TL)',137:'Immediate text (SDS-TL)',138:'Message with user data header',140:'Concatenated SDS (SDS-TL)',141:'AGNSS'};
+const PID_KIND={2:'text',9:'text',130:'text',137:'text',3:'pos',10:'pos',131:'pos',4:'data',5:'data',132:'data',133:'data',138:'data',12:'multi',140:'multi',1:'sec',7:'sec',8:'sec',136:'sec',6:'sys',134:'sys',11:'sys',13:'sys',14:'sys',141:'sys'};
+function sdsKind(p){if(p==null)return null;return PID_KIND[p]||((p>=64&&p<=126)||(p>=192&&p<=254)?'app':'other');}
+function sdsChip(p){const k=sdsKind(p);if(!k)return '';const d=SDS_KINDS.find(x=>x[0]===k);const n=PID_NAMES[p]||(k==='app'?'User application':'Reserved');
+  return `<span class="chip ${d[2]}" title="Protocol identifier ${p} (0x${p.toString(16).toUpperCase().padStart(2,'0')}): ${n}">${d[1]}</span>`;}
+// Filter by kind (only kinds present in the list are offered).
+function kindSel(key,pids){const have=new Set(pids.map(sdsKind).filter(Boolean));const v=UI.filter[key]||'all';
+  return `<label class="mut" style="font-size:12.5px;display:flex;gap:6px;align-items:center">Kind <select class="f" aria-label="Kind of SDS" onchange="UI.filter['${key}']=this.value;render(true)"><option value="all">All</option>${SDS_KINDS.filter(([k])=>have.has(k)||v===k).map(([k,l])=>`<option value="${k}" ${v===k?'selected':''}>${l}</option>`).join('')}</select></label>`;}
+const kindOk=(key,p)=>{const v=UI.filter[key]||'all';return v==='all'||sdsKind(p)===v;};
 const callRow=(c,now,short)=>{
   const who=short?issiShort:issiTxt;
   const pool=poolOf(c);
@@ -834,7 +845,7 @@ R.overview=()=>{
    <div class="card"><div class="ch"><h2>Recent cell changes</h2><span class="sp"></span><a data-go="roaming" href="#roaming">Roaming log ›</a></div>
     ${roam.length?roam.slice(0,5).map(r=>`<div class="ev"><time>${tm(r.at_ms)}</time><b class="m">${issiTxt(r.issi)}</b>${place(r.from)}<span class="arrow">→</span>${place(r.to)}<span class="ml">${howOf(r)}</span></div>`).join(''):'<div class="empty">No cell changes yet</div>'}</div>
    <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="sp"></span><a data-go="sds" href="#sds">All SDS ›</a></div>
-    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiShort(s.source)}</b><span class="arrow">→</span><b class="m">${issiShort(s.destination)}</b>${netChips(s)?' '+netChips(s):''}<span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
+    ${st.recent_sds.length?st.recent_sds.slice(0,5).map(s=>`<div class="ev"><time>${tm(s.at_ms)}</time><b class="m">${issiShort(s.source)}</b><span class="arrow">→</span><b class="m">${issiShort(s.destination)}</b>${sdsChip(s.protocol_id)?' '+sdsChip(s.protocol_id):''}${netChips(s)?' '+netChips(s):''}<span class="ml mut">${s.reports?s.reports+' report'+(s.reports===1?'':'s'):''}</span></div>`).join(''):'<div class="empty">No SDS yet</div>'}</div>
   </div>`;
 };
 const RESEL={undeclared:['i','undeclared'],unannounced:['w','unannounced'],announced_type_1:['a','announced · type 1'],announced_type_2:['a','announced · type 2'],announced_type_3:['a','announced · type 3']};
@@ -863,12 +874,12 @@ R.calls=()=>{
 };
 R.sds=()=>{
   const st=D.status;if(!st)return '<div class="empty">Loading…</div>';
-  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));
+  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>kindOk('sdsk',s.protocol_id)&&match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));
   const nc=hasNet(list);
-  return `<div class="bar">${searchBox('sds','ISSI…')}<span class="sp"></span>${showSel('sds')}<span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('sds')">${ic('trash')}Clear all SDS</button>`:''}</div>
+  return `<div class="bar">${searchBox('sds','ISSI…')}${kindSel('sdsk',st.recent_sds.map(s=>s.protocol_id))}<span class="sp"></span>${showSel('sds')}<span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('sds')">${ic('trash')}Clear all SDS</button>`:''}</div>
   ${msgDiv('sds-msg','padding:0 4px')}
-  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'sds')}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
-  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="${nc?5:4}" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
+  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'sds')}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>Kind</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
+  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${sdsChip(s.protocol_id)||'<span class="mut">—</span>'}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="${nc?6:5}" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
 };
 R.radios=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
@@ -1651,10 +1662,11 @@ async function smsDel(id){if(!confirm('Delete this stored message? It will not b
 
 R.tsds=()=>{
   const t=D.tele;if(!t)return loading;
-  const list=t.flatMap(s=>(s.recent_sds_out||[]).map(x=>({...x,bts:s.id}))).sort((a,b)=>b.at_ms-a.at_ms).slice(0,100);
-  return `<div class="card"><div class="ch"><h2>Telemetry SDS</h2><span class="cnt">${list.length}</span>${helpBtn('tsds')}</div>${helpNote('tsds','The last SDS each station reports over its telemetry link (FlowStation <code>[telemetry]</code>), newest first, up to 100. <i>Position</i>: a location information protocol (LIP, protocol identifier 10) report; binary LIP is shown as undecoded.')}
-   <div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th class="hide-s">Direction</th><th>From</th><th>To</th><th>Type</th><th>Text</th></tr></thead><tbody>
-   ${list.map(x=>`<tr><td class="m">${tmd(x.at_ms)}</td><td><b>${esc(x.bts)}</b></td><td class="hide-s">${esc(x.direction)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${x.is_group?'TG '+tgTxt(x.dest_issi):issiTxt(x.dest_issi)}</td><td>${x.protocol_id===10?'<span class="chip b">Position</span>':`<span class="chip">SDS</span> <span class="mut">PI ${x.protocol_id}</span>`}</td><td>${x.protocol_id===10&&!(x.text||'').trim()?'<span class="mut">binary LIP (undecoded)</span>':esc(x.text)}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No telemetry SDS yet</td></tr>'}
+  const all=t.flatMap(s=>(s.recent_sds_out||[]).map(x=>({...x,bts:s.id}))).sort((a,b)=>b.at_ms-a.at_ms).slice(0,100);
+  const list=all.filter(x=>kindOk('tsdsk',x.protocol_id));
+  return `<div class="bar"><span class="sp"></span>${kindSel('tsdsk',all.map(x=>x.protocol_id))}</div><div class="card"><div class="ch"><h2>Telemetry SDS</h2><span class="cnt">${list.length}</span>${helpBtn('tsds')}</div>${helpNote('tsds','The last SDS each station reports over its telemetry link (FlowStation <code>[telemetry]</code>), newest first, up to 100. <i>Kind</i> comes from the protocol identifier (ETSI TS 100 392-2 table 29.21; hover for the value): Text, Position (LIP, location system), WAP / data, Multi-part (concatenated), Security (OTAK, PIN, end-to-end encrypted), System (managed DMO, DOTAM, AGNSS), App (user application range) or Other. Binary LIP is shown as undecoded.')}
+   <div class="tw"><table><thead><tr><th>Time</th><th>Kind</th><th>Station</th><th class="hide-s">Direction</th><th>From</th><th>To</th><th>Text</th></tr></thead><tbody>
+   ${list.map(x=>`<tr><td class="m">${tmd(x.at_ms)}</td><td>${sdsChip(x.protocol_id)}</td><td><b>${esc(x.bts)}</b></td><td class="hide-s">${esc(x.direction)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${x.is_group?'TG '+tgTxt(x.dest_issi):issiTxt(x.dest_issi)}</td><td>${x.protocol_id===10&&!(x.text||'').trim()?'<span class="mut">binary LIP (undecoded)</span>':esc(x.text)}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No telemetry SDS yet</td></tr>'}
    </tbody></table></div></div>`;
 };
 
@@ -1917,6 +1929,21 @@ mod tests {
     /// The former classic sub-pages are native pages now: no frame, a renderer each, the SIP
     /// editing on SIP Config (admin) with the same API as the classic Settings page. Only the
     /// map stays a frame.
+    #[test]
+    fn sds_kind_from_the_protocol_identifier() {
+        // ETSI TS 100 392-2 table 29.21: text, location, WAP/WCMP and user data header.
+        for (pid, kind) in [(2, "text"), (9, "text"), (130, "text"), (137, "text"), (3, "pos"), (10, "pos"), (131, "pos"), (4, "data"), (5, "data"), (132, "data"), (133, "data"), (138, "data"), (12, "multi"), (140, "multi"), (1, "sec"), (8, "sec"), (136, "sec")] {
+            assert!(PAGE_HTML.contains(&format!("{pid}:'{kind}'")), "pid {pid} is {kind}");
+        }
+        assert!(PAGE_HTML.contains("(p>=64&&p<=126)||(p>=192&&p<=254)?'app':'other'"), "user application ranges");
+        for page in ["R.sds=()=>{", "R.tsds=()=>{"] {
+            let body = &PAGE_HTML[PAGE_HTML.find(page).unwrap()..];
+            let body = &body[..body.find("\n};").unwrap()];
+            assert!(body.contains("sdsChip(") && body.contains("kindSel(") && body.contains("kindOk("), "{page} shows and filters the kind");
+        }
+        assert!(PAGE_HTML.contains("${sdsChip(s.protocol_id)?' '+sdsChip(s.protocol_id):''}"), "Overview shows the kind");
+    }
+
     #[test]
     fn former_classic_pages_are_native() {
         let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
