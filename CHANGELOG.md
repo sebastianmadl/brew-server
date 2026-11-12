@@ -25,6 +25,11 @@ Unreleased:
   of every entry (the cell's own network when the entry has none) instead of
   "same".
 
+- **Phones: change log scroll.** The scrollable change log (and every table
+  that scrolls) keeps its position on a live update instead of jumping back to
+  its start, a scroll inside it pauses live updates like a page scroll, and
+  it no longer holds the page scroll at its ends.
+
 - **Fleet config page: order and "Apply server config".** Cards in the order
   Brew link, networks, cells, neighbour cells, cell reselection, Home Mode
   Display, ISSI whitelist, telemetry, control channel, update source. In the

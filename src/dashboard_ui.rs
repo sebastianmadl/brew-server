@@ -159,7 +159,7 @@ a.tile{color:inherit;cursor:pointer}
 @media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
 .tw{overflow-x:auto;position:relative}
-.tw.fllog{max-height:452px;overflow-y:auto;overscroll-behavior:contain}.tw.fllog th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
+.tw.fllog{max-height:452px;overflow-y:auto}.tw.fllog th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
 .empty .tot{margin-top:6px;font-size:12.5px}.empty .tot b{font:600 15px var(--mono,ui-monospace,monospace);color:var(--text2)}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
@@ -781,6 +781,8 @@ function scrollRest(){clearTimeout(scrollTimer);scrollBusy=true;scrollTimer=setT
 (()=>{const m=document.querySelector('main');if(!m)return;
   // Desktop scrolls <main>, phones the page itself.
   m.addEventListener('scroll',scrollRest,{passive:true});window.addEventListener('scroll',scrollRest,{passive:true});
+  // Scroll does not bubble: catch inner scrollers too (change log, wide tables).
+  document.addEventListener('scroll',scrollRest,{passive:true,capture:true});
   m.addEventListener('touchstart',()=>{touchOn=true;clearTimeout(scrollTimer);scrollTimer=0;scrollBusy=true;},{passive:true});
   const up=()=>{touchOn=false;scrollRest();};m.addEventListener('touchend',up,{passive:true});m.addEventListener('touchcancel',up,{passive:true});})();
 function render(force){
@@ -791,7 +793,11 @@ function render(force){
   if(!force&&a&&$('content').contains(a)&&(a.tagName==='INPUT'||a.tagName==='SELECT'||a.tagName==='TEXTAREA'))return;
   const fn=R[p];if(!fn)return;
   const html=fn();
-  if(force||html!==lastSig){$('content').innerHTML=html;lastSig=html;}
+  if(force||html!==lastSig){
+    // Inner scrollers (change log, wide tables) keep their position across a re-render.
+    const c=$('content'),pos=[...c.querySelectorAll('.tw')].map(e=>[e.scrollTop,e.scrollLeft]);
+    c.innerHTML=html;lastSig=html;
+    c.querySelectorAll('.tw').forEach((e,i)=>{const q=pos[i];if(q&&(q[0]||q[1])){e.scrollTop=q[0];e.scrollLeft=q[1];}});}
 }
 const R={};
 // Other networks a call or SDS crossed (Multi Network): where it went, where it came from.
@@ -2914,6 +2920,15 @@ mod tests {
         // "Apply server config" is open whenever the station is online with a copy, also when
         // only settings the page does not show differ (the server sends those as raw patches).
         assert!(PAGE_HTML.contains(r#"value="apply" ${d.online&&c.copy?'':'disabled'}"#));
+    }
+
+    #[test]
+    fn inner_scrollers_keep_their_position() {
+        // Sebastian 2026-11-12 (phone): the scrollable change log jumped back to its start on
+        // every live update and caught the page scroll.
+        assert!(PAGE_HTML.contains("c.querySelectorAll('.tw').forEach((e,i)=>{const q=pos[i];"));
+        assert!(PAGE_HTML.contains("document.addEventListener('scroll',scrollRest,{passive:true,capture:true});"));
+        assert!(!PAGE_HTML.contains("fllog{max-height:452px;overflow-y:auto;overscroll-behavior:contain}"));
     }
 
     #[test]
