@@ -382,7 +382,12 @@ of the run while it has not started yet (queued or waiting for a call).
 The Fleet Control page shows the run (mode, counts, the queue with each
 station's state) and, while the run goes, per station the stage with a
 progress bar, refreshed every 3 s. After the run the Update column is empty
-again; the run card keeps the results. After a clean run (every station
+again; the run card keeps the results. A bar on the run card shows the whole
+run in %: every station has the same share (100 / number of stations), a
+station that builds counts its build % up to 90 % of its share, a restarting
+one 95 %, an updated, failed or skipped one its full share. That is the same
+for rolling (one share after the other) and parallel (the average of all
+stations). After a clean run (every station
 updated, nothing failed or skipped, not cancelled) the card goes away 30 s
 after the end; the change log keeps the story. After a failed, skipped or
 cancelled run it stays until the next run.

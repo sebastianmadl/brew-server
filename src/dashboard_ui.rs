@@ -1085,6 +1085,7 @@ R.fleet=()=>{
   const jobCard=job&&!fleetJobHidden(job,live)?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
+     ${(()=>{const p=fleetJobPercent(job);const bad=n('failed')>0;return `<div class="svc" style="display:flex;align-items:center;gap:10px" title="Whole run: every station counts the same; the build counts up to 90 %, the restart up to 95 %"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${bad?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>`;})()}
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
   return jobCard+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
    ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
@@ -1104,6 +1105,13 @@ R.fleet=()=>{
 // the run goes on, and after a run with a failed or skipped station, or one that was cancelled.
 // The 30 s count from the server's end time or from when this browser first saw the end, whichever
 // is earlier, so a browser clock that is behind does not keep the card.
+// Progress of the whole run in % for the bar on the run card: each station counts the same;
+// finished (updated, failed, skipped) = 1, building = up to 0.9 of its percent, restarting = 0.95.
+function fleetJobPercent(job){
+  if(!job.items.length)return 0;
+  const part=i=>{const s=i.state;return ['done','failed','skipped'].includes(s.state)?1:s.state==='restarting'?0.95:s.state==='running'?0.9*Math.max(0,Math.min(100,s.percent||0))/100:0;};
+  return Math.round(100*job.items.reduce((a,i)=>a+part(i),0)/job.items.length);
+}
 const FLEET_JOB_HIDE_MS=30000;
 function fleetJobHidden(job,live){
   if(live||!job.finished_ms||job.cancelled)return false;
@@ -2111,6 +2119,15 @@ mod tests {
 
     /// The polls must not ask admin-only routes for a visitor who is not signed in: their 401
     /// opens the login window, so an open (read-only) dashboard would show it every 5 s.
+    #[test]
+    fn fleet_run_card_has_a_whole_run_bar() {
+        let start = PAGE_HTML.find("function fleetJobPercent(").expect("fleetJobPercent");
+        let body = &PAGE_HTML[start..start + PAGE_HTML[start..].find("\n}\n").expect("end")];
+        assert!(body.contains("['done','failed','skipped'].includes(s.state.state)") || body.contains("['done','failed','skipped'].includes(s.state)"));
+        assert!(body.contains("s.state==='restarting'?0.95") && body.contains("s.state==='running'?0.9*"));
+        assert!(PAGE_HTML.contains("const p=fleetJobPercent(job);"), "the run card shows it");
+    }
+
     #[test]
     fn fleet_run_card_hides_only_after_a_clean_end() {
         let start = PAGE_HTML.find("function fleetJobHidden(").expect("fleetJobHidden");

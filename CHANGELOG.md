@@ -4,6 +4,10 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control: progress bar for the whole run.** The "Update run" card
+  shows the progress of the whole run in %: each station counts the same,
+  with its build progress while it builds and its full share once it is
+  done (rolling and parallel alike).
 - **Fleet Control: the run card goes away after a clean run.** 30 s after a
   run in which every station updated, the "Update run" card is hidden (the
   change log keeps the story). It stays while the run goes and after a run
