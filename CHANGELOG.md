@@ -4,6 +4,23 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 3 (maintenance and restart).** Per station:
+  **Maintenance** puts a solid red banner "work on this base station in
+  progress" (with user, minutes left, note) on every page of the station's
+  dashboard for 1–240 min; it runs out by itself and is set again when the
+  station reconnects. **Restart** restarts the service or reboots the system
+  (with confirmation, optional during a call); the change log shows when the
+  station is back, and an ALARM if it is not back after 10 min. Needs
+  FlowStation with `maintenance-v1` / `restart-v1`. See docs/Fleet-Control.md
+  section 9.
+- **Fleet Control: live update (RF on) and Clear.** The update dialog has a
+  new switch **Live update (RF on)**: the stations install the repository
+  and branch of the **Updates repo** (Server settings) like the install
+  command in a terminal, stay on the air while they build and are off only
+  for the service restart; no check needed, rolling and parallel as before.
+  Needs FlowStation with `update-live-v1`. The change log has a **Clear**
+  button for admins (one entry "Log cleared by <user>" stays). See
+  docs/Fleet-Control.md sections 5.2 and 8.6.
 - **Fleet Control, phase 2 (remote update).** On the Fleet Control page,
   **Check for updates** lets every station (or the ticked ones) check its own
   update source; the table shows "Newer: <version>" / "Up to date". **Update

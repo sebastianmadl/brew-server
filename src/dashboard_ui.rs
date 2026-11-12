@@ -1033,7 +1033,7 @@ R.control=()=>{
 const v=id=>($(id)||{}).value||'';
 
 /* ---------- Fleet Control (docs/Fleet-Control.md) ---------- */
-const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i']};
+const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i'],log_clear:['Cleared','i'],maintenance:['Maintenance','w'],restart:['Restart','b'],restart_alarm:['Alarm','d']};
 const FLEET_STAGE={download:'Download',build:'Build',install:'Installing',restart:'Restarting',up_to_date:'Up to date',failed:'Failed'};
 if(!UI.fsel)UI.fsel=new Set();
 const fleetJobOn=f=>!!(f&&f.job&&!f.job.finished_ms);
@@ -1073,29 +1073,31 @@ R.fleet=()=>{
   for(const id of [...UI.fsel])if(!st.some(x=>x.id===id))UI.fsel.delete(id);
   const sel=[...UI.fsel];const upd=st.filter(x=>x.updatable);
   const target=sel.length?st.filter(x=>UI.fsel.has(x.id)&&x.updatable):upd;
+  const liveT=sel.length?st.filter(x=>UI.fsel.has(x.id)&&x.live):st.filter(x=>x.live);
+  const canUpd=target.length||liveT.length;
   const canCheck=st.some(x=>x.online&&(x.capabilities||[]).includes('update-v1'));
   const q=(UI.filter.fleet||'').toLowerCase();
   const shown=log.filter(e=>!q||(e.label+' '+e.station+' '+e.text+' '+(e.user||'')).toLowerCase().includes(q));
   const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
-     <button class="btn pri" ${target.length&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${target.length?'':'Check for updates first: only stations with a newer version can be updated'}">${sel.length?'Update ('+target.length+')':'Update all'}</button>
+     <button class="btn pri" ${canUpd&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${canUpd?'':'Check for updates first: only stations with a newer version can be updated (or that can take a live update)'}">${sel.length?'Update ('+Math.max(target.length,liveT.length)+')':'Update all'}</button>
      ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}`:'';
   const jobCard=job?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
-     <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b> · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
+     <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
   return jobCard+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
-   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> takes a station off the list (it comes back with its next login while its switch is on).<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update</b> for the ticked stations) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
+   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update</b> for the ticked stations) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
    ${msgDiv('fl_top','padding:0 18px')}
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
      ${m?`<td><input type="checkbox" class="chk" aria-label="Tick ${esc(x.label)}" ${UI.fsel.has(x.id)?'checked':''} onclick="fleetSel('${esc(x.id)}',this.checked)"></td>`:''}
      <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
-     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}</td>
+     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
      <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
-     ${m?`<td style="text-align:right;white-space:nowrap"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${x.updatable&&!live?`<button class="btn pri" onclick="fleetUpdateDlg('${esc(x.id)}')">Update</button>`:''}<button class="btn" ${x.online?'':'disabled'} onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button><button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button></div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${(x.updatable||x.live)&&!live?`<button class="btn pri" onclick="fleetUpdateDlg('${esc(x.id)}')">Update</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
-  <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span></div>
-   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
+  <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
+   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm'||e.kind==='restart_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
 };
 function fleetSel(id,on){if(on)UI.fsel.add(id);else UI.fsel.delete(id);render(true);}
 function fleetSelAll(on){UI.fsel.clear();if(on)(D.fleet.stations||[]).forEach(x=>UI.fsel.add(x.id));render(true);}
@@ -1105,38 +1107,93 @@ async function fleetCheck(){
   try{const r=await postJ('/api/fleet/check',{ids});const res=r.results||[];const newer=res.filter(x=>x.check.update_available).length,bad=res.filter(x=>!x.check.ok).length;
     setMsg('fl_top',bad?'err':'ok',`${res.length} checked: ${newer} with a newer version${bad?', '+bad+' failed':''}`);}catch(e){setMsg('fl_top','err',e.message);}
   fleetReload();}
-// Update dialog: Parallel / Rolling, update during call, interrupt time. `one`: a single station.
-function fleetUpdateDlg(one){
+// Update dialog: Parallel / Rolling, live update (RF on), update during call, interrupt time. `one`: a single station.
+function fleetUpdLists(one,liveOn){
+  const st=D.fleet.stations||[];const ok=x=>liveOn?x.live:x.updatable;
+  const base=one?st.filter(x=>x.id===one):(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)):st.filter(ok));
+  return {list:base.filter(ok),skip:one?[]:base.filter(x=>!ok(x))};
+}
+function fleetUpdateDlg(one,liveOn){
   const f=D.fleet;const st=f.stations||[];
-  const list=one?st.filter(x=>x.id===one):(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&x.updatable):st.filter(x=>x.updatable));
-  const skip=one?[]:(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&!x.updatable):[]);
-  if(!list.length)return;
-  const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fu-mode" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
-  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Update ${list.length===1?esc(list[0].label):list.length+' stations'}</h3></div><div class="sb">
-   ${list.length>1?`<div style="display:grid;gap:10px">${radio('rolling','Rolling (one after another)','The next station starts when the previous one is back with the new software. The network is never fully off the air.',true)}${radio('parallel','Parallel (all at once)','Every station builds at the same time: all of them are off the air for the build.',false)}</div>`:''}
-   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fu-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true');$('fu-int').disabled=this.getAttribute('aria-checked')==='true'"></button> Update during call <span class="mut" style="font-size:12px">(start at once, a running call is cut)</span></label>
-   <div><label class="l" for="fu-int">Interrupt a call after (minutes)</label><input class="f" id="fu-int" type="number" min="0" max="${f.limits.max_interrupt_min}" value="10" style="width:110px"><div class="mut" style="font-size:12px;margin-top:4px">While a call is in progress the start waits for it to end, at most this long, then the station updates anyway.</div></div>
-   <div class="mut" style="font-size:12.5px">Each station updates from its own source and fetches the newest version when its turn comes. It is <b>off the air while it builds</b> (10–20 min on a Raspberry Pi), then restarts. The run goes on on the server, also with the browser closed.${skip.length?`<br><br>Not updated (no newer version found): ${skip.map(x=>esc(x.label)).join(', ')}.`:''}</div>
-   <div class="mut" style="font-size:12px">${list.map(x=>esc(x.label)).join(' · ')}</div>
+  // Keep the choices when the live switch redraws the dialog.
+  const prev=liveOn===undefined?null:{mode:(document.querySelector('input[name=fu-mode]:checked')||{}).value,call:$('fu-call')&&$('fu-call').getAttribute('aria-checked')==='true',int:v('fu-int')};
+  if(liveOn===undefined)liveOn=!fleetUpdLists(one,false).list.length;
+  const canLive=fleetUpdLists(one,true).list.length>0,canNormal=fleetUpdLists(one,false).list.length>0;
+  const {list,skip}=fleetUpdLists(one,liveOn);
+  const all=one?st.filter(x=>x.id===one):(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)):[]);
+  if(!list.length&&!(canLive||canNormal))return;
+  const src=f.update_source;const call=prev?prev.call:false;const mode=prev&&prev.mode?prev.mode:'rolling';
+  const radio=(v,label,sub)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fu-mode" value="${v}" ${mode===v?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
+  const n=list.length;const title=n===1?esc(list[0].label):(n||all.length||'')+' stations';
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Update ${title}</h3></div><div class="sb">
+   ${n>1?`<div style="display:grid;gap:10px">${radio('rolling','Rolling (one after another)','The next station starts when the previous one is back with the new software. The network is never fully off the air.')}${radio('parallel','Parallel (all at once)',liveOn?'Every station builds at the same time (radio stays on), then they all restart.':'Every station builds at the same time: all of them are off the air for the build.')}</div>`:''}
+   <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px"><button class="tog" role="switch" id="fu-live" aria-checked="${liveOn}" ${canLive&&canNormal?'':'disabled'} onclick="fleetUpdateDlg(${one?`'${esc(one)}'`:'null'},${!liveOn})"></button><span><b>Live update (RF on)</b><span class="mut" style="display:block;font-size:12px">Update with the repo/branch from Server settings and keep RF on until the service restarts: <span class="m">${esc(src.repo)}</span> (${esc(src.branch)}). No check needed; afterwards the station follows this source.${canLive?'':' No station here supports it yet (needs <code>update-live-v1</code>).'}</span></span></label>
+   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fu-call" aria-checked="${call}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true');$('fu-int').disabled=this.getAttribute('aria-checked')==='true'"></button> Update during call <span class="mut" style="font-size:12px">(start at once${liveOn?', a running call is cut at the restart':', a running call is cut'})</span></label>
+   <div><label class="l" for="fu-int">Interrupt a call after (minutes)</label><input class="f" id="fu-int" type="number" min="0" max="${f.limits.max_interrupt_min}" value="${esc(prev&&prev.int?prev.int:'10')}" ${call?'disabled':''} style="width:110px"><div class="mut" style="font-size:12px;margin-top:4px">While a call is in progress the start waits for it to end, at most this long, then the station updates anyway.</div></div>
+   <div class="mut" style="font-size:12.5px">${liveOn?'Each station installs the source above like the install command in a terminal. It <b>stays on the air while it builds</b> and is off only for the service restart (about 2 min).':'Each station updates from its own source and fetches the newest version when its turn comes. It is <b>off the air while it builds</b> (10–20 min on a Raspberry Pi), then restarts.'} The run goes on on the server, also with the browser closed.${skip.length?`<br><br>Not updated (${liveOn?'no live update support':'no newer version found'}): ${skip.map(x=>esc(x.label)).join(', ')}.`:''}</div>
+   <div class="mut" style="font-size:12px">${list.map(x=>esc(x.label)).join(' · ')||'No station for this kind of update.'}</div>
    ${msgDiv('fu-msg','padding:0')}</div>
-   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="fleetStart(${one?`['${esc(one)}']`:'null'})">Start update</button></div>`;
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" ${n?'':'disabled'} onclick="fleetStart(${one?`['${esc(one)}']`:'null'},${liveOn})">Start update</button></div>`;
   $('scrim').classList.add('on');
 }
-async function fleetStart(ids){
-  const st=D.fleet.stations||[];
-  const list=ids||(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&x.updatable).map(x=>x.id):[]);
+async function fleetStart(ids,liveOn){
+  const list=ids||(UI.fsel.size?fleetUpdLists(null,liveOn).list.map(x=>x.id):[]);
   const m=document.querySelector('input[name=fu-mode]:checked');
-  const body={ids:list,mode:m?m.value:'rolling',during_call:$('fu-call').getAttribute('aria-checked')==='true',interrupt_min:Math.max(0,parseInt(v('fu-int')||'10',10)||0)};
+  const body={ids:list,mode:m?m.value:'rolling',live:!!liveOn,during_call:$('fu-call').getAttribute('aria-checked')==='true',interrupt_min:Math.max(0,parseInt(v('fu-int')||'10',10)||0)};
   try{await postJ('/api/fleet/update',body);closeSheet();UI.fsel.clear();setMsg('fl_top','ok','Update run started');fleetReload();}catch(e){setMsg('fu-msg','err',e.message);}
+}
+async function fleetClearLog(){
+  if(!confirm('Clear the whole change log? This cannot be undone. One entry will say who cleared it.'))return;
+  try{await postJ('/api/fleet/log/clear',{});fleetReload();}catch(e){alert(e.message);}
 }
 async function fleetCancel(id){
   if(!confirm(id?'Take this station out of the update run?':'Cancel the update run? No further station starts; a station that is updating finishes.'))return;
   try{await postJ('/api/fleet/update/cancel',id?{id}:{});fleetReload();}catch(e){alert(e.message);}
 }
 // The Fleet Control page follows a running update every 3 s.
-setInterval(()=>{if(UI.page==='fleet'&&fleetJobOn(D.fleet)&&!$('scrim').classList.contains('on'))fleetReload();},3000);
+setInterval(()=>{if(UI.page==='fleet'&&(fleetJobOn(D.fleet)||(D.fleet&&(D.fleet.stations||[]).some(x=>x.restart||fleetMaintOn(x))))&&!$('scrim').classList.contains('on'))fleetReload();},3000);
 async function fleetPing(id,sid){setMsg('fl_'+sid,'mut','Sending…');
   try{const r=await postJ('/api/fleet/ping',{id});setMsg('fl_'+sid,r.ok?'ok':'err',(r.ok?'OK':r.code)+' · '+r.ms+' ms'+(r.ok?'':' · '+r.message));}catch(e){setMsg('fl_'+sid,'err',e.message);}}
+const fleetHas=(x,c)=>(x.capabilities||[]).includes(c);
+const fleetMaintOn=x=>!!(x.maintenance&&x.maintenance.until_ms>Date.now());
+function fleetMaintChip(x){
+  if(!fleetMaintOn(x))return '';const m=x.maintenance;const min=Math.max(1,Math.ceil((m.until_ms-Date.now())/60000));
+  return `<div><span class="chip d" style="white-space:normal" title="Red banner on the station's dashboard${m.reason?': '+esc(m.reason):''}">Maintenance${m.by?' · '+esc(m.by):''} · ${min} min left</span></div>`;
+}
+function fleetMaintDlg(id){
+  const x=(D.fleet.stations||[]).find(s=>s.id===id);if(!x)return;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Maintenance · ${esc(x.label)}</h3></div><div class="sb">
+   <div class="mut" style="font-size:12.5px">Every page of the station's dashboard shows a red banner <b>"Maintenance: work on this base station in progress"</b> with your name, until you end it or the time runs out.</div>
+   <div><label class="l" for="fm-min">Duration (minutes)</label><input class="f" id="fm-min" type="number" min="1" max="240" value="30" style="width:110px"></div>
+   <div><label class="l" for="fm-reason">Note (shown in the banner, optional)</label><input class="f" id="fm-reason" maxlength="120" placeholder="e.g. new carrier"></div>
+   ${msgDiv('fm-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn danger" onclick="fleetMaintGo('${esc(id)}')">Start maintenance</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function fleetMaintGo(id){
+  const minutes=Math.max(1,Math.min(240,parseInt(v('fm-min')||'30',10)||30));
+  try{await postJ('/api/fleet/maintenance',{id,on:true,minutes,reason:v('fm-reason')||''});closeSheet();fleetReload();}catch(e){setMsg('fm-msg','err',e.message);}
+}
+async function fleetMaintEnd(id,label){
+  if(!confirm('End maintenance on '+label+'? The red banner on the station goes away.'))return;
+  try{await postJ('/api/fleet/maintenance',{id,on:false});fleetReload();}catch(e){alert(e.message);}
+}
+function fleetRestartDlg(id){
+  const x=(D.fleet.stations||[]).find(s=>s.id===id);if(!x)return;
+  const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fr-kind" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Restart ${esc(x.label)}</h3></div><div class="sb">
+   <div style="display:grid;gap:10px">${radio('service','Restart service','Restarts FlowStation only (a few seconds to a minute off the air).',true)}${radio('host','Reboot system','Reboots the whole computer (about 2 min off the air).',false)}</div>
+   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fr-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Restart during call <span class="mut" style="font-size:12px">(otherwise refused while a call is in progress)</span></label>
+   <div class="mut" style="font-size:12.5px">The station restarts 5 s after it accepts. Not back after 10 min: marked ALARM in the change log.</div>
+   ${msgDiv('fr-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn danger" onclick="fleetRestartGo('${esc(id)}')">Restart now</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function fleetRestartGo(id){
+  const k=document.querySelector('input[name=fr-kind]:checked');const host=!!k&&k.value==='host';
+  if(!confirm(host?'Really reboot the whole system of this station?':'Really restart the service of this station?'))return;
+  try{await postJ('/api/fleet/restart',{id,host,during_call:$('fr-call').getAttribute('aria-checked')==='true'});closeSheet();setMsg('fl_top','ok',host?'Reboot sent':'Service restart sent');fleetReload();}catch(e){setMsg('fr-msg','err',e.message);}
+}
 async function fleetRemove(id,label){
   if(!confirm('Remove '+label+' from the Fleet Manager? It comes back with its next login while its Fleet Control switch is on.'))return;
   try{await postJ('/api/fleet/remove',{id});D.fleet=await getJ('/api/fleet');render(true);}catch(e){alert(e.message);}}

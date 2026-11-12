@@ -49,7 +49,41 @@ pub enum ControlCommand {
     /// Fleet Control (`update-v1`): start the station's OTA from its own
     /// source; answered with `CommandResult` (`ok`, `busy`, `call_active`,
     /// `unavailable`, `fleet_control_off`), then `UpdateProgress` reports.
-    StartUpdate { #[serde(default)] handle: u32, #[serde(default)] during_call: bool },
+    /// `source` (capability `update-live-v1`): live update from this
+    /// repository and branch with the radio kept on until the service restart.
+    StartUpdate {
+        #[serde(default)]
+        handle: u32,
+        #[serde(default)]
+        during_call: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<crate::fleet_update::LiveSource>,
+    },
+    /// Fleet Control (`maintenance-v1`): maintenance flag on the station
+    /// (red banner on every page of its dashboard) for `minutes`; answered
+    /// with `CommandResult`.
+    SetMaintenance {
+        #[serde(default)]
+        handle: u32,
+        on: bool,
+        #[serde(default)]
+        minutes: u32,
+        #[serde(default)]
+        by: String,
+        #[serde(default)]
+        reason: String,
+    },
+    /// Fleet Control (`restart-v1`): restart the service (`host` false) or
+    /// reboot the host, 5 s after the `CommandResult` (`ok`, `busy`,
+    /// `call_active`, `fleet_control_off`).
+    RestartStation {
+        #[serde(default)]
+        handle: u32,
+        #[serde(default)]
+        host: bool,
+        #[serde(default)]
+        during_call: bool,
+    },
 }
 
 impl ControlCommand {
@@ -75,7 +109,8 @@ impl ControlCommand {
             Self::SendSds { handle, .. } | Self::SendRawSdsType4 { handle, .. }
             | Self::CommandA { handle, .. } | Self::TestCmdB { handle, .. }
             | Self::FleetPing { handle } | Self::CheckUpdate { handle }
-            | Self::StartUpdate { handle, .. } => Some(*handle),
+            | Self::StartUpdate { handle, .. } | Self::SetMaintenance { handle, .. }
+            | Self::RestartStation { handle, .. } => Some(*handle),
             _ => None,
         }
     }
@@ -191,7 +226,8 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
         ControlCommand::SendSds { handle, .. } | ControlCommand::SendRawSdsType4 { handle, .. }
         | ControlCommand::CommandA { handle, .. } | ControlCommand::TestCmdB { handle, .. }
         | ControlCommand::FleetPing { handle } | ControlCommand::CheckUpdate { handle }
-        | ControlCommand::StartUpdate { handle, .. } => {
+        | ControlCommand::StartUpdate { handle, .. } | ControlCommand::SetMaintenance { handle, .. }
+        | ControlCommand::RestartStation { handle, .. } => {
             *handle = fresh_handle;
             Some(*handle)
         }
@@ -213,6 +249,7 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
             command,
             ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. } | ControlCommand::FleetPing { .. }
                 | ControlCommand::CheckUpdate { .. } | ControlCommand::StartUpdate { .. }
+                | ControlCommand::SetMaintenance { .. } | ControlCommand::RestartStation { .. }
         ) => {
             let handle = assigned_handle.or_else(|| command.handle()).expect("assigned above");
             let (tx, rx) = oneshot::channel();
@@ -306,11 +343,19 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             protocol: *protocol, version: version.clone(), brew_login: brew_login.clone(), mcc: *mcc, mnc: *mnc,
             fleet_control: *fleet_control, capabilities: capabilities.clone(),
         };
-        let changed = {
+        let (changed, resend) = {
             let names = station_names(state);
             let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
-            fleet.hello(id, &hello, crate::fleet::now_ms(), &|k| names.get(k).cloned())
+            let changed = fleet.hello(id, &hello, crate::fleet::now_ms(), &|k| names.get(k).cloned());
+            (changed, fleet.maintenance_resend(id, crate::fleet::now_ms()))
         };
+        // Maintenance still on (e.g. the station restarted while it was set): set it again.
+        if let Some(cmd) = resend {
+            let (state, id) = (state.clone(), id.to_owned());
+            tokio::spawn(async move {
+                let _ = send_command(&state, &id, cmd).await;
+            });
+        }
         if changed {
             state.monitor.emit("fleet_changed", serde_json::json!({"id": id, "fleet_control": fleet_control}));
         }
@@ -475,7 +520,7 @@ mod tests {
         assert_eq!(r.status(), 200);
         let ids: Vec<String> = state.fleet.lock().unwrap().stations().into_iter().map(|s| s.id).collect();
         assert!(ids.iter().all(|id| state.fleet.lock().unwrap().updatable(id)), "every station found a newer version");
-        let req = crate::fleet::UpdateRequest { ids: vec![], mode, during_call: false, interrupt_min: 10 };
+        let req = crate::fleet::UpdateRequest { ids: vec![], mode, during_call: false, interrupt_min: 10, live: false };
         let r = crate::fleet::api_update(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(req)).await;
         assert_eq!(r.status(), 200);
         tokio::spawn(crate::fleet::run_updates(state.clone()));
@@ -522,12 +567,25 @@ mod tests {
     fn update_wire_shapes_match_flowstation() {
         // Same JSON as FlowStation's net_control::fleet tests.
         assert_eq!(ControlCommand::CheckUpdate { handle: 9 }.to_wire_json(), serde_json::json!({"CheckUpdate": {"handle": 9}}));
-        assert_eq!(ControlCommand::StartUpdate { handle: 11, during_call: true }.to_wire_json(), serde_json::json!({"StartUpdate": {"handle": 11, "during_call": true}}));
+        assert_eq!(ControlCommand::StartUpdate { handle: 11, during_call: true, source: None }.to_wire_json(), serde_json::json!({"StartUpdate": {"handle": 11, "during_call": true}}));
+        let live = crate::fleet_update::LiveSource { repo: "https://github.com/sebastianmadl/bost-flowstation".into(), branch: "fleet-control".into() };
+        assert_eq!(
+            ControlCommand::StartUpdate { handle: 12, during_call: false, source: Some(live) }.to_wire_json(),
+            serde_json::json!({"StartUpdate": {"handle": 12, "during_call": false, "source": {"repo": "https://github.com/sebastianmadl/bost-flowstation", "branch": "fleet-control"}}})
+        );
         let info: ControlResponse = serde_json::from_value(serde_json::json!({"UpdateInfo": {"handle": 9, "ok": true, "current": "v0.5.9-aaa", "latest": "v0.5.9-bbb", "update_available": true, "channel": "installed", "repo": "https://github.com/sebastianmadl/bost-flowstation", "branch": "fleet-control", "message": "newer version available"}})).unwrap();
         assert!(matches!(info, ControlResponse::UpdateInfo { handle: 9, update_available: true, .. }));
         let p: ControlResponse = serde_json::from_value(serde_json::json!({"UpdateProgress": {"stage": "build", "percent": 42, "message": "Compiling x", "version": "v0.5.9-aaa", "elapsed_secs": 120}})).unwrap();
         assert!(matches!(p, ControlResponse::UpdateProgress { percent: 42, .. }));
         assert_eq!(ControlCommand::CheckUpdate { handle: 0 }.answer_timeout(), Duration::from_secs(60));
+        assert_eq!(
+            ControlCommand::SetMaintenance { handle: 3, on: true, minutes: 30, by: "oe4sxm".into(), reason: String::new() }.to_wire_json(),
+            serde_json::json!({"SetMaintenance": {"handle": 3, "on": true, "minutes": 30, "by": "oe4sxm", "reason": ""}})
+        );
+        assert_eq!(
+            ControlCommand::RestartStation { handle: 4, host: true, during_call: false }.to_wire_json(),
+            serde_json::json!({"RestartStation": {"handle": 4, "host": true, "during_call": false}})
+        );
     }
 
 }

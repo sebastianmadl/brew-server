@@ -63,8 +63,11 @@ listed its capability.
 | --- | --- | --- |
 | `fleet-v1` | `FleetPing` | 1 |
 | `update-v1` | `CheckUpdate`, `StartUpdate` (answers `UpdateInfo`, `CommandResult`; reports `UpdateProgress`) | 2 |
+| `update-live-v1` | `StartUpdate` with `source` (live update, radio kept on; section 8.6) | 2 |
+| `maintenance-v1` | `SetMaintenance` (red banner on the station's dashboard; section 9.1) | 3 |
+| `restart-v1` | `RestartStation` (service restart or system reboot; section 9.2) | 3 |
 
-Later phases add for example `reboot-v1`, `config-v1`.
+Later phases add for example `config-v1`.
 
 ## 3. Messages
 
@@ -173,7 +176,7 @@ another station is seen as one.
   `Basestation <name> switched off Fleet Control`, and the dashboard shows
   this as an INFO popup (once per entry and browser; on the first visit only
   entries of the last 24 h).
-- **Remove** (Fleet Control management) takes a station off the list; it comes
+- **Remove** (Fleet Control management, offline stations only; online ones show **Ping**) takes a station off the list; it comes
   back with its next hello while its switch is on.
 - **Ping** (Fleet Control management) sends `FleetPing` and shows the result
   and the round-trip time.
@@ -195,8 +198,15 @@ itself) and text, and kept **90 days**:
 | `update_skip` | a station was not updated: up to date, offline twice, cancelled |
 | `update_end` | the run is over, with the counts |
 | `settings` | an admin changed "Updates repo" |
+| `log_clear` | an admin cleared the change log (the only entry left after **Clear**) |
+| `maintenance` | maintenance on (minutes, note) / off / ended (time up) (phase 3) |
+| `restart` | service restart / system reboot sent; station back after it (with the seconds) (phase 3) |
+| `restart_alarm` | a station not back 10 min after a restart / reboot (shown red) |
 
 Phases 3–7 add configuration changes and restarts.
+
+**Clear** (admins only, next to the search field) empties the change log after
+a confirmation; one entry "Log cleared by <user>" stays.
 
 Stations and log are kept in `<[storage] path>.fleet` (JSON, rewritten through
 a temporary file) and survive restarts; without `[storage] enabled` they are
@@ -209,7 +219,7 @@ Dashboard users (Server settings → Users), next to the page ticks:
 | Right | Page id | Allows |
 | --- | --- | --- |
 | Fleet Control visibility | `fleet` | see the Fleet Manager and the change log |
-| Fleet Control management | `fleet_manage` | visibility plus every button (Ping, Remove, Check for updates, Update, Cancel; later restart, config) |
+| Fleet Control management | `fleet_manage` | visibility plus every button (Ping, Remove, Check for updates, Update, Cancel, Maintenance, Restart; later config) |
 
 Admins have both. Viewer (not logged in) may get visibility, never
 management. Neither right is given to users taken over from the config.
@@ -222,14 +232,20 @@ management. Neither right is given to users taken over from the config.
 | `POST /api/fleet/ping` | management | `{"id": "<control login>"}` | `{ok, code, message, ms}`; 404 not connected, 504 no answer in 5 s |
 | `POST /api/fleet/remove` | management | `{"id": "<control login>"}` | `{ok: true}`; 404 not listed |
 | `POST /api/fleet/check` | management | `{"ids": [...]}` (empty: all) | `{results: [{id, check}]}` (section 8.3) |
-| `POST /api/fleet/update` | management | `{"ids": [...], "mode": "parallel"\|"rolling", "during_call": bool, "interrupt_min": n}` | `{ok, job}`; 409 a run is going or no station |
+| `POST /api/fleet/update` | management | `{"ids": [...], "mode": "parallel"\|"rolling", "during_call": bool, "interrupt_min": n, "live": bool}` | `{ok, job}`; 409 a run is going or no station; 400 live update without an https Updates repo |
 | `POST /api/fleet/update/cancel` | management | `{}` (whole run) or `{"id": "<control login>"}` | `{ok: true}`; 404 nothing to cancel |
 | `POST /api/fleet/settings` | admin | `{"repo": "...", "branch": "..."}` | `{ok: true}`; 400 not a git URL / branch |
+| `POST /api/fleet/log/clear` | admin | `{}` | `{ok: true}` |
+| `POST /api/fleet/maintenance` | management | `{"id", "on": bool, "minutes": n (default 30, 1–240), "reason": "..."}` | `{ok: true}`; 400 no `maintenance-v1`; 404 not connected; 409 refused by the station; 504 no answer |
+| `POST /api/fleet/restart` | management | `{"id", "host": bool, "during_call": bool}` | `{ok: true}`; 400 no `restart-v1`; 404 / 409 / 504 as above |
 
 A station in `stations`: `id`, `label`, `brew_login`, `version`, `mcc`, `mnc`,
 `protocol`, `capabilities`, `online`, `first_seen_ms`, `last_seen_ms`, and
 from phase 2 `check` (last update check or null), `progress` (last
-`UpdateProgress` or null), `updatable`, `other_source`. A log entry: `id`,
+`UpdateProgress` or null), `updatable`, `other_source`, `live` (online with
+`update-live-v1`), from phase 3 `maintenance` (`{by, reason, since_ms,
+until_ms}` or null) and `restart` (`{host, by, at_ms}` while a restarted
+station is not back, or null). A log entry: `id`,
 `at_ms`, `station`, `label`, `user` (null = the station or the server),
 `kind`, `text`. Phase 2 adds `is_admin`, `job` (the current or last run, or
 null), `update_settings`, `update_source` (in effect) and `limits` to
@@ -374,7 +390,81 @@ every 3 s while the run goes.
 | phase 2 | phase 1 | no `update-v1` in the hello: the station is never checked or updated (not counted in Update all) |
 | phase 2 | phase 2, no dashboard | no `update-v1`, same as above |
 
+### 8.6 Live update (`update-live-v1`)
+
+**Live update (RF on)** in the update dialog (shown for stations that list
+`update-live-v1`): the server sends the repository and branch of its
+**Updates repo** with `StartUpdate`:
+
+```json
+{"StartUpdate": {"handle": 12, "during_call": false, "source": {"repo": "https://github.com/sebastianmadl/bost-flowstation", "branch": "fleet-control"}}}
+```
+
+The station runs its installer with them, the same as
+`sudo BOST_REPO=… BOST_BRANCH=… bash contrib/install/install-bost.sh` in a
+terminal, and **stays on the air while it builds**; only the service restart
+at the end takes it off the air (about 2 min). Afterwards the station's own
+update source is that repository and branch.
+
+- Rolling and parallel, call wait, limits, alarms and Cancel work as in 8.4.
+- No check is needed first (the station may change source); every ticked
+  station (or, with nothing ticked, every online station with
+  `update-live-v1`) takes part.
+- Back with the same software after the restart counts as done
+  ("live update finished, software unchanged"), not as an alarm.
+- Only a plain `https://` repository without credentials and a plain branch
+  name are sent (400 otherwise; the station checks again and answers
+  `invalid_source`). An ssh Updates repo cannot be used for live updates.
+- `source` is sent only to stations that list `update-live-v1`: an older
+  station would ignore the field and run a normal OTA (radio off).
+
 Code: `src/fleet_update.rs` (run state, pure), `src/fleet.rs` (checks,
 settings, API, driver), `src/control.rs` (messages), `src/dashboard_ui.rs`
 (page, dialog, Server settings card). Station side: FlowStation
 `net_dashboard/ota_remote.rs`, `net_control/fleet.rs`, `Docs/fleet-control.md`.
+
+## 9. Maintenance and restart (phase 3)
+
+### 9.1 Maintenance (`maintenance-v1`)
+
+```json
+{"SetMaintenance": {"handle": 3, "on": true, "minutes": 30, "by": "oe4sxm", "reason": "new carrier"}}
+```
+
+Answer `CommandResult` (`ok`, `fleet_control_off`). While the flag is on,
+every page of the station's dashboard shows a solid red banner under the top
+bar: "Maintenance: work on this base station in progress", with `by`, the
+minutes left and `reason`. **Maintenance** on a station (Fleet Control page,
+management) asks for the duration (default 30 min, 1–240) and a note; **End
+maintenance** switches it off. The flag runs out by itself on both sides, so a
+closed browser never leaves it on. The server keeps it in the Fleet file and
+sends it again (with the time left) when the station connects again, e.g.
+after a restart. The table shows a red chip "Maintenance · user · n min left".
+
+Phase 5 (config editing) will set it automatically while the edit dialog is
+open and refresh it while the dialog stays open.
+
+A live update (8.6) shows its own banner on the station ("Live system update:
+RF on!") without this flag.
+
+### 9.2 Restart (`restart-v1`)
+
+```json
+{"RestartStation": {"handle": 4, "host": true, "during_call": false}}
+```
+
+Answer `CommandResult`: `ok` (the station restarts its service, `host` false,
+or reboots the computer, `host` true, 5 s later), `busy` (an update is
+running), `call_active` (a call is in progress and `during_call` is false),
+`fleet_control_off`. **Restart** on a station opens a dialog: *Restart
+service* / *Reboot system*, *Restart during call*, then a confirmation. The
+change log records who sent it and, from the next `StationHello`, "back after
+the reboot (n s)"; a station not back within **10 min** gets an ALARM
+(`restart_alarm`). The station needs no sudo rule: FlowStation's service runs
+as root.
+
+### 9.3 Backwards compatibility
+
+A station without `maintenance-v1` / `restart-v1` gets no buttons and the API
+refuses with 400; a phase 2 server never sends the new commands.
+

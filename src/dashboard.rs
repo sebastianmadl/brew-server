@@ -165,6 +165,9 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/update", axum::routing::post(crate::fleet::api_update))
         .route("/api/fleet/update/cancel", axum::routing::post(crate::fleet::api_cancel))
         .route("/api/fleet/settings", axum::routing::post(crate::fleet::api_settings))
+        .route("/api/fleet/log/clear", axum::routing::post(crate::fleet::api_clear_log))
+        .route("/api/fleet/maintenance", axum::routing::post(crate::fleet::api_maintenance))
+        .route("/api/fleet/restart", axum::routing::post(crate::fleet::api_restart))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -292,7 +295,7 @@ fn need(path: &str) -> Need {
         "/sms-center" | "/api/sms-center" => &["sms"],
         "/ha" => &["ha"],
         "/api/fleet" => &["fleet"],
-        "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" => &["fleet_manage"],
+        "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" | "/api/fleet/maintenance" | "/api/fleet/restart" => &["fleet_manage"],
         _ => return Need::Admin,
     })
 }
@@ -2631,10 +2634,11 @@ mod tests {
         assert_eq!(need("/api/fleet"), Need::Pages(&["fleet"]));
         assert_eq!(need("/api/fleet/remove"), Need::Pages(&["fleet_manage"]));
         assert_eq!(need("/api/fleet/ping"), Need::Pages(&["fleet_manage"]));
-        for p in ["/api/fleet/check", "/api/fleet/update", "/api/fleet/update/cancel"] {
+        for p in ["/api/fleet/check", "/api/fleet/update", "/api/fleet/update/cancel", "/api/fleet/maintenance", "/api/fleet/restart"] {
             assert_eq!(need(p), Need::Pages(&["fleet_manage"]), "{p}");
         }
         assert_eq!(need("/api/fleet/settings"), Need::Admin, "Updates repo is a server setting");
+        assert_eq!(need("/api/fleet/log/clear"), Need::Admin, "clearing the change log is for admins only");
         let looker = crate::dash_users::Access { user: Some("eve".into()), admin: false, pages: ["fleet".to_string()].into(), auth: true };
         assert!(allowed(&looker, need("/api/fleet")) && !allowed(&looker, need("/api/fleet/remove")));
     }

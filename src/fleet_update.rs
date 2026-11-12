@@ -17,6 +17,13 @@
 //! the call ends, at most the chosen interrupt time (or at once with "update
 //! during call").
 //!
+//! **Live update** (capability `update-live-v1`): the server sends the
+//! repository and branch of its "Updates repo" with `StartUpdate`; the station
+//! runs its installer with them (like `install-bost.sh` in a terminal) and
+//! keeps the radio on until the service restart. No check is needed first,
+//! the station afterwards follows that source, and coming back with the same
+//! software counts as done (reinstalled).
+//!
 //! This module is pure state: `fleet.rs` feeds it the station events and
 //! sends the `StartUpdate` commands it asks for (`run`).
 
@@ -49,6 +56,31 @@ impl Mode {
     }
 }
 
+/// Repository and branch of a live update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveSource {
+    pub repo: String,
+    pub branch: String,
+}
+
+impl LiveSource {
+    /// Only plain `https://` URLs without credentials and plain branch names:
+    /// the station hands both to its installer.
+    pub fn valid(&self) -> bool {
+        let r = self.repo.trim();
+        let ok_repo = r.strip_prefix("https://").is_some_and(|rest| {
+            !rest.is_empty() && !rest.contains('@') && rest.chars().all(|c| c.is_ascii_alphanumeric() || "-._/:~".contains(c))
+        });
+        let b = self.branch.trim();
+        let ok_branch = !b.is_empty()
+            && b.len() <= 100
+            && !b.starts_with('-')
+            && !b.contains("..")
+            && b.chars().all(|c| c.is_ascii_alphanumeric() || "-._/".contains(c));
+        ok_repo && ok_branch
+    }
+}
+
 /// Options chosen in the update dialog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Options {
@@ -58,6 +90,9 @@ pub struct Options {
     /// Without `during_call`: wait at most this long for a call to end, then
     /// start anyway (minutes).
     pub interrupt_min: u32,
+    /// Live update from this source (radio stays on during the build).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<LiveSource>,
 }
 
 /// Where one station of a run is.
@@ -140,6 +175,8 @@ pub struct Event {
 pub struct Start {
     pub id: String,
     pub during_call: bool,
+    /// Live update source (`None`: normal OTA from the station's own source).
+    pub source: Option<LiveSource>,
 }
 
 /// How a `StartUpdate` went.
@@ -198,7 +235,10 @@ impl Job {
         } else {
             format!("calls interrupted after {} min", self.options.interrupt_min)
         };
-        format!("{}, {call}", self.options.mode.as_str())
+        match &self.options.live {
+            Some(l) => format!("{}, {call}, live update (RF on) from {} {}", self.options.mode.as_str(), l.repo, l.branch),
+            None => format!("{}, {call}", self.options.mode.as_str()),
+        }
     }
 
     pub fn is_finished(&self) -> bool {
@@ -228,6 +268,7 @@ impl Job {
         }
         let interrupt_ms = self.options.interrupt_min as u64 * 60_000;
         let during_call = self.options.during_call;
+        let source = self.options.live.clone();
         for it in &mut self.items {
             match it.state.clone() {
                 ItemState::Running { started_ms, .. } if now_ms.saturating_sub(started_ms) > BUILD_LIMIT_MS => {
@@ -245,7 +286,7 @@ impl Job {
                     }
                     // Keep the call's start time: `start_result` reads it back.
                     it.state = ItemState::WaitingCall { since_ms, last_try_ms: now_ms };
-                    starts.push(Start { id: it.id.clone(), during_call: force });
+                    starts.push(Start { id: it.id.clone(), during_call: force, source: source.clone() });
                 }
                 _ => {}
             }
@@ -267,7 +308,7 @@ impl Job {
                 }
                 let it = &mut self.items[idx];
                 it.state = ItemState::Starting { at_ms: now_ms };
-                starts.push(Start { id: it.id.clone(), during_call });
+                starts.push(Start { id: it.id.clone(), during_call, source: source.clone() });
                 if self.options.mode == Mode::Rolling {
                     break;
                 }
@@ -378,12 +419,17 @@ impl Job {
     /// A hello from the station: back with other software means updated.
     pub fn hello(&mut self, id: &str, version: &str, now_ms: u64) -> Vec<Event> {
         let mut events = Vec::new();
+        let live = self.options.live.is_some();
         let Some(it) = self.item_mut(id) else { return events };
         if !matches!(it.state, ItemState::Running { .. } | ItemState::Restarting { .. }) {
             return events;
         }
         if version != it.from_version {
             events.push(ev(it, "update_done", format!("Basestation {}: update finished, software {} → {version}", it.label, it.from_version)));
+            it.state = ItemState::Done { version: version.to_string() };
+        } else if matches!(it.state, ItemState::Restarting { .. }) && live {
+            // A live update reinstalls even when the source has nothing newer.
+            events.push(ev(it, "update_done", format!("Basestation {}: live update finished, software unchanged ({version})", it.label)));
             it.state = ItemState::Done { version: version.to_string() };
         } else if matches!(it.state, ItemState::Restarting { .. }) {
             it.state = ItemState::Failed { reason: "came back with the old software".into() };
@@ -433,7 +479,10 @@ mod tests {
     const MIN: u64 = 60_000;
 
     fn opts(mode: Mode) -> Options {
-        Options { mode, during_call: false, interrupt_min: 10 }
+        Options { mode, during_call: false, interrupt_min: 10, live: None }
+    }
+    fn live() -> LiveSource {
+        LiveSource { repo: "https://github.com/sebastianmadl/bost-flowstation".into(), branch: "fleet-control".into() }
     }
     fn stations(n: usize) -> Vec<(String, String, String, bool)> {
         (1..=n).map(|i| (format!("bs{i}"), format!("BS {i}"), "v1".to_string(), true)).collect()
@@ -595,10 +644,10 @@ mod tests {
         let (s, _) = job.tick(5_000, &all_online);
         assert!(s.is_empty(), "retry every 10 s, and bs2 waits in rolling mode");
         let (s, _) = job.tick(10_000, &all_online);
-        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: false }]);
+        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: false, source: None }]);
         assert!(job.start_result("bs1", StartOutcome::CallActive, 10_000).is_empty(), "logged once");
         let (s, ev) = job.tick(10 * MIN, &all_online);
-        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: true }], "after 10 min the call is interrupted");
+        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: true, source: None }], "after 10 min the call is interrupted");
         assert!(ev[0].text.contains("updating anyway"));
         job.start_result("bs1", StartOutcome::Started, 10 * MIN);
         assert!(matches!(job.items[0].state, ItemState::Running { .. }));
@@ -610,7 +659,7 @@ mod tests {
         o.during_call = true;
         let (mut job, _) = Job::new(1, 0, None, o, stations(1));
         let (s, _) = job.tick(0, &all_online);
-        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: true }]);
+        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: true, source: None }]);
     }
 
     #[test]
@@ -660,5 +709,49 @@ mod tests {
         assert_eq!(back.items[0].state, ItemState::Pending, "an unanswered start is tried again");
         let (s, _) = back.tick(1, &all_online);
         assert_eq!(ids(&s), vec!["bs1"]);
+    }
+
+    #[test]
+    fn live_update_sends_the_source_and_same_software_counts_as_done() {
+        let o = Options { live: Some(live()), ..opts(Mode::Rolling) };
+        let (mut job, ev) = Job::new(1, 0, None, o, stations(2));
+        assert!(ev[0].text.ends_with("live update (RF on) from https://github.com/sebastianmadl/bost-flowstation fleet-control, 2 stations)"), "{}", ev[0].text);
+        let (s, _) = job.tick(0, &all_online);
+        assert_eq!(s, vec![Start { id: "bs1".into(), during_call: false, source: Some(live()) }]);
+        job.start_result("bs1", StartOutcome::Started, 1);
+        job.progress("bs1", "restart", 100, "", 2);
+        let e = job.hello("bs1", "v1", 3);
+        assert_eq!(job.items[0].state, ItemState::Done { version: "v1".into() }, "reinstalled, no alarm");
+        assert_eq!(e[0].kind, "update_done");
+        let (s, _) = job.tick(4, &all_online);
+        assert_eq!(ids(&s), vec!["bs2"], "rolling goes on");
+        assert_eq!(s[0].source, Some(live()));
+    }
+
+    #[test]
+    fn normal_update_has_no_source_and_same_software_is_an_alarm() {
+        let (mut job, _) = Job::new(1, 0, None, opts(Mode::Parallel), stations(1));
+        let (s, _) = job.tick(0, &all_online);
+        assert_eq!(s[0].source, None);
+        job.start_result("bs1", StartOutcome::Started, 1);
+        job.progress("bs1", "restart", 100, "", 2);
+        job.hello("bs1", "v1", 3);
+        assert!(matches!(job.items[0].state, ItemState::Failed { .. }));
+    }
+
+    #[test]
+    fn live_source_only_plain_https_and_branch_names() {
+        let ok = |r: &str, b: &str| LiveSource { repo: r.into(), branch: b.into() }.valid();
+        assert!(ok("https://github.com/sebastianmadl/bost-flowstation", "fleet-control"));
+        assert!(ok("https://github.com/Aitorrio/bost-flowstation.git", "main"));
+        assert!(ok("https://git.example.org:8443/x/y", "feature/a_b.1"));
+        assert!(!ok("git@github.com:a/b.git", "main"), "ssh needs keys on the station");
+        assert!(!ok("https://user:pw@github.com/a/b", "main"), "no credentials");
+        assert!(!ok("https://github.com/a/b;reboot", "main"));
+        assert!(!ok("https://github.com/a/b", "-x"));
+        assert!(!ok("https://github.com/a/b", "a..b"));
+        assert!(!ok("https://github.com/a/b", "a b"));
+        assert!(!ok("https://github.com/a/b", ""));
+        assert!(!ok("http://github.com/a/b", "main"));
     }
 }

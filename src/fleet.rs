@@ -62,7 +62,39 @@ pub struct Station {
     /// Last `UpdateProgress` of an OTA run (whoever started it), phase 2.
     #[serde(default)]
     pub progress: Option<ProgressInfo>,
+    /// Maintenance flag set from here (`maintenance-v1`), phase 3.
+    #[serde(default)]
+    pub maintenance: Option<MaintenanceInfo>,
+    /// A restart / reboot was sent and the station is not back yet, phase 3.
+    #[serde(default)]
+    pub restart: Option<RestartInfo>,
 }
+
+/// Maintenance flag of a station (the station's own copy runs out at the same time).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaintenanceInfo {
+    pub by: Option<String>,
+    pub reason: String,
+    pub since_ms: u64,
+    pub until_ms: u64,
+}
+
+/// A restart / reboot waiting for the station to come back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestartInfo {
+    pub host: bool,
+    pub by: Option<String>,
+    pub at_ms: u64,
+}
+
+/// Longest maintenance time (minutes).
+pub const MAX_MAINTENANCE_MIN: u32 = 240;
+/// A rebooted / restarted station not back after this long: alarm.
+pub const RESTART_RETURN_MS: u64 = 10 * 60 * 1000;
+/// Capability: maintenance flag.
+pub const MAINTENANCE_CAPABILITY: &str = "maintenance-v1";
+/// Capability: restart / reboot.
+pub const RESTART_CAPABILITY: &str = "restart-v1";
 
 /// Result of the last update check of a station.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,7 +299,13 @@ impl Fleet {
             // A check is only valid for the software it was made with.
             check: entry.as_ref().and_then(|s| s.check.clone()).filter(|c| c.current == h.version),
             progress: entry.as_ref().and_then(|s| s.progress.clone()),
+            maintenance: entry.as_ref().and_then(|s| s.maintenance.clone()),
+            restart: None,
         };
+        if let Some(r) = entry.as_ref().and_then(|s| s.restart.as_ref()) {
+            let secs = now_ms.saturating_sub(r.at_ms) / 1000;
+            self.push(now_ms, id, label.clone(), None, "restart", format!("Basestation {label}: back after the {} ({secs} s)", if r.host { "reboot" } else { "service restart" }));
+        }
         // An update run that ends with this hello logs the software change itself.
         let events = self.data.job.as_mut().map(|j| j.hello(id, &h.version, now_ms)).unwrap_or_default();
         let run_logs_it = events.iter().any(|e| e.kind == "update_done");
@@ -372,16 +410,94 @@ impl Fleet {
         })
     }
 
+    /// Maintenance on (`minutes`) or off for `id`, set from here; logged.
+    pub fn set_maintenance(&mut self, id: &str, on: bool, minutes: u32, reason: &str, user: Option<&str>, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) -> bool {
+        let Some(s) = self.data.stations.get_mut(id) else { return false };
+        let label = label(names, id, s.brew_login.as_deref());
+        let text = if on {
+            let minutes = minutes.clamp(1, MAX_MAINTENANCE_MIN);
+            s.maintenance = Some(MaintenanceInfo { by: user.map(str::to_owned), reason: reason.trim().to_owned(), since_ms: now_ms, until_ms: now_ms + minutes as u64 * 60_000 });
+            format!("Basestation {label}: maintenance on for {minutes} min{}", if reason.trim().is_empty() { String::new() } else { format!(" ({})", reason.trim()) })
+        } else {
+            s.maintenance = None;
+            format!("Basestation {label}: maintenance off")
+        };
+        self.push(now_ms, id, label, user, "maintenance", text);
+        self.save();
+        true
+    }
+
+    /// After a hello: the `SetMaintenance` to send again if maintenance is still on.
+    pub fn maintenance_resend(&self, id: &str, now_ms: u64) -> Option<crate::control::ControlCommand> {
+        let s = self.data.stations.get(id)?;
+        let m = s.maintenance.as_ref().filter(|m| m.until_ms > now_ms)?;
+        if !s.capabilities.iter().any(|c| c == MAINTENANCE_CAPABILITY) {
+            return None;
+        }
+        let minutes = (m.until_ms - now_ms).div_ceil(60_000) as u32;
+        Some(crate::control::ControlCommand::SetMaintenance { handle: 0, on: true, minutes, by: m.by.clone().unwrap_or_default(), reason: m.reason.clone() })
+    }
+
+    /// A restart / reboot was accepted by `id`; logged, the return is watched.
+    pub fn restart_sent(&mut self, id: &str, host: bool, user: Option<&str>, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) {
+        let Some(s) = self.data.stations.get_mut(id) else { return };
+        let label = label(names, id, s.brew_login.as_deref());
+        s.restart = Some(RestartInfo { host, by: user.map(str::to_owned), at_ms: now_ms });
+        self.push(now_ms, id, label.clone(), user, "restart", format!("Basestation {label}: {}", if host { "system reboot" } else { "service restart" }));
+        self.save();
+    }
+
+    /// Run-out maintenance and stations not back after a restart (every 2 s).
+    pub fn tick_stations(&mut self, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) -> bool {
+        let mut logs = Vec::new();
+        for s in self.data.stations.values_mut() {
+            let label = label(names, &s.id, s.brew_login.as_deref());
+            if s.maintenance.as_ref().is_some_and(|m| m.until_ms <= now_ms) {
+                s.maintenance = None;
+                logs.push((s.id.clone(), label.clone(), "maintenance", format!("Basestation {label}: maintenance ended (time up)")));
+            }
+            if s.restart.as_ref().is_some_and(|r| now_ms.saturating_sub(r.at_ms) > RESTART_RETURN_MS) {
+                let host = s.restart.take().is_some_and(|r| r.host);
+                logs.push((s.id.clone(), label.clone(), "restart_alarm", format!("ALARM Basestation {label}: not back 10 min after the {}", if host { "reboot" } else { "service restart" })));
+            }
+        }
+        let changed = !logs.is_empty();
+        for (id, label, kind, text) in logs {
+            self.push(now_ms, &id, label, None, kind, text);
+        }
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    /// Stations that can take a live update now: listed, online, `update-live-v1`.
+    pub fn live_capable(&self, id: &str) -> bool {
+        self.data.stations.get(id).is_some_and(|s| s.online && s.capabilities.iter().any(|c| c == LIVE_UPDATE_CAPABILITY))
+    }
+
+    /// "Clear" (admins): empties the change log; one entry says who cleared it.
+    pub fn clear_log(&mut self, user: Option<&str>, now_ms: u64) {
+        self.data.log.clear();
+        let who = user.unwrap_or("an admin");
+        self.push(now_ms, "", String::new(), user, "log_clear", format!("Log cleared by {who}"));
+        self.save();
+    }
+
     /// Start a run over `ids` (in this order). Err: a run is still going, or no station.
     pub fn start_job(&mut self, ids: &[String], options: crate::fleet_update::Options, user: Option<&str>, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) -> Result<u64, &'static str> {
         if self.data.job.as_ref().is_some_and(|j| !j.is_finished()) {
             return Err("An update run is in progress: wait for it or cancel it");
         }
+        // A live update needs no check (the station may switch source); a normal
+        // one only starts where the check found a newer version.
+        let live = options.live.is_some();
+        let cap = if live { LIVE_UPDATE_CAPABILITY } else { UPDATE_CAPABILITY };
         let stations: Vec<(String, String, String, bool)> = ids
             .iter()
             .filter_map(|id| self.data.stations.get(id))
-            .filter(|s| s.capabilities.iter().any(|c| c == UPDATE_CAPABILITY))
-            .map(|s| (s.id.clone(), label(names, &s.id, s.brew_login.as_deref()), s.version.clone(), self.updatable(&s.id)))
+            .filter(|s| s.capabilities.iter().any(|c| c == cap))
+            .map(|s| (s.id.clone(), label(names, &s.id, s.brew_login.as_deref()), s.version.clone(), live || self.updatable(&s.id)))
             .collect();
         if stations.is_empty() {
             return Err("No station to update");
@@ -437,6 +553,8 @@ impl Fleet {
 
 /// Capability of phase 2 (remote update).
 pub const UPDATE_CAPABILITY: &str = "update-v1";
+/// Live update with the server's repository and branch, radio kept on.
+pub const LIVE_UPDATE_CAPABILITY: &str = "update-live-v1";
 
 /// Station as the Fleet Manager shows it.
 #[derive(Serialize)]
@@ -449,6 +567,8 @@ struct StationView {
     updatable: bool,
     /// Its OTA source differs from the server's "Updates repo" (hint only).
     other_source: bool,
+    /// Online and can take a live update (`update-live-v1`).
+    live: bool,
 }
 
 /// `GET /api/fleet` (Fleet Control visibility): the listed stations, the change
@@ -470,6 +590,7 @@ pub async fn api_list(
             online: s.online,
             label: label(&lookup, &s.id, s.brew_login.as_deref()),
             updatable: fleet.updatable(&s.id),
+            live: fleet.live_capable(&s.id),
             other_source: s.check.as_ref().is_some_and(|c| !c.repo.is_empty() && (!same_repo(&c.repo, &ref_repo) || c.branch != ref_branch)),
             station: s,
         })
@@ -617,6 +738,9 @@ pub struct UpdateRequest {
     pub during_call: bool,
     #[serde(default = "default_interrupt")]
     pub interrupt_min: u32,
+    /// Live update with the server's "Updates repo", radio kept on.
+    #[serde(default)]
+    pub live: bool,
 }
 
 fn default_interrupt() -> u32 {
@@ -639,12 +763,22 @@ pub async fn api_update(
     }
     let names = crate::control::station_names(&state);
     let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
+    let live = if req.live {
+        let (repo, branch) = fleet.update_settings().effective();
+        let l = crate::fleet_update::LiveSource { repo, branch };
+        if !l.valid() {
+            return (axum::http::StatusCode::BAD_REQUEST, "Live update needs an https:// repository and a plain branch name in Updates repo").into_response();
+        }
+        Some(l)
+    } else {
+        None
+    };
     let ids: Vec<String> = if req.ids.is_empty() {
-        fleet.stations().into_iter().filter(|s| fleet.updatable(&s.id)).map(|s| s.id).collect()
+        fleet.stations().into_iter().filter(|s| if req.live { fleet.live_capable(&s.id) } else { fleet.updatable(&s.id) }).map(|s| s.id).collect()
     } else {
         req.ids.clone()
     };
-    let options = crate::fleet_update::Options { mode: req.mode, during_call: req.during_call, interrupt_min: req.interrupt_min };
+    let options = crate::fleet_update::Options { mode: req.mode, during_call: req.during_call, interrupt_min: req.interrupt_min, live };
     match fleet.start_job(&ids, options, a.user.as_deref(), now_ms(), &|k| names.get(k).cloned()) {
         Ok(job) => {
             drop(fleet);
@@ -705,6 +839,112 @@ pub async fn api_settings(
     axum::Json(serde_json::json!({"ok": true})).into_response()
 }
 
+/// `POST /api/fleet/log/clear` (admins): empties the change log.
+pub async fn api_clear_log(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.admin {
+        return (axum::http::StatusCode::FORBIDDEN, "Admins only").into_response();
+    }
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).clear_log(a.user.as_deref(), now_ms());
+    state.monitor.emit("fleet_changed", serde_json::json!({}));
+    axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct MaintenanceRequest {
+    pub id: String,
+    pub on: bool,
+    #[serde(default = "default_maintenance")]
+    pub minutes: u32,
+    #[serde(default)]
+    pub reason: String,
+}
+
+fn default_maintenance() -> u32 {
+    30
+}
+
+/// Map a station's `CommandResult` to an HTTP answer.
+fn station_answer(r: Result<Option<crate::control::ControlResponse>, crate::control::SendError>) -> Result<(), axum::response::Response> {
+    use axum::response::IntoResponse;
+    match r {
+        Ok(Some(crate::control::ControlResponse::CommandResult { ok: true, .. })) => Ok(()),
+        Ok(Some(crate::control::ControlResponse::CommandResult { code, message, .. })) => Err((axum::http::StatusCode::CONFLICT, format!("{code}: {message}")).into_response()),
+        Ok(_) => Err((axum::http::StatusCode::BAD_GATEWAY, "unexpected answer from the station").into_response()),
+        Err(crate::control::SendError::NotConnected) => Err((axum::http::StatusCode::NOT_FOUND, "The station is not connected").into_response()),
+        Err(crate::control::SendError::Timeout) => Err((axum::http::StatusCode::GATEWAY_TIMEOUT, "No answer from the station within 5 s").into_response()),
+    }
+}
+
+fn has_capability(state: &crate::state::AppState, id: &str, cap: &str) -> bool {
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).stations().iter().any(|s| s.id == id && s.capabilities.iter().any(|c| c == cap))
+}
+
+/// `POST /api/fleet/maintenance` `{"id", "on", "minutes", "reason"}` (Fleet
+/// Control management): the red maintenance banner on the station's dashboard.
+pub async fn api_maintenance(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<MaintenanceRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_fleet() {
+        return refuse();
+    }
+    if !has_capability(&state, &req.id, MAINTENANCE_CAPABILITY) {
+        return (axum::http::StatusCode::BAD_REQUEST, "This station cannot show maintenance (needs maintenance-v1)").into_response();
+    }
+    let minutes = req.minutes.clamp(1, MAX_MAINTENANCE_MIN);
+    let cmd = crate::control::ControlCommand::SetMaintenance { handle: 0, on: req.on, minutes, by: a.user.clone().unwrap_or_default(), reason: req.reason.trim().chars().take(120).collect() };
+    if let Err(r) = station_answer(crate::control::send_command(&state, &req.id, cmd).await) {
+        return r;
+    }
+    let names = crate::control::station_names(&state);
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).set_maintenance(&req.id, req.on, minutes, &req.reason, a.user.as_deref(), now_ms(), &|k| names.get(k).cloned());
+    state.monitor.emit("fleet_changed", serde_json::json!({"id": req.id}));
+    axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RestartRequest {
+    pub id: String,
+    /// true: reboot the host; false: restart the service.
+    #[serde(default)]
+    pub host: bool,
+    #[serde(default)]
+    pub during_call: bool,
+}
+
+/// `POST /api/fleet/restart` `{"id", "host", "during_call"}` (Fleet Control
+/// management): restart the station's service or reboot its host.
+pub async fn api_restart(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<RestartRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_fleet() {
+        return refuse();
+    }
+    if !has_capability(&state, &req.id, RESTART_CAPABILITY) {
+        return (axum::http::StatusCode::BAD_REQUEST, "This station cannot be restarted from here (needs restart-v1)").into_response();
+    }
+    let cmd = crate::control::ControlCommand::RestartStation { handle: 0, host: req.host, during_call: req.during_call };
+    if let Err(r) = station_answer(crate::control::send_command(&state, &req.id, cmd).await) {
+        return r;
+    }
+    let names = crate::control::station_names(&state);
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).restart_sent(&req.id, req.host, a.user.as_deref(), now_ms(), &|k| names.get(k).cloned());
+    state.monitor.emit("fleet_changed", serde_json::json!({"id": req.id}));
+    axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
 /// Background driver of update runs: every 2 s advance the run and send the
 /// `StartUpdate` commands it asks for. Runs for the whole server lifetime, so
 /// a run goes on with no browser open.
@@ -712,11 +952,15 @@ pub async fn run_updates(state: std::sync::Arc<crate::state::AppState>) {
     let mut every = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         every.tick().await;
+        {
+            let names = crate::control::station_names(&state);
+            state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_stations(now_ms(), &|k| names.get(k).cloned());
+        }
         let starts = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_job(now_ms());
         for s in starts {
             let state = state.clone();
             tokio::spawn(async move {
-                let cmd = crate::control::ControlCommand::StartUpdate { handle: 0, during_call: s.during_call };
+                let cmd = crate::control::ControlCommand::StartUpdate { handle: 0, during_call: s.during_call, source: s.source.clone() };
                 let outcome = match crate::control::send_command(&state, &s.id, cmd).await {
                     Ok(Some(crate::control::ControlResponse::CommandResult { ok: true, .. })) => crate::fleet_update::StartOutcome::Started,
                     Ok(Some(crate::control::ControlResponse::CommandResult { code, message, .. })) => match code.as_str() {
@@ -861,7 +1105,7 @@ mod tests {
         h.capabilities.push(UPDATE_CAPABILITY.into());
         f.hello("bs1", &h, 1, &no_names);
         f.set_check("bs1", check("v1", true));
-        let o = crate::fleet_update::Options { mode: crate::fleet_update::Mode::Rolling, during_call: false, interrupt_min: 10 };
+        let o = crate::fleet_update::Options { mode: crate::fleet_update::Mode::Rolling, during_call: false, interrupt_min: 10, live: None };
         assert!(f.start_job(&["bs1".into()], o.clone(), Some("alice"), 2, &no_names).is_ok());
         assert!(f.start_job(&["bs1".into()], o, Some("alice"), 3, &no_names).is_err());
         let starts = f.tick_job(4);
@@ -874,4 +1118,91 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+
+    #[test]
+    fn live_update_needs_no_check_but_the_live_capability() {
+        let mut f = Fleet::load(None, 0);
+        let mut h = hello(true, "v1");
+        h.capabilities.push(UPDATE_CAPABILITY.into());
+        f.hello("old", &h, 1, &no_names);
+        h.capabilities.push(LIVE_UPDATE_CAPABILITY.into());
+        f.hello("bs1", &h, 1, &no_names);
+        assert!(f.live_capable("bs1") && !f.live_capable("old"));
+        let live = crate::fleet_update::LiveSource { repo: "https://github.com/sebastianmadl/bost-flowstation".into(), branch: "fleet-control".into() };
+        let o = crate::fleet_update::Options { mode: crate::fleet_update::Mode::Rolling, during_call: false, interrupt_min: 10, live: Some(live.clone()) };
+        f.start_job(&["bs1".into(), "old".into()], o, Some("oe4sxm"), 2, &no_names).unwrap();
+        let job = f.job().unwrap();
+        assert_eq!(job.items.len(), 1, "a station without update-live-v1 is left out");
+        assert_eq!(job.items[0].state, crate::fleet_update::ItemState::Pending, "no check needed");
+        let starts = f.tick_job(3);
+        assert_eq!(starts[0].source, Some(live));
+    }
+
+    #[test]
+    fn clear_log_leaves_one_entry_saying_who() {
+        let mut f = Fleet::load(None, 0);
+        f.hello("bs1", &hello(true, "v1"), 1, &no_names);
+        f.hello("bs1", &hello(true, "v2"), 2, &no_names);
+        assert!(f.log().len() >= 2);
+        f.clear_log(Some("admin"), 3);
+        let log = f.log();
+        assert_eq!(log.len(), 1);
+        assert_eq!((log[0].kind.as_str(), log[0].text.as_str(), log[0].user.as_deref()), ("log_clear", "Log cleared by admin", Some("admin")));
+    }
+
+    fn hello_with(caps: &[&str], version: &str) -> Hello {
+        let mut h = hello(true, version);
+        h.capabilities = caps.iter().map(|c| c.to_string()).collect();
+        h
+    }
+
+    #[test]
+    fn maintenance_is_logged_resent_after_a_restart_and_runs_out() {
+        let mut f = Fleet::load(None, 0);
+        f.hello("bs1", &hello_with(&["fleet-v1", MAINTENANCE_CAPABILITY], "v1"), 1, &no_names);
+        assert!(f.set_maintenance("bs1", true, 30, "new carrier", Some("oe4sxm"), 1000, &no_names));
+        assert_eq!(f.log()[0].text, "Basestation 1000001: maintenance on for 30 min (new carrier)");
+        assert_eq!(f.log()[0].user.as_deref(), Some("oe4sxm"));
+        // The station restarts after 10 min: the flag is sent again with the time left.
+        f.set_online("bs1", false, 600_000);
+        f.hello("bs1", &hello_with(&["fleet-v1", MAINTENANCE_CAPABILITY], "v1"), 601_000, &no_names);
+        match f.maintenance_resend("bs1", 601_000) {
+            Some(crate::control::ControlCommand::SetMaintenance { on: true, minutes, by, reason, .. }) => {
+                assert_eq!((minutes, by.as_str(), reason.as_str()), (20, "oe4sxm", "new carrier"));
+            }
+            other => panic!("expected SetMaintenance, got {other:?}"),
+        }
+        assert!(!f.tick_stations(1_000_000, &no_names), "still on");
+        assert!(f.tick_stations(1000 + 30 * 60_000, &no_names));
+        assert_eq!(f.log()[0].text, "Basestation 1000001: maintenance ended (time up)");
+        assert!(f.maintenance_resend("bs1", 1000 + 30 * 60_000).is_none());
+        assert!(!f.set_maintenance("nobody", true, 5, "", None, 1, &no_names));
+    }
+
+    #[test]
+    fn no_resend_to_a_station_without_the_capability() {
+        let mut f = Fleet::load(None, 0);
+        f.hello("bs1", &hello_with(&["fleet-v1", MAINTENANCE_CAPABILITY], "v1"), 1, &no_names);
+        f.set_maintenance("bs1", true, 30, "", None, 2, &no_names);
+        f.hello("bs1", &hello_with(&["fleet-v1"], "v0"), 3, &no_names);
+        assert!(f.maintenance_resend("bs1", 4).is_none());
+    }
+
+    #[test]
+    fn restart_return_is_logged_or_raises_an_alarm() {
+        let mut f = Fleet::load(None, 0);
+        f.hello("bs1", &hello_with(&["fleet-v1", RESTART_CAPABILITY], "v1"), 1, &no_names);
+        f.hello("bs2", &hello_with(&["fleet-v1", RESTART_CAPABILITY], "v1"), 1, &no_names);
+        f.restart_sent("bs1", true, Some("admin"), 10_000, &no_names);
+        f.restart_sent("bs2", false, None, 10_000, &no_names);
+        assert_eq!(f.log()[0].text, "Basestation 1000001: service restart");
+        f.set_online("bs1", false, 15_000);
+        f.hello("bs1", &hello_with(&["fleet-v1", RESTART_CAPABILITY], "v1"), 100_000, &no_names);
+        assert_eq!(f.log()[0].text, "Basestation 1000001: back after the reboot (90 s)");
+        assert!(f.get("bs1").unwrap().restart.is_none());
+        assert!(f.tick_stations(10_000 + RESTART_RETURN_MS + 1, &no_names));
+        assert_eq!(f.log()[0].text, "ALARM Basestation 1000001: not back 10 min after the service restart");
+        assert_eq!(f.log()[0].kind, "restart_alarm");
+        assert!(!f.tick_stations(10_000 + RESTART_RETURN_MS + 2, &no_names), "alarm only once");
+    }
 }
