@@ -175,6 +175,15 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/config/rollback", axum::routing::post(crate::fleet_config::api_rollback))
         .route("/api/fleet/config/raw_preview", axum::routing::post(crate::fleet_config::api_raw_preview))
         .route("/api/fleet/edit", axum::routing::post(crate::fleet_config::api_edit))
+        .route("/api/fleet/config/settings", axum::routing::post(crate::fleet_bulk::api_config_settings))
+        .route("/api/fleet/templates", get(crate::fleet_bulk::api_templates))
+        .route("/api/fleet/templates/save", axum::routing::post(crate::fleet_bulk::api_template_save))
+        .route("/api/fleet/templates/delete", axum::routing::post(crate::fleet_bulk::api_template_delete))
+        .route("/api/fleet/bulk/preview", axum::routing::post(crate::fleet_bulk::api_bulk_preview))
+        .route("/api/fleet/bulk/start", axum::routing::post(crate::fleet_bulk::api_bulk_start))
+        .route("/api/fleet/bulk/cancel", axum::routing::post(crate::fleet_bulk::api_bulk_cancel))
+        .route("/api/fleet/neighbours", get(crate::fleet_bulk::api_neighbours))
+        .route("/api/fleet/neighbours/check", get(crate::fleet_bulk::api_neighbour_check))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -301,10 +310,11 @@ fn need(path: &str) -> Need {
         "/sip-config" | "/api/sip/config" => &["sipcfg"],
         "/sms-center" | "/api/sms-center" => &["sms"],
         "/ha" => &["ha"],
-        "/api/fleet" => &["fleet"],
+        "/api/fleet" | "/api/fleet/templates" | "/api/fleet/neighbours" | "/api/fleet/neighbours/check" => &["fleet"],
         "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" | "/api/fleet/maintenance" | "/api/fleet/restart"
         | "/api/fleet/config" | "/api/fleet/config/apply" | "/api/fleet/config/discard" | "/api/fleet/config/import"
-        | "/api/fleet/config/rollback" | "/api/fleet/config/raw_preview" | "/api/fleet/edit" => &["fleet_manage"],
+        | "/api/fleet/config/rollback" | "/api/fleet/config/raw_preview" | "/api/fleet/edit" | "/api/fleet/templates/save"
+        | "/api/fleet/templates/delete" | "/api/fleet/bulk/preview" | "/api/fleet/bulk/start" | "/api/fleet/bulk/cancel" => &["fleet_manage"],
         _ => return Need::Admin,
     })
 }

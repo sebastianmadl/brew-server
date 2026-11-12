@@ -159,6 +159,7 @@ a.tile{color:inherit;cursor:pointer}
 @media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
 .tw{overflow-x:auto;position:relative}
+.tw.fllog{max-height:452px;overflow-y:auto;overscroll-behavior:contain}.tw.fllog th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
 .empty .tot{margin-top:6px;font-size:12.5px}.empty .tot b{font:600 15px var(--mono,ui-monospace,monospace);color:var(--text2)}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
@@ -481,7 +482,7 @@ const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 // Pages this login sees (Server settings -> Users): an admin all of them, any other login the ones
 // ticked for it, someone not logged in the Viewer pages. The server refuses the rest anyway.
 // The station config page (Fleet Control -> Edit) goes with the Fleet Control page.
-const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'?'fleet':p)));
+const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'||p==='fleettpl'?'fleet':p)));
 const canAny=(...ps)=>ps.some(can);
 // A read route this login may ask (whoami 'allowed'); asking others would only be refused.
 const mayGet=u=>D.who.admin||(D.who.allowed||[]).includes(u.split('?')[0]);
@@ -580,7 +581,7 @@ function show(p){
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
   if(UI.navKey!==navKey())buildNav();
   UI.page=p;document.body.classList.remove('sbopen');
-  const navP=p==='fleetcfg'?'fleet':p;
+  const navP=p==='fleetcfg'||p==='fleettpl'?'fleet':p;
   document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===navP));
   document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===navP));
   $('title').textContent=PG[p][1];
@@ -1035,7 +1036,7 @@ R.control=()=>{
 const v=id=>($(id)||{}).value||'';
 
 /* ---------- Fleet Control (docs/Fleet-Control.md) ---------- */
-const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i'],log_clear:['Cleared','i'],maintenance:['Maintenance','w'],restart:['Restart','b'],restart_alarm:['Alarm','d'],config:['Config','i'],config_alarm:['Alarm','d']};
+const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i'],log_clear:['Cleared','i'],maintenance:['Maintenance','w'],restart:['Restart','b'],restart_alarm:['Alarm','d'],config:['Config','i'],config_alarm:['Alarm','d'],template:['Template','i']};
 const FLEET_STAGE={download:'Download',build:'Build',install:'Installing',restart:'Restarting',up_to_date:'Up to date',failed:'Failed'};
 if(!UI.fsel)UI.fsel=new Set();
 const fleetJobOn=f=>!!(f&&f.job&&!f.job.finished_ms);
@@ -1083,13 +1084,14 @@ R.fleet=()=>{
   const shown=log.filter(e=>!q||(e.label+' '+e.station+' '+e.text+' '+(e.user||'')).toLowerCase().includes(q));
   const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
      <button class="btn pri" ${canUpd&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${canUpd?'':'Check for updates first: only stations with a newer version can be updated (or that can take a live update)'}">${sel.length?'Update ('+Math.max(target.length,liveT.length)+')':'Update all'}</button>
-     ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}`:'';
+     ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}
+     <button class="btn" ${st.some(fleetCfgCap)&&!bulkOn(f)?'':'disabled'} onclick="fleetChangeCfg()" title="Apply a template or settings to every station (ticked ones only, if any)">${sel.length?'Change config ('+st.filter(x=>UI.fsel.has(x.id)&&fleetCfgCap(x)).length+')':'Change config…'}</button>`:'';
   const jobCard=job&&!fleetJobHidden(job,live)?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      ${(()=>{const p=fleetJobPercent(job);const bad=n('failed')>0;return `<div class="svc" style="display:flex;align-items:center;gap:10px" title="Whole run: every station counts the same; the build counts up to 90 %, the restart up to 95 %"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${bad?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>`;})()}
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
-  return jobCard+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
+  return jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
    ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
    ${msgDiv('fl_top','padding:0 18px')}
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
@@ -1100,8 +1102,9 @@ R.fleet=()=>{
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
      ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
+  ${fleetTplCard(f)}${fleetNbCard(f)}
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
-   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm'||e.kind==='restart_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
+   ${shown.length?`<div class="tw fllog"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm'||e.kind==='restart_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
 };
 // The run card goes away 30 s after a clean end (the change log keeps the story). It stays while
 // the run goes on, and after a run with a failed or skipped station, or one that was cancelled.
@@ -1191,7 +1194,7 @@ function fcPut(o,p,v){const ks=p.split('.');let x=o;for(const k of ks.slice(0,-1
 // Open the page for one station.
 function fleetEdit(id){
   UI.fc={id,data:null,orig:null,v:null,nb:{cell:0,edit:null,pick:false},add:false,conn:null};
-  show('fleetcfg');fcLoad(true);
+  show('fleetcfg');fcLoad(true);fcSugLoad();
   getJ('/api/connections').then(c=>{if(UI.fc&&UI.fc.id===id){UI.fc.conn=c;if(UI.page==='fleetcfg')render(true);}}).catch(()=>{});
 }
 async function fcLoad(fresh){
@@ -1214,7 +1217,7 @@ function fcHeartbeat(on){
   beat();UI.fcBeat=setInterval(()=>{if(UI.page==='fleetcfg'&&UI.fc===fc)beat();},60000);
 }
 // Leaving the page (other page, closed tab) ends the edit session.
-{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';return show0(p);};}
+{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';return show0(p);};}
 window.addEventListener('pagehide',()=>{if(UI.page==='fleetcfg'&&UI.fc)fcHeartbeat(false);});
 // Follow a running change every 3 s.
 setInterval(()=>{const fc=UI.fc;if(UI.page==='fleetcfg'&&fc&&fc.data&&(fc.data.cfg.apply||(!fc.data.cfg.copy&&fc.data.online))&&!$('scrim').classList.contains('on'))fcLoad(false);},3000);
@@ -1334,6 +1337,7 @@ R.fleetcfg=()=>{
   const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">${esc(d.label)} <span class="mut m" style="font-size:12px;font-weight:500">${esc(d.id)}</span></h2>
     ${d.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(d.last_seen_ms)}</span>`}${maint}${sync}
     <span class="sp"></span>${locked?'':`<span class="mut" id="fc-count" style="font-size:12px">${n?n+(n===1?' change':' changes'):'no changes'}</span>
+    ${d.template_sections&&D.fleet&&D.fleet.can_manage?`<button class="btn" onclick="tplOpen(null,UI.fc.data.template_sections,UI.fc.data.label)" title="A template with this station's shared settings (no carrier, LA, cells, neighbours, logins)">Save as template</button>`:''}
     <button class="btn" id="fc-discard" ${n?'':'disabled'} onclick="fcReset()">Discard</button>
     <button class="btn pri" id="fc-apply" ${n?'':'disabled'} onclick="fcApplyDlg()">${d.online?'Apply to station':'Save as pending'}</button>`}</div>
     <div class="note">${ic('info')}<div>${!d.capable?'This station cannot read or change its config from here: it needs FlowStation with Fleet Control config (<code>config-v1</code>).':d.online
@@ -1399,7 +1403,7 @@ R.fleetcfg=()=>{
   const onServer=nb=>scells.find(x=>x.carrier===nb.main_carrier_number&&(nb.main_carrier_number_extension==null||x.carrier_ext==null||x.carrier_ext===nb.main_carrier_number_extension)&&(nb.location_area==null||x.location_area===nb.location_area)&&(nb.mcc==null||x.mcc===nb.mcc));
   const svcTxt=s=>FC_SVC.filter(([k])=>s&&s[k]).map(([,l])=>l).join(', ')||'—';
   const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td><td class="m">${nb.mcc!=null||nb.mnc!=null?`${nb.mcc??v.mcc}/${nb.mnc??v.mnc}`:'<span class="mut">same</span>'}</td>
-    <td>${sv?`<span class="chip a">${esc(sv.name)}</span>`:'<span class="chip w">not on the server</span>'}</td><td>${esc(FC_TYPES[nb.cell_reselection_types_supported]||'—')}</td><td class="mut" style="font-size:12px;max-width:220px">${esc(svcTxt(nb.bs_service_details))}</td>
+    <td>${(()=>{const mk=fcSugMark(cell,nb);return mk?(mk.kind==='la'?`<span class="chip w" style="white-space:normal">${esc(mk.text)}</span> <button class="btn" ${dis} onclick="fcNbFixLa(${i},${mk.location_area})">Use LA ${mk.location_area}</button>`:`<span class="chip d" style="white-space:normal" title="${esc(mk.text)}">outdated · not in the cell directory</span>`):sv?`<span class="chip a">${esc(sv.name)}</span>`:'<span class="chip w">not on the server</span>';})()}</td><td>${esc(FC_TYPES[nb.cell_reselection_types_supported]||'—')}</td><td class="mut" style="font-size:12px;max-width:220px">${esc(svcTxt(nb.bs_service_details))}</td>
     <td style="text-align:right;white-space:nowrap"><button class="btn" ${dis} onclick="fcNbEdit(${i})">Edit</button> <button class="btn danger" ${dis} onclick="fcNbDel(${i})">Remove</button></td></tr>`;}).join('')
     +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td></td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
   const nb=fcCard('Neighbour cells',`<span class="sp"></span><select class="f" style="min-width:110px" onchange="UI.fc.nb.cell=+this.value;UI.fc.nb.edit=null;UI.fc.nb.pick=false;render(true)">${v.cells.map((x,i)=>`<option value="${i}" ${i===ci?'selected':''}>Cell ${x.id}</option>`).join('')}</select>
@@ -1407,7 +1411,7 @@ R.fleetcfg=()=>{
     fcHelp('What the cell broadcasts in D-NWRK-BROADCAST (at most 7, TS 100 392-2 clause 18.5.17). The station\'s other cells are added automatically.')+
     (cell.primary?'':`<div style="display:flex;align-items:center;gap:10px;padding:10px 18px 4px;font-size:13px"><button class="tog" role="switch" aria-checked="${!!cell.own_list}" ${dis} onclick="fcNbOwn()"></button> Own neighbour list for this cell</div>`)+
     `<div class="tw"><table><thead><tr><th>ID</th><th>Carrier</th><th>LA</th><th>MCC/MNC</th><th>On the server</th><th>Reselection</th><th>Services</th><th></th></tr></thead><tbody>${nbRows||'<tr><td colspan="8" class="mut">No neighbours.</td></tr>'}</tbody></table></div>
-    ${fc.nb.pick?fcNbPicker(scells,list,d):''}${fc.nb.edit?fcNbEditor():''}`);
+    ${fc.nb.pick?fcNbPicker(scells,list,d):''}${fc.nb.edit?fcNbEditor():''}${fcSugBlock(cell,list,dis)}`);
   // Telemetry and control channel.
   const link=(k,title,help)=>{const l=v[k];const ro=false;
     if(!l)return fcCard(title,`<span class="chip i">not set up</span><span class="sp"></span><button class="btn" ${dis||ro?'disabled':''} onclick="fcLinkNew('${k}')">Set up</button>`,fcHelp(help)+'<div style="height:12px"></div>');
@@ -1655,6 +1659,167 @@ function connGroups(list){const m=new Map();
     g.connected_at_ms=Math.min(g.connected_at_ms,b.connected_at_ms);g.registered_issis+=b.registered_issis;
     for(const x of b.cells||[])if(!g.cells.some(y=>y.name===x.name))g.cells.push(x);}
   return [...m.values()];}
+/* ---------- Fleet Control: templates, bulk changes, neighbour suggestions (phase 6, docs/Fleet-Control.md 11) ---------- */
+// A template holds settings several stations share; it is applied once (nothing stays bound to it).
+// A bulk change applies a template, settings for one run or the missing reciprocal neighbours to
+// many stations, parallel or rolling like an update run.
+PG.fleettpl=['fleettpl','Fleet Control','fleet','Infrastructure'];
+const TPL_SEC=[['brew','Brew server'],['multi_network','Networks (Multi Network)'],['reselect','Cell reselection'],['rxlev_access_min_dbm','Min. access level'],['migration','Migration'],['presence_check_secs','Presence check'],['home_mode_display','Home mode display'],['access','ISSI whitelist'],['telemetry','Telemetry server'],['ota','Update source']];
+const tplSecName=k=>(TPL_SEC.find(x=>x[0]===k)||[k,k])[1];
+const TPL_DEF={brew:{host:'',port:443,tls:true},multi_network:{enabled:false,networks:[]},reselect:{fast_threshold_db:10,slow_threshold_db:20,fast_hysteresis_db:6,slow_hysteresis_db:10},rxlev_access_min_dbm:null,migration:false,presence_check_secs:30,
+  home_mode_display:null,access:{issi_whitelist:[],whitelist_mode:'auto'},telemetry:{enabled:true,host:'',port:443,use_tls:true},ota:{channel:'installed',repo:'',branch:''}};
+const BULK_STATE={pending:['Queued','i'],sending:['Sending…','b'],waiting_call:['Call in progress · waiting','w'],applying:['Restarting · confirming','b'],done:['Changed','a'],saved:['Pending (offline)','w'],failed:['ALARM','d'],skipped:['Skipped','w']};
+const bulkOn=f=>!!(f&&f.bulk&&!f.bulk.finished_ms);
+const fleetCfgCap=x=>(x.capabilities||[]).includes('config-v1');
+// Open the template editor: `t` a saved template, or `from` sections of a station (Save as template), or a run's settings (`oneoff`: station ids).
+function tplOpen(t,from,fromLabel,oneoff){
+  const v=fcClone(TPL_DEF);const src=t?t.sections:(from||{});
+  for(const k in src)v[k]=fcClone(src[k]);
+  if(v.ota){v.ota.repo=v.ota.repo||'';v.ota.branch=v.ota.branch||'';}
+  if(v.multi_network&&!Array.isArray(v.multi_network.networks))v.multi_network.networks=[];
+  const on=new Set(Object.keys(src).filter(k=>TPL_SEC.some(x=>x[0]===k)));
+  UI.tp={id:t?t.id:null,name:t?t.name:(fromLabel?'From '+fromLabel:''),note:t?t.note||'':'',on,v,from:fromLabel||null,oneoff:oneoff||null,back:UI.page==='fleetcfg'?'fleetcfg':'fleet'};
+  show('fleettpl');
+}
+function tpGet(p){return fcGet(UI.tp.v,p);}
+function tpIn(el){const p=el.dataset.p,t=el.dataset.t||'str';let val;
+  if(t==='bool'){val=el.getAttribute('aria-checked')!=='true';el.setAttribute('aria-checked',val);}
+  else if(t==='int'||t==='intn'){const s=el.value.trim();val=s===''?null:parseInt(s,10);if(val!=null&&!isFinite(val))return;}
+  else val=el.value;
+  fcPut(UI.tp.v,p,val);if(el.dataset.redraw)render(true);}
+function tpF(p,t,extra,w){return `<input class="f" data-p="${p}" data-t="${t||'str'}" value="${esc(tpGet(p)??'')}" oninput="tpIn(this)" style="width:${w||'100%'}" ${extra||''}>`;}
+function tpSel(p,opts,t,extra){const v=tpGet(p);return `<select class="f" data-p="${p}" data-t="${t||'str'}" onchange="tpIn(this)" style="width:100%" ${extra||''}>${opts.map(([k,l])=>`<option value="${esc(k??'')}" ${String(k??'')===String(v??'')?'selected':''}>${esc(l)}</option>`).join('')}</select>`;}
+function tpTog(p,extra){return `<button class="tog" role="switch" aria-checked="${!!tpGet(p)}" data-p="${p}" data-t="bool" onclick="tpIn(this)" ${extra||''}></button>`;}
+function tpOn(k,on){if(on)UI.tp.on.add(k);else UI.tp.on.delete(k);render(true);}
+R.fleettpl=()=>{
+  const tp=UI.tp;if(!tp)return loading;const f=D.fleet||{};const m=f.can_manage;const v=tp.v;
+  const back=`<button class="btn ic" title="Back" aria-label="Back" onclick="show('${tp.back==='fleetcfg'&&UI.fc?'fleetcfg':'fleet'}')">‹</button>`;
+  const n=tp.on.size;
+  const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">${tp.oneoff?'Settings for '+tp.oneoff.length+' station'+(tp.oneoff.length===1?'':'s'):tp.id?'Template':'New template'}</h2>${tp.from?`<span class="chip i">from ${esc(tp.from)}</span>`:''}
+    <span class="sp"></span>${m?`<span class="mut" style="font-size:12px">${n} section${n===1?'':'s'}</span>${tp.oneoff?`<button class="btn pri" ${n?'':'disabled'} onclick="tpNext()">Next: preview and start</button>`:`<button class="btn pri" ${n?'':'disabled'} onclick="tpSave()">${tp.id?'Save template':'Create template'}</button>`}`:''}</div>
+    ${tp.oneoff?'':`<div style="padding:12px 18px;display:grid;gap:10px;grid-template-columns:minmax(0,1fr) minmax(0,2fr)" class="tpgrid"><div><label class="l" for="tp-name">Name</label><input class="f" id="tp-name" maxlength="60" value="${esc(tp.name)}" oninput="UI.tp.name=this.value" style="width:100%" ${m?'':'disabled'} placeholder="e.g. Standard Austria"></div>
+      <div><label class="l" for="tp-note">Note</label><input class="f" id="tp-note" maxlength="300" value="${esc(tp.note)}" oninput="UI.tp.note=this.value" style="width:100%" ${m?'':'disabled'} placeholder="What it is for (optional)"></div></div>`}
+    <div class="note">${ic('info')}<div>${tp.oneoff?'Switch on the sections to change; only those are compared with each station and sent where they differ.':'Only the switched-on sections are part of the template. Applied once to the chosen stations: each station gets these values, nothing stays bound to the template.'} Never part of it: carrier, colour code, LA, cells, neighbours, logins and passwords (each station keeps its own).</div></div>${msgDiv('tp_top','padding:0 18px 12px')}</div>`;
+  const card=(k,body,help)=>{const on=tp.on.has(k);return `<div class="card${on?'':' tpoff'}"><div class="ch"><h2>${esc(tplSecName(k))}</h2><span class="sp"></span><span class="mut" style="font-size:12.5px">${on?(tp.oneoff?'Change':'In template'):'Not included'}</span><button class="tog" role="switch" aria-checked="${on}" aria-label="Include ${esc(tplSecName(k))}" ${m?'':'disabled'} onclick="tpOn('${k}',${!on})"></button></div>${on?`<fieldset class="fcfs" ${m?'':'disabled'}>${help?fcHelp(help):''}<div style="padding:12px 18px">${body}</div></fieldset>`:''}</div>`;};
+  const rs=fcDb(0,30,2);const rx=[[null,'default (-110)']].concat(fcDb(-125,-50,5));
+  const nets=(v.multi_network.networks||[]);
+  const netRows=nets.map((x,i)=>`<tr><td>${tpF(`multi_network.networks.${i}.name`,'str','spellcheck="false" placeholder="name"')}</td><td style="width:90px">${tpF(`multi_network.networks.${i}.mcc`,'int','inputmode="numeric"')}</td><td style="width:100px">${tpF(`multi_network.networks.${i}.mnc`,'int','inputmode="numeric"')}</td>
+    <td style="width:150px">${tpSel(`multi_network.networks.${i}.mode`,[['local','local (no Brew)'],['via','via another network'],['core','own Brew server']],'str','data-redraw="1"')}</td>
+    <td>${x.mode==='via'?tpF(`multi_network.networks.${i}.via`,'str','placeholder="network name, e.g. home"'):x.mode==='core'?`<div style="display:flex;gap:6px">${tpF(`multi_network.networks.${i}.host`,'str','placeholder="Brew host"')}${tpF(`multi_network.networks.${i}.port`,'int','inputmode="numeric" placeholder="443"','80px')}</div>`:'<span class="mut">—</span>'}</td>
+    <td style="text-align:right"><button class="btn danger" onclick="UI.tp.v.multi_network.networks.splice(${i},1);render(true)">Remove</button></td></tr>`).join('');
+  const cards=[
+    card('brew',fcGrid(fcFld('Brew server (host)',tpF('brew.host','str','autocomplete="off" spellcheck="false"')),fcFld('Port',tpF('brew.port','int','inputmode="numeric"')),fcFld('TLS',`<div style="padding-top:3px">${tpTog('brew.tls')}</div>`)),'For stations with the classic Brew link; each keeps its Brew login and password. Stations with several networks set their Brew servers per network.'),
+    card('multi_network',`<label style="display:flex;gap:10px;align-items:center;font-size:13px">${tpTog('multi_network.enabled','data-redraw="1"')} Multi Network on</label>${v.multi_network.enabled?`<div class="tw" style="margin-top:10px"><table><thead><tr><th>Name</th><th>MCC</th><th>MNC</th><th>Reached</th><th>Via / server</th><th></th></tr></thead><tbody>${netRows||'<tr><td colspan="6" class="mut">No networks: only the switch is set.</td></tr>'}</tbody></table></div><button class="btn" style="margin-top:10px" onclick="UI.tp.v.multi_network.networks.push({name:'',mcc:null,mnc:null,mode:'via',via:'home'});render(true)">${ic('plus')}Add network</button>`:''}`,'Networks are added or changed by name; networks a station has besides these stay. A network with its own Brew server only changes on stations that already have it (its login stays the station\'s).'),
+    card('reselect',fcGrid(...FC_RESEL.map(([k,l])=>fcFld(l,tpSel('reselect.'+k,rs,'int')))),'Cell reselection thresholds and hysteresis (TS 100 392-2 clause 18.5.4), for all cells of a station.'),
+    card('rxlev_access_min_dbm',fcGrid(fcFld('RXLEV_ACCESS_MIN (dBm)',tpSel('rxlev_access_min_dbm',rx,'intn'))),'Weakest signal a radio may use the cell with (clause 18.5.4; link failure below it).'),
+    card('migration',`<label style="display:flex;gap:10px;align-items:center;font-size:13px">${tpTog('migration')} Migration (radios of other networks may register)</label>`),
+    card('presence_check_secs',fcGrid(fcFld('Presence check after silence (s, 0 = off)',tpF('presence_check_secs','int','inputmode="numeric"')))),
+    card('home_mode_display',`<label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" aria-checked="${v.home_mode_display!=null}" onclick="UI.tp.v.home_mode_display=UI.tp.v.home_mode_display?null:{text:'',source_issi:16777215,interval_multiframes:96};render(true)"></button> Show a text on the radios</label>${v.home_mode_display?`<div style="margin-top:10px">${fcGrid(fcFld('Text',tpF('home_mode_display.text','str','maxlength="30"')),fcFld('Source ISSI',tpF('home_mode_display.source_issi','int','inputmode="numeric"')),fcFld('Every (multiframes)',tpF('home_mode_display.interval_multiframes','int','inputmode="numeric"')))}</div>`:''}`),
+    card('access',fcGrid(fcFld('ISSIs (comma or space separated)',`<input class="f" value="${esc((v.access.issi_whitelist||[]).join(', '))}" oninput="UI.tp.v.access.issi_whitelist=this.value.split(/[\\s,;]+/).filter(Boolean).map(x=>parseInt(x,10)).filter(x=>isFinite(x))" style="width:100%" inputmode="numeric">`),fcFld('Mode',tpSel('access.whitelist_mode',[['auto','auto (empty = everyone)'],['open','open (everyone)'],['enforce','enforce (only the list)']]))),'Which radios may register. Replaces the station\'s list.'),
+    card('telemetry',fcGrid(fcFld('Connect',`<div style="padding-top:3px">${tpTog('telemetry.enabled')}</div>`),fcFld('Server (host)',tpF('telemetry.host','str','autocomplete="off" spellcheck="false"')),fcFld('Port',tpF('telemetry.port','int','inputmode="numeric"')),fcFld('TLS',`<div style="padding-top:3px">${tpTog('telemetry.use_tls')}</div>`)),'Only stations that have telemetry set up; each keeps its login, site name and position.'),
+    card('ota',fcGrid(fcFld('Channel',tpSel('ota.channel',[['installed','installed (as installed)'],['stable','stable'],['beta','beta'],['custom','custom repo / branch']],'str','data-redraw="1"')),...(v.ota.channel==='custom'?[fcFld('Repository',tpF('ota.repo','str','spellcheck="false" placeholder="https://github.com/…"')),fcFld('Branch',tpF('ota.branch','str','spellcheck="false"'))]:[]))+(f.update_source?`<div style="margin-top:10px"><button class="btn" onclick="Object.assign(UI.tp.v.ota,{channel:'custom',repo:D.fleet.update_source.repo,branch:D.fleet.update_source.branch});render(true)">Use the server's Updates repo</button></div>`:'')),
+  ];
+  return `<style>.tpoff .ch{opacity:.75}@media (max-width:640px){.tpgrid{grid-template-columns:1fr!important}}</style>`+head+cards.join('');
+};
+function tpSections(){const tp=UI.tp,s={};for(const [k] of TPL_SEC)if(tp.on.has(k))s[k]=fcClone(tp.v[k]);
+  if(s.ota&&s.ota.channel!=='custom'){s.ota.repo=null;s.ota.branch=null;}
+  if(s.multi_network)s.multi_network.networks=(s.multi_network.networks||[]).filter(n=>n.name);
+  return s;}
+async function tpSave(){const tp=UI.tp;
+  try{const r=await postJ('/api/fleet/templates/save',{id:tp.id,name:tp.name,note:tp.note,sections:tpSections()});tp.id=r.id;D.fleet=await getJ('/api/fleet');setMsg('fl_top','ok',`Template "${tp.name.trim()}" saved`);show('fleet');}catch(e){setMsg('tp_top','err',e.message);render(true);}}
+function tpNext(){const tp=UI.tp;const ids=tp.oneoff;show('fleet');fleetBulkDlg({sections:tpSections()},ids);}
+async function tplDelete(id){const t=(D.fleet.templates||[]).find(x=>x.id===id);if(!t||!confirm(`Delete the template "${t.name}"? Stations it was applied to keep their settings.`))return;
+  try{await postJ('/api/fleet/templates/delete',{id});fleetReload();}catch(e){alert(e.message);}}
+// The templates card on the Fleet Control page.
+function fleetTplCard(f){const m=f.can_manage;const ts=f.templates||[];
+  const rows=ts.map(t=>`<tr><td><b>${esc(t.name)}</b>${t.note?`<div class="mut" style="font-size:12px">${esc(t.note)}</div>`:''}</td><td><div style="display:flex;flex-wrap:wrap;gap:4px">${TPL_SEC.filter(([k])=>k in t.sections).map(([k,l])=>`<span class="chip">${esc(l)}</span>`).join('')}</div></td><td class="mut hide-s" style="font-size:12px;white-space:nowrap">${esc(tmd(t.updated_ms))}${t.by?' · '+esc(t.by):''}</td>
+    <td style="text-align:right"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:nowrap">${m?`<button class="btn pri" onclick="fleetBulkDlg({template:${t.id}})">Apply…</button><button class="btn" onclick="tplOpen((D.fleet.templates||[]).find(x=>x.id===${t.id}))">Edit</button><button class="btn danger" onclick="tplDelete(${t.id})">${ic('trash')}</button>`:`<button class="btn" onclick="tplOpen((D.fleet.templates||[]).find(x=>x.id===${t.id}))">View</button>`}</div></td></tr>`).join('');
+  return `<div class="card"><div class="ch"><h2>Templates</h2><span class="cnt">${ts.length}</span>${helpBtn('fltpl')}<span class="sp"></span>${m?`<button class="btn" onclick="tplOpen(null)">${ic('plus')}New template</button>`:''}</div>
+   ${helpNote('fltpl','Settings several stations share: Brew server, networks, cell reselection, access level, migration, presence check, Home mode display, ISSI whitelist, telemetry server, update source. Never carrier, colour code, LA, cells, neighbours, logins or passwords. <b>Apply…</b> changes the chosen stations once (parallel or rolling, each with its own rollback window); nothing stays bound to the template. A template can also be made from a station: its edit page → <b>Save as template</b>.')}
+   ${ts.length?`<div class="tw"><table><thead><tr><th>Name</th><th>Sections</th><th class="hide-s">Changed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No templates yet.${m?' <b>New template</b> or, on a station\'s edit page, <b>Save as template</b>.':''}</div>`}</div>`;}
+// The bulk run card (like the update run card).
+function fleetBulkCard(f){const r=f.bulk;if(!r)return '';const live=bulkOn(f);
+  if(r.finished_ms&&UI.nbcRun!==r.id+':'+r.finished_ms){const first=UI.nbcRun===undefined;UI.nbcRun=r.id+':'+r.finished_ms;if(!first&&UI.nbc)setTimeout(fleetNbLoad,0);}
+  if(!live&&r.finished_ms&&!r.cancelled&&!r.items.some(i=>['failed','skipped'].includes(i.state.state))&&Date.now()-r.finished_ms>60000)return '';
+  const n=k=>r.items.filter(i=>i.state.state===k).length;const w=r.what;
+  const what=w.kind==='reciprocal'?'Reciprocal neighbours':w.name?`Template "${esc(w.name)}"`:'Settings for this run';
+  const fin=['done','saved','failed','skipped'];const p=r.items.length?Math.round(100*r.items.reduce((a,i)=>a+(fin.includes(i.state.state)?1:i.state.state==='applying'?0.6:i.state.state==='sending'?0.2:0),0)/r.items.length):0;
+  return `<div class="card"><div class="ch"><h2>Bulk config change</h2>${live?'<span class="chip b">running</span>':r.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(r.started_ms))}${r.user?' · '+esc(r.user):''}</span>${live&&f.can_manage?'<button class="btn danger" onclick="fleetBulkCancel()">Cancel</button>':''}</div>
+   <div class="svc" style="font-size:13px"><b>${what}</b> · ${r.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'} · ${r.during_call?'change during call':'calls interrupted after '+r.interrupt_min+' min'} · ${n('done')} changed, ${n('saved')} pending (offline), ${n('failed')} failed, ${n('skipped')} skipped${live?', '+r.items.filter(i=>!fin.includes(i.state.state)).length+' to go':''}</div>
+   <div class="svc" style="display:flex;align-items:center;gap:10px"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${n('failed')?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>
+   <div class="tw"><table><thead><tr><th>#</th><th>Station</th><th>State</th><th>Changes</th></tr></thead><tbody>${r.items.map((i,k)=>{const s=BULK_STATE[i.state.state]||[i.state.state,'i'];const why=i.state.reason;
+     return `<tr${i.state.state==='failed'?' style="color:var(--danger)"':''}><td class="m">${k+1}</td><td><b>${esc(i.label)}</b></td><td><span class="chip ${s[1]}" style="white-space:normal">${s[0]}${why?' · '+esc(why):''}</span></td><td style="font-size:12px">${(i.summary||[]).slice(0,6).map(l=>`<div>${esc(l)}</div>`).join('')}${(i.summary||[]).length>6?`<div class="mut">… ${i.summary.length-6} more</div>`:''}${(i.notes||[]).map(l=>`<div class="mut">${esc(l)}</div>`).join('')}</td></tr>`;}).join('')}</tbody></table></div></div>`;}
+function fleetChangeCfg(){const f=D.fleet;const st=(f.stations||[]).filter(fleetCfgCap);const ids=UI.fsel.size?[...UI.fsel].filter(id=>st.some(x=>x.id===id)):st.map(x=>x.id);
+  if((f.templates||[]).length)fleetBulkDlg({template:f.templates[0].id},ids);else tplOpen(null,null,null,ids);}
+async function fleetBulkCancel(){if(!confirm('Cancel the bulk config change? No further station starts; a station that is restarting finishes (with its rollback window).'))return;
+  try{await postJ('/api/fleet/bulk/cancel',{});fleetReload();}catch(e){alert(e.message);}}
+// Bulk dialog: what (template, settings, reciprocal neighbours), preview per station, parallel / rolling, calls.
+function fleetBulkDlg(src,ids){
+  const st=(D.fleet.stations||[]).filter(fleetCfgCap);
+  const list=ids||(UI.fsel.size?[...UI.fsel].filter(id=>st.some(x=>x.id===id)):st.map(x=>x.id));
+  UI.bk={src,ids:list,preview:null,err:null,mode:'rolling',call:false,int:'10'};fleetBulkDraw();fleetBulkPreview();$('scrim').classList.add('on');}
+function fleetBulkKeep(){const b=UI.bk;if(!b||!$('bk-int'))return;const m=document.querySelector('input[name=bk-mode]:checked');if(m)b.mode=m.value;b.call=$('bk-call').getAttribute('aria-checked')==='true';b.int=v('bk-int');}
+function fleetBulkSrc(val){const b=UI.bk;fleetBulkKeep();b.src=val==='reciprocal'?{reciprocal:true}:val==='sections'?b.src0:{template:+val};b.preview=null;fleetBulkDraw();fleetBulkPreview();}
+async function fleetBulkPreview(){const b=UI.bk;if(!b)return;b.err=null;
+  try{const r=await postJ('/api/fleet/bulk/preview',Object.assign({ids:b.ids},b.src));if(UI.bk!==b)return;b.preview=r.stations;}catch(e){b.err=e.message;}
+  if(UI.bk===b&&$('scrim').classList.contains('on')){fleetBulkKeep();fleetBulkDraw();}}
+function fleetBulkDraw(){const b=UI.bk;const f=D.fleet;const ts=f.templates||[];
+  if(b.src.sections)b.src0=b.src;
+  const cur=b.src.reciprocal?'reciprocal':b.src.sections?'sections':String(b.src.template);
+  const opts=ts.map(t=>[String(t.id),'Template: '+t.name]).concat(b.src0?[['sections','Settings for this run']]:[]).concat([['reciprocal','Add missing reciprocal neighbours']]);
+  const pv=b.preview;const ok=pv?pv.filter(x=>x.ok):[];const skip=pv?pv.filter(x=>!x.ok):[];
+  const radio=(val,label,sub)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="bk-mode" value="${val}" ${b.mode===val?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
+  const rows=pv?pv.map(x=>`<div style="padding:8px 0;border-top:1px solid var(--sep)"><div style="display:flex;gap:8px;align-items:center"><b style="font-size:13px">${esc(x.label)}</b>${x.online?'<span class="st" style="font-size:12px"><i></i>Online</span>':'<span class="st d" style="font-size:12px"><i></i>Offline</span>'}<span class="sp"></span>${x.ok?(x.online?`<span class="chip b">${x.summary.length} change${x.summary.length===1?'':'s'}</span>`:'<span class="chip w">kept as pending</span>'):`<span class="chip w" style="white-space:normal">Skipped · ${esc(x.reason)}</span>`}</div>
+     ${x.ok?`<div style="font-size:12px;margin-top:4px">${x.summary.map(l=>`<div>${esc(l)}</div>`).join('')}${(x.notes||[]).map(l=>`<div class="mut">${esc(l)}</div>`).join('')}</div>`:''}</div>`).join(''):'<div class="mut" style="font-size:12.5px">Comparing with each station…</div>';
+  const n=ok.length;const cs=f.confirm_secs||90;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Change config of ${b.ids.length} station${b.ids.length===1?'':'s'}</h3></div><div class="sb">
+   <div><label class="l" for="bk-src">What</label><select class="f" id="bk-src" style="width:100%" onchange="fleetBulkSrc(this.value)">${opts.map(([k,l])=>`<option value="${esc(k)}" ${k===cur?'selected':''}>${esc(l)}</option>`).join('')}</select>
+    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="closeSheet();tplOpen(null,null,null,UI.bk.ids)">Edit settings for this run…</button></div></div>
+   ${n>1?`<div style="display:grid;gap:10px">${radio('rolling','Rolling (one after another)','The next station starts when the previous one is back with the new config and confirmed (or rolled back). A station that rolls back is an ALARM and the run goes on.')}${radio('parallel','Parallel (all at once)','Every station restarts at the same time (about 20 s off the air each).')}</div>`:''}
+   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="bk-call" aria-checked="${b.call}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true');$('bk-int').disabled=this.getAttribute('aria-checked')==='true'"></button> Change during call <span class="mut" style="font-size:12px">(a running call is cut at the restart)</span></label>
+   <div><label class="l" for="bk-int">Interrupt a call after (minutes)</label><input class="f" id="bk-int" type="number" min="0" max="${f.limits.max_interrupt_min}" value="${esc(b.int)}" ${b.call?'disabled':''} style="width:110px"></div>
+   <div class="mut" style="font-size:12.5px">Each station checks the change, restarts its service and has <b>${cs} s</b> to come back to this server (and Brew); otherwise it restores its old config by itself. Offline stations get the change as pending, sent at their next login. Stations with a pending change already, a running change or a config that differs from the server copy are skipped.</div>
+   ${b.err?`<div class="msg err">${esc(b.err)}</div>`:''}
+   <div><div style="display:flex;gap:8px;align-items:center"><b style="font-size:13px">Preview</b><span class="mut" style="font-size:12px">${pv?`${n} to change, ${skip.length} skipped`:''}</span></div>${rows}</div>
+   ${msgDiv('bk-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" ${n&&!bulkOn(f)?'':'disabled'} title="${bulkOn(f)?'A bulk change is running':''}" onclick="fleetBulkStart()">Start (${n})</button></div>`;}
+async function fleetBulkStart(){const b=UI.bk;fleetBulkKeep();const ids=(b.preview||[]).filter(x=>x.ok).map(x=>x.id);
+  try{await postJ('/api/fleet/bulk/start',Object.assign({ids,mode:b.mode,during_call:b.call,interrupt_min:Math.max(0,parseInt(b.int||'10',10)||0)},b.src));closeSheet();UI.fsel.clear();setMsg('fl_top','ok','Bulk config change started');fleetReload();}catch(e){setMsg('bk-msg','err',e.message);}}
+// Fleet-wide neighbour check: cells that list a station's cell without being listed back, and marked entries.
+function fleetNbCard(f){const c=UI.nbc;const m=f.can_manage;
+  const body=!UI.nbcOpen?'':!c?'<div class="empty">Checking…</div>':!c.stations.length?`<div class="empty">Every cell lists the cells that list it, and every listed neighbour is in the cell directory (${c.directory_cells} cells).</div>`
+    :`<div class="tw"><table><thead><tr><th>Station</th><th>Not listed back</th><th>Marked entries</th></tr></thead><tbody>${c.stations.map(s=>`<tr><td><b>${esc(s.label)}</b>${m?`<div><button class="btn" style="margin-top:4px" onclick="fleetEdit('${esc(s.id)}')">Edit</button></div>`:''}</td><td style="font-size:12.5px">${s.missing.map(x=>`<div>Cell ${x.cell}: <span class="m">${esc(x.from)}</span> lists it ${x.online?'':'<span class="mut">(offline)</span>'}</div>`).join('')||'<span class="mut">—</span>'}</td><td style="font-size:12.5px">${s.marks.map(x=>`<div><span class="chip w">Cell ${x.cell}</span> ${esc(x.text)}</div>`).join('')||'<span class="mut">—</span>'}</td></tr>`).join('')}</tbody></table></div>`;
+  const nmiss=c?c.stations.filter(s=>s.missing.length).length:0;
+  return `<div class="card"><div class="ch" style="cursor:pointer" onclick="fleetNbToggle()"><h2>Neighbour check</h2>${c&&UI.nbcOpen?`<span class="cnt">${c.stations.length}</span>`:''}${helpBtn('flnb')}<span class="sp"></span>${UI.nbcOpen&&m&&nmiss?`<button class="btn pri" onclick="event.stopPropagation();fleetBulkDlg({reciprocal:true},UI.nbc.stations.filter(s=>s.missing.length).map(s=>s.id))">Add missing reciprocal (${nmiss})</button>`:''}${UI.nbcOpen?`<button class="btn" onclick="event.stopPropagation();fleetNbLoad()">Check again</button>`:''}<span class="mut" style="font-size:12px">${UI.nbcOpen?'Hide':'Show'}</span></div>
+   ${helpNote('flnb','From the server\'s cell directory: a cell that broadcasts one of a station\'s cells as neighbour but is not listed back (both should list each other, TS 100 392-2 clause 18.3.4.1), and listed neighbours that are not in the directory any more or broadcast another LA. <b>Add missing reciprocal</b> adds them as a bulk change (at most 7 neighbours per cell, siblings included). On a station\'s edit page the Neighbour cells card also suggests cells radios moved to and cells close by.')}${body}</div>`;}
+function fleetNbToggle(){UI.nbcOpen=!UI.nbcOpen;if(UI.nbcOpen&&!UI.nbc)fleetNbLoad();render(true);}
+async function fleetNbLoad(){try{UI.nbc=await getJ('/api/fleet/neighbours/check');}catch(e){UI.nbc={stations:[],directory_cells:0};}if(UI.page==='fleet')render(true);}
+// Edit page: neighbour suggestions for the cell shown.
+async function fcSugLoad(){const fc=UI.fc;if(!fc)return;
+  try{const r=await getJ('/api/fleet/neighbours?id='+encodeURIComponent(fc.id)+'&radius_km='+(fc.radius||30));if(UI.fc===fc){fc.sug=r;if(UI.page==='fleetcfg')render(true);}}catch(e){fc.sug={err:e.message};}}
+function fcSugCell(cell){const s=UI.fc.sug;return s&&s.cells?s.cells.find(c=>c.id===cell.id):null;}
+function fcSugMark(cell,nb){const c=fcSugCell(cell);if(!c)return null;return (c.marks||[]).find(m=>m.carrier===nb.main_carrier_number&&(m.kind==='missing'||nb.location_area!==m.location_area));}
+const SUG_WHY={reciprocal:()=>'<span class="chip a" title="That cell broadcasts this one as neighbour (clause 18.3.4.1: both should list each other)">lists this cell</span>',moves:w=>`<span class="chip b" title="Radios changed between these cells (last 30 days)">${w.count} cell change${w.count===1?'':'s'}</span>`,distance:w=>`<span class="chip i">${w.km} km</span>`};
+function fcSugBlock(cell,list,dis){const fc=UI.fc;const s=fc.sug;
+  if(!s)return '<div class="mut" style="font-size:12.5px;padding:8px 18px 14px">Looking for suggestions…</div>';
+  if(s.err)return `<div class="mut" style="font-size:12.5px;padding:8px 18px 14px">No suggestions: ${esc(s.err)}</div>`;
+  const c=fcSugCell(cell);const full=list.length+(cell.siblings||[]).length>=7;
+  const rows=(c?c.suggestions:[]).filter(x=>!list.some(nb=>nb.main_carrier_number===x.cell.carrier&&(nb.mcc??fc.v.mcc)===x.cell.mcc&&(nb.mnc??fc.v.mnc)===x.cell.mnc));
+  return `<div style="margin:6px 18px 16px;border:1px dashed var(--border);border-radius:10px;overflow:hidden"><div class="ch" style="gap:8px"><h2 style="font-size:13.5px">Suggestions</h2><span class="cnt">${rows.length}</span><span class="sp"></span><label class="mut" style="font-size:12px;display:flex;gap:6px;align-items:center">Close by within <input class="f" type="number" min="1" max="500" value="${fc.radius||30}" style="width:70px" onchange="UI.fc.radius=Math.max(1,Math.min(500,+this.value||30));fcSugLoad()"> km</label></div>
+   ${rows.length?`<div class="tw"><table><thead><tr><th>Cell</th><th>Carrier</th><th>LA</th><th>Why</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><b class="m">${esc(x.cell.name)}</b> ${x.cell.online?'<span class="st" style="font-size:12px"><i></i></span>':'<span class="st d" style="font-size:12px" title="offline"><i></i></span>'}</td><td class="m">${x.cell.carrier}</td><td class="m">${x.cell.location_area}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap">${x.why.map(w=>(SUG_WHY[w.kind]||(()=>''))(w)).join('')}</div></td>
+     <td style="text-align:right"><button class="btn pri" ${dis} ${full?'disabled title="7 neighbours at most (siblings included)"':''} onclick="fcSugAdd('${esc(x.cell.name)}')">${ic('plus')}Add</button></td></tr>`).join('')}</tbody></table></div>`:`<div class="mut" style="font-size:12.5px;padding:10px 18px">No suggestions for this cell${s.position?'':' (no position for this station: Accounts or its telemetry)'}.</div>`}
+   <div class="mut" style="font-size:12px;padding:8px 18px 12px">From the server's cell directory: cells that list this cell, cells radios moved to or from (30 days) and cells close by. Nothing is added by itself; an added entry is filled in from what that cell broadcasts and can be edited like any other.</div></div>`;}
+function fcSugAdd(name){const fc=UI.fc;const c=fcCellNow();const s=fcSugCell(c);const x=s&&s.suggestions.find(y=>y.cell.name===name);if(!x)return;
+  if(!c.primary)c.own_list=true;c.neighbours=c.neighbours||[];
+  const e=fcClone(x.entry);const used=c.neighbours.map(n=>n.cell_identifier_ca).concat((c.siblings||[]).map(n=>n.cell_identifier_ca));
+  if(used.includes(e.cell_identifier_ca)){let id=0;while(used.includes(id)&&id<31)id++;e.cell_identifier_ca=id;}
+  c.neighbours.push(e);render(true);}
+function fcNbFixLa(i,la){const c=fcCellNow();c.neighbours[i].location_area=la;render(true);}
+// Server settings: the confirmation window of config changes (also bulk changes).
+function fleetCfgSettingsCard(){const f=D.fleet;if(!f||f.confirm_secs==null)return '';
+  return `<div class="card"><div class="ch"><h2>Config changes (Fleet Control)</h2>${helpBtn('cfgwin')}<span class="sp"></span><a data-go="fleet" href="#fleet">Fleet Control ›</a></div>${helpNote('cfgwin','After a config change from Fleet Control (one station or a bulk change) the station restarts and must be back on this server, and on Brew if it has a Brew login, within this time; otherwise it restores its old config by itself. 60 to 900 s, default 90 s.')}
+   <div class="svc" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap"><div><label class="l" for="cw-secs">Confirmation window (s)</label><input class="f" id="cw-secs" type="number" min="60" max="900" step="10" value="${f.confirm_secs}" style="width:120px"></div><button class="btn pri" onclick="saveCfgWindow()">Save</button></div>${msgDiv('cw-msg','padding:0 18px 12px')}</div>`;}
+async function saveCfgWindow(){try{await postJ('/api/fleet/config/settings',{confirm_secs:parseInt(v('cw-secs'),10)||0});D.fleet=await getJ('/api/fleet');setMsg('cw-msg','ok','Saved');render(true);}catch(e){setMsg('cw-msg','err',e.message);}}
 /* ---------- routing ---------- */
 R.routing=()=>{
   const adm=D.who.admin;
@@ -2434,6 +2599,7 @@ R.settings=()=>{
     ${l.map(x=>`<tr><td class="m"><b>${esc(x.username)}</b></td><td>${esc(x.name)}</td><td class="m" style="font-size:12px">${(+x.lat).toFixed(4)}, ${(+x.lon).toFixed(4)}</td><td style="text-align:right"><button class="btn danger" onclick="btsLocDel('${esc(x.username)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="4" class="mut">No static station positions</td></tr>'}
     </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>
    ${updatesRepoCard()}
+   ${fleetCfgSettingsCard()}
    ${usersCard()}`;
 };
 // Server settings: the reference source for Fleet Control updates (hint only, stations keep their own).

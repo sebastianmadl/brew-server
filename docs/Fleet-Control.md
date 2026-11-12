@@ -484,7 +484,8 @@ refuses with 400; a phase 2 server never sends the new commands.
 
 The server reads each station's config, keeps a copy, and changes it with a
 safety net: the station writes the new config, restarts and must be back on
-this server (and on Brew, if it has a Brew login) within **180 s**, else it
+this server (and on Brew, if it has a Brew login) within **90 s** (Server
+settings → Config changes, 60 to 900 s), else it
 restores the old config by itself. Keys (`[security]`, TEA/SCK) are never
 read or written; passwords are never sent to the server.
 
@@ -504,7 +505,7 @@ every 5 s), so an edit on the station shows up on the server.
 
 ```json
 {"GetConfig": {"handle": 5}}
-{"SetConfig": {"handle": 6, "base_hash": "211602a72878a9a4", "changes": {"cells": [{"id": 0, "location_area": 2}]}, "confirm_secs": 180, "during_call": false, "by": "admin"}}
+{"SetConfig": {"handle": 6, "base_hash": "211602a72878a9a4", "changes": {"cells": [{"id": 0, "location_area": 2}]}, "confirm_secs": 90, "during_call": false, "by": "admin"}}
 {"ConfirmConfig": {"handle": 7}}
 {"RollbackConfig": {"handle": 8}}
 ```
@@ -603,3 +604,102 @@ New options need both a FlowStation and a server update: the station
 validates every key and refuses unknown ones. A station without `config-v1`
 gets no Edit button; an older server ignores the new hello fields and never
 sends the new commands.
+
+## 11. Templates, bulk changes and neighbour suggestions (phase 6)
+
+Server side only; it uses the `config-v1` commands of section 10, so every
+station with `config-v1` works without a FlowStation update.
+
+### 11.1 Confirmation window
+
+The window a station has to come back after a change (section 10) is a server
+setting: **Server settings → Config changes (Fleet Control)**, default 90 s,
+60 to 900 s (admin). It is sent as `confirm_secs` with every `SetConfig`,
+single or bulk.
+
+### 11.2 Templates
+
+A template holds only settings stations share: Brew server (host, port, TLS,
+MCC/MNC), networks (Multi Network), cell reselection, RXLEV_ACCESS_MIN,
+migration, presence check, Home Mode Display, ISSI whitelist, telemetry and
+update source. Never part of it: carrier, colour code, LA, cells, neighbours,
+logins and passwords; each station keeps its own (the server fills in the
+station's username, site name and position where a section needs them).
+
+- Each section has its own switch; only switched-on sections are applied.
+- Created empty (**New template**) or from a station (**Save as template** on
+  its edit page); editable afterwards. At most 50.
+- Applied once: the station gets the values, nothing stays bound to the
+  template, a later template edit changes no station.
+- Per station the server builds the changes against its config copy; a
+  section is left out with a note when it cannot apply (for example the Brew
+  section on a station that uses Multi Network, or telemetry on a station
+  without a telemetry login). Home Mode Display and the whitelist go as `raw`
+  values.
+
+### 11.3 Bulk config change
+
+Fleet Control → tick stations → **Change config…** → a template, settings
+for this run only (**Edit settings for this run…**) or the missing reciprocal
+neighbours → preview → **Start**. One bulk run at a time.
+
+- Preview per station: the changes (old → new), "kept as pending" or the
+  reason it is skipped (nothing to change, a pending change already, a change
+  running, config differs from the server copy, no `config-v1`).
+- **Rolling** (default): one station after another; the next starts when the
+  previous one is confirmed or rolled back. A rollback is an ALARM in the run
+  and in the change log, and the run goes on. **Parallel**: all at once.
+- Calls as with the remote update: wait for the call to end, or cut it after
+  *n* minutes, or change during the call.
+- Offline stations get the change as pending (section 10.2); it is sent at
+  the next login.
+- **Cancel** starts no further station; a station that is restarting
+  finishes with its own rollback window.
+- The run survives a server restart (states sent or waiting are re-checked
+  from the stations' last outcome).
+
+### 11.4 Neighbour suggestions and check
+
+From the cell directory (section 5, `cell-directory`), per cell of a station:
+
+- **lists this cell**: a cell that broadcasts this cell as neighbour without
+  being listed back (both should list each other, TS 100 392-2 clause
+  18.3.4.1);
+- **radios moved**: cells radios changed to or from, counted from the roaming
+  log over the last 30 days (kept in the Fleet file);
+- **distance**: cells within a radius (default 30 km) of the station's
+  position (static station positions, else the station's telemetry position).
+
+Suggestions are never applied by themselves. **Add** fills the entry from what
+the neighbour cell broadcasts (carrier, LA, services, rxlev, power) and it can
+be edited like any other; at most 7 neighbours per cell, siblings included.
+Listed neighbours that are not in the directory any more are marked
+"outdated", ones whose LA differs from what the cell broadcasts get "LA
+differs" with a button to take it over.
+
+**Neighbour check** on the Fleet Control page lists, for the whole fleet, the
+cells not listed back and the marked entries; **Add missing reciprocal** runs
+them as a bulk change (11.3).
+
+### 11.5 Rights
+
+Fleet Control visibility sees templates, the bulk run and the neighbour check;
+Fleet Control management creates, edits and deletes templates and starts or
+cancels bulk changes. The confirmation window is an admin setting.
+
+### 11.6 HTTP API
+
+| Route | Right | Body / query | Does |
+| --- | --- | --- | --- |
+| `GET /api/fleet/templates` | visibility | | templates |
+| `POST /api/fleet/templates/save` | management | `{id?, name, note, sections}` | create or replace |
+| `POST /api/fleet/templates/delete` | management | `{id}` | delete |
+| `POST /api/fleet/bulk/preview` | management | `{ids, template? \| sections? \| reciprocal}` | per station changes or skip reason |
+| `POST /api/fleet/bulk/start` | management | preview body + `{mode: rolling\|parallel, during_call, interrupt_min}` | start the run |
+| `POST /api/fleet/bulk/cancel` | management | | cancel the run |
+| `GET /api/fleet/neighbours?id=&radius_km=` | visibility | | suggestions and marks per cell |
+| `GET /api/fleet/neighbours/check` | visibility | | fleet-wide check |
+| `POST /api/fleet/config/settings` | admin | `{confirm_secs}` | confirmation window |
+
+`GET /api/fleet` also gives `templates`, `bulk` (the last run) and
+`confirm_secs`.

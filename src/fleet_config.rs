@@ -28,11 +28,30 @@ use crate::state::AppState;
 
 /// Capability of stations that can read and change their config.
 pub const CONFIG_CAPABILITY: &str = "config-v1";
-/// Confirmation window the server asks for (seconds after the restart).
-pub const CONFIRM_SECS: u32 = 180;
+/// Confirmation window the server asks for by default (seconds after the
+/// restart); Server settings can change it (`[fleet] confirm window`, phase 6).
+pub const DEFAULT_CONFIRM_SECS: u32 = 90;
+/// Bounds of the window (the station clamps to the same).
+pub const MIN_CONFIRM_SECS: u32 = 60;
+pub const MAX_CONFIRM_SECS: u32 = 900;
 /// A station not back with the change this long after `SetConfig`: alarm
 /// (restart + window + margin; the station has rolled back by then).
-pub const APPLY_LIMIT_MS: u64 = (10 + CONFIRM_SECS as u64 + 60) * 1000;
+pub fn apply_limit_ms(confirm_secs: u32) -> u64 {
+    (10 + confirm_secs as u64 + 60) * 1000
+}
+
+fn old_confirm_secs() -> u32 {
+    180
+}
+
+/// How the last change sent to a station ended (the bulk run reads it).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub at_ms: u64,
+    /// Confirmed and kept.
+    pub ok: bool,
+    pub text: String,
+}
 /// Maintenance time set per heartbeat of an open edit page (minutes).
 pub const EDIT_MAINTENANCE_MIN: u32 = 3;
 /// An edit page without a heartbeat for this long counts as closed.
@@ -93,6 +112,9 @@ pub struct ApplyRun {
     /// "Undo" was pressed.
     #[serde(default)]
     pub rollback_by: Option<String>,
+    /// Confirmation window asked for (older runs: 180 s).
+    #[serde(default = "old_confirm_secs")]
+    pub confirm_secs: u32,
 }
 
 /// Config state of one station on this server.
@@ -110,6 +132,9 @@ pub struct StationConfig {
     pub pending: Option<PendingChange>,
     #[serde(default)]
     pub apply: Option<ApplyRun>,
+    /// How the last change ended (phase 6).
+    #[serde(default)]
+    pub last_outcome: Option<Outcome>,
     /// The copy was dropped after a confirmed change and is being read again.
     #[serde(skip)]
     pub reread: bool,
@@ -160,6 +185,8 @@ pub fn on_hello(cfg: &mut StationConfig, capable: bool, hash: Option<String>, pe
         }
         let run = cfg.apply.take().expect("checked");
         if hash == run.old_hash {
+            let undone = run.rollback_by.is_some();
+            cfg.last_outcome = Some(Outcome { at_ms: now, ok: false, text: if undone { "undone".into() } else { "rolled back by the station (not confirmed in time)".into() } });
             logs.push(if run.rollback_by.is_some() {
                 ("config", "config change undone, old config back".to_owned())
             } else {
@@ -316,10 +343,16 @@ pub async fn tick(state: &Arc<AppState>) {
                     });
                     confirm(state, &s.id).await;
                 }
-            } else if now.saturating_sub(run.at_ms) > APPLY_LIMIT_MS {
-                let run = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(&s.id, |st| st.cfg.apply.take()).flatten();
-                if run.is_some_and(|r| r.rollback_by.is_none()) {
-                    log_all(state, &s.id, None, vec![("config_alarm", format!("ALARM config change not confirmed: station not back within {} s, it restores its old config", CONFIRM_SECS))]);
+            } else if now.saturating_sub(run.at_ms) > apply_limit_ms(run.confirm_secs) {
+                let run = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(&s.id, |st| {
+                    let r = st.cfg.apply.take();
+                    if r.is_some() {
+                        st.cfg.last_outcome = Some(Outcome { at_ms: now, ok: false, text: "station not back in time".into() });
+                    }
+                    r
+                }).flatten();
+                if let Some(r) = run.filter(|r| r.rollback_by.is_none()) {
+                    log_all(state, &s.id, None, vec![("config_alarm", format!("ALARM config change not confirmed: station not back within {} s, it restores its old config", r.confirm_secs))]);
                 }
             }
             continue;
@@ -347,7 +380,8 @@ async fn send_change(
     offline: bool,
 ) -> Result<(), (axum::http::StatusCode, String)> {
     use axum::http::StatusCode;
-    let cmd = ControlCommand::SetConfig { handle: 0, base_hash: base_hash.clone(), changes, confirm_secs: CONFIRM_SECS, during_call, by: by.clone().unwrap_or_default() };
+    let confirm_secs = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).confirm_secs();
+    let cmd = ControlCommand::SetConfig { handle: 0, base_hash: base_hash.clone(), changes, confirm_secs, during_call, by: by.clone().unwrap_or_default() };
     let answer = send_command(state, id, cmd).await;
     let now = now_ms();
     let lines = summary_text(&summary);
@@ -357,7 +391,7 @@ async fn send_change(
                 if offline {
                     s.cfg.pending = None;
                 }
-                s.cfg.apply = Some(ApplyRun { by: by.clone(), at_ms: now, old_hash: base_hash, summary, offline, back_ms: None, new_hash: None, confirm_sent_ms: None, rollback_by: None });
+                s.cfg.apply = Some(ApplyRun { by: by.clone(), at_ms: now, old_hash: base_hash, summary, offline, back_ms: None, new_hash: None, confirm_sent_ms: None, rollback_by: None, confirm_secs });
             });
             log_all(state, id, by.as_deref(), vec![("config", format!("{} sent, station restarts ({lines})", if offline { "pending config change" } else { "config change" }))]);
             state.monitor.emit("fleet_changed", serde_json::json!({"id": id}));
@@ -387,6 +421,37 @@ async fn send_change(
     }
 }
 
+/// `send_change` for a bulk run: `Ok(confirm_secs)` when the station wrote the change, else the
+/// station's `code` and message (`unreachable` when it did not answer).
+pub async fn send_change_coded(
+    state: &Arc<AppState>,
+    id: &str,
+    base_hash: String,
+    changes: serde_json::Value,
+    summary: Vec<String>,
+    by: Option<String>,
+    during_call: bool,
+) -> Result<u32, (String, String)> {
+    match send_change(state, id, base_hash, changes, summary, by, during_call, false).await {
+        Ok(()) => Ok(state.fleet.lock().unwrap_or_else(|e| e.into_inner()).get(id).and_then(|s| s.cfg.apply.as_ref().map(|a| a.confirm_secs)).unwrap_or(DEFAULT_CONFIRM_SECS)),
+        Err((axum::http::StatusCode::GATEWAY_TIMEOUT, m)) => Err(("unreachable".into(), m)),
+        Err((_, m)) => match m.split_once(": ") {
+            Some((code, msg)) if !code.contains(' ') => Err((code.to_owned(), msg.to_owned())),
+            _ => Err(("error".into(), m)),
+        },
+    }
+}
+
+/// Keep a change as the pending change of an offline station (bulk run); logged.
+pub fn save_pending(state: &Arc<AppState>, id: &str, base_hash: String, changes: serde_json::Value, summary: Vec<String>, by: Option<String>) {
+    let lines = summary_text(&summary);
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(id, |s| {
+        s.cfg.pending = Some(PendingChange { base_hash, changes, summary, by: by.clone(), at_ms: now_ms(), conflict: false, message: String::new(), next_try_ms: 0 });
+    });
+    log_all(state, id, by.as_deref(), vec![("config", format!("bulk config change saved, sent at the next login ({lines})"))]);
+    state.monitor.emit("fleet_changed", serde_json::json!({"id": id}));
+}
+
 fn summary_text(summary: &[String]) -> String {
     if summary.is_empty() {
         return "no details".into();
@@ -411,7 +476,13 @@ async fn confirm(state: &Arc<AppState>, id: &str) {
         }
         Ok(Some(ControlResponse::CommandResult { ok, code, message, .. })) => {
             if ok || code == "not_pending" {
-                let run = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(id, |s| s.cfg.apply.take()).flatten();
+                let run = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(id, |s| {
+                    let r = s.cfg.apply.take();
+                    if r.is_some() {
+                        s.cfg.last_outcome = Some(Outcome { at_ms: now_ms(), ok: true, text: "confirmed".into() });
+                    }
+                    r
+                }).flatten();
                 if let Some(r) = run {
                     let secs = r.back_ms.unwrap_or(now_ms()).saturating_sub(r.at_ms) / 1000;
                     log_all(state, id, r.by.as_deref(), vec![("config", format!("config change confirmed (back after {secs} s)"))]);
@@ -502,10 +573,12 @@ pub async fn api_get(State(state): State<Arc<AppState>>, headers: HeaderMap, Que
         "maintenance": s.maintenance,
         "edit": fleet.edits.get(&s.id),
         "cfg": s.cfg,
+        // "Save as template" starts from these (phase 6).
+        "template_sections": s.cfg.copy.as_ref().map(|c| crate::fleet_bulk::sections_of(&c.config)),
         "read_error": read_error,
         "is_admin": a.admin,
         "user": a.user,
-        "confirm_secs": CONFIRM_SECS,
+        "confirm_secs": fleet.confirm_secs(),
         "now_ms": now_ms(),
     }))
     .into_response()
@@ -862,7 +935,7 @@ mod tests {
     }
 
     fn run(old: &str) -> ApplyRun {
-        ApplyRun { by: Some("admin".into()), at_ms: 0, old_hash: old.into(), summary: vec![], offline: false, back_ms: None, new_hash: None, confirm_sent_ms: None, rollback_by: None }
+        ApplyRun { by: Some("admin".into()), at_ms: 0, old_hash: old.into(), summary: vec![], offline: false, back_ms: None, new_hash: None, confirm_sent_ms: None, rollback_by: None, confirm_secs: 90 }
     }
 
     #[test]

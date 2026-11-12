@@ -4,6 +4,22 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 6: templates, bulk changes, neighbour suggestions.**
+  Templates hold the settings stations share (Brew server, networks, cell
+  reselection, RXLEV_ACCESS_MIN, migration, presence check, Home Mode Display,
+  ISSI whitelist, telemetry, update source; never carrier, colour code, LA,
+  cells, neighbours or logins), created empty or from a station, applied once.
+  **Change config…** on the ticked stations applies a template or one-off
+  settings with a preview, rolling (default) or parallel like the remote
+  update; a rollback is an ALARM and the run goes on, offline stations get it
+  as pending, stations with a pending change or a differing config are
+  skipped. The edit page suggests neighbour cells (cells that list this cell,
+  cells radios moved to in the last 30 days, cells close by) and marks
+  outdated neighbours; the Fleet Control page has a fleet-wide neighbour check
+  with **Add missing reciprocal**. The confirmation window for config changes
+  is now 90 s and a server setting (60 to 900 s). The change log table scrolls
+  after about 10 rows. See docs/Fleet-Control.md section 11.
+
 - **Fleet config page: order and "Apply server config".** Cards in the order
   Brew link, networks, cells, neighbour cells, cell reselection, Home Mode
   Display, ISSI whitelist, telemetry, control channel, update source. In the

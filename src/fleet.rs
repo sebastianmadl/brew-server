@@ -193,6 +193,37 @@ struct File {
     next_job: u64,
     #[serde(default)]
     update_settings: UpdateSettings,
+    /// Phase 6: templates, the current or last bulk config change, counted cell changes, settings.
+    #[serde(default)]
+    templates: Vec<crate::fleet_bulk::Template>,
+    #[serde(default)]
+    next_template: u64,
+    #[serde(default)]
+    bulk: Option<crate::fleet_bulk::Run>,
+    #[serde(default)]
+    next_bulk: u64,
+    #[serde(default)]
+    moves: Vec<crate::fleet_bulk::MoveCount>,
+    #[serde(default)]
+    config_settings: ConfigSettings,
+}
+
+/// Server setting for config changes (Server settings → Fleet Control, admins).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSettings {
+    /// Confirmation window a station gets after a config change (s).
+    #[serde(default = "default_confirm_secs")]
+    pub confirm_secs: u32,
+}
+
+fn default_confirm_secs() -> u32 {
+    crate::fleet_config::DEFAULT_CONFIRM_SECS
+}
+
+impl Default for ConfigSettings {
+    fn default() -> Self {
+        Self { confirm_secs: default_confirm_secs() }
+    }
 }
 
 /// The Fleet Manager's data.
@@ -222,6 +253,9 @@ impl Fleet {
         fleet.prune(now_ms);
         if let Some(job) = fleet.data.job.as_mut() {
             job.after_restart();
+        }
+        if let Some(run) = fleet.data.bulk.as_mut() {
+            run.after_restart();
         }
         fleet
     }
@@ -572,6 +606,132 @@ impl Fleet {
     }
 }
 
+/// Phase 6: templates, bulk config changes, counted cell changes.
+impl Fleet {
+    pub fn confirm_secs(&self) -> u32 {
+        self.data.config_settings.confirm_secs.clamp(crate::fleet_config::MIN_CONFIRM_SECS, crate::fleet_config::MAX_CONFIRM_SECS)
+    }
+
+    pub fn set_confirm_secs(&mut self, secs: u32, user: Option<&str>, now_ms: u64) {
+        self.data.config_settings.confirm_secs = secs;
+        self.push(now_ms, "", String::new(), user, "settings", format!("Confirmation window of config changes set to {secs} s"));
+        self.save();
+    }
+
+    pub fn templates(&self) -> Vec<crate::fleet_bulk::Template> {
+        self.data.templates.clone()
+    }
+
+    /// New (`id` None) or changed template; logged. Err: unknown id, name taken, too many.
+    pub fn save_template(&mut self, id: Option<u64>, name: String, note: String, sections: serde_json::Map<String, serde_json::Value>, user: Option<&str>, now_ms: u64) -> Result<u64, String> {
+        if self.data.templates.iter().any(|t| Some(t.id) != id && t.name.eq_ignore_ascii_case(&name)) {
+            return Err(format!("A template named \"{name}\" exists already"));
+        }
+        let what = sections.keys().cloned().collect::<Vec<_>>().join(", ");
+        let id = match id {
+            Some(id) => {
+                let t = self.data.templates.iter_mut().find(|t| t.id == id).ok_or("No such template")?;
+                *t = crate::fleet_bulk::Template { id, name: name.clone(), sections, note, by: user.map(str::to_owned), updated_ms: now_ms };
+                self.push(now_ms, "", String::new(), user, "template", format!("Template \"{name}\" changed ({what})"));
+                id
+            }
+            None => {
+                if self.data.templates.len() >= crate::fleet_bulk::MAX_TEMPLATES {
+                    return Err(format!("At most {} templates", crate::fleet_bulk::MAX_TEMPLATES));
+                }
+                self.data.next_template += 1;
+                let id = self.data.next_template;
+                self.data.templates.push(crate::fleet_bulk::Template { id, name: name.clone(), sections, note, by: user.map(str::to_owned), updated_ms: now_ms });
+                self.push(now_ms, "", String::new(), user, "template", format!("Template \"{name}\" created ({what})"));
+                id
+            }
+        };
+        self.save();
+        Ok(id)
+    }
+
+    pub fn delete_template(&mut self, id: u64, user: Option<&str>, now_ms: u64) -> bool {
+        let Some(i) = self.data.templates.iter().position(|t| t.id == id) else { return false };
+        let t = self.data.templates.remove(i);
+        self.push(now_ms, "", String::new(), user, "template", format!("Template \"{}\" deleted", t.name));
+        self.save();
+        true
+    }
+
+    pub fn bulk(&self) -> Option<&crate::fleet_bulk::Run> {
+        self.data.bulk.as_ref()
+    }
+
+    fn apply_bulk(&mut self, now_ms: u64, events: Vec<crate::fleet_bulk::Event>) {
+        for e in events {
+            self.push(now_ms, &e.station, e.label, e.user.as_deref(), e.kind, e.text);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_bulk(&mut self, ids: &[String], what: crate::fleet_bulk::What, mode: crate::fleet_update::Mode, during_call: bool, interrupt_min: u32, user: Option<&str>, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) -> Result<u64, &'static str> {
+        if self.data.bulk.as_ref().is_some_and(|r| !r.is_finished()) {
+            return Err("A bulk config change is in progress: wait for it or cancel it");
+        }
+        let stations: Vec<(String, String)> = ids.iter().filter_map(|id| self.data.stations.get(id)).map(|s| (s.id.clone(), label(names, &s.id, s.brew_login.as_deref()))).collect();
+        if stations.is_empty() {
+            return Err("No station to change");
+        }
+        self.data.next_bulk += 1;
+        let id = self.data.next_bulk;
+        let (run, events) = crate::fleet_bulk::Run::new(id, now_ms, user.map(str::to_owned), what, mode, during_call, interrupt_min, stations);
+        self.data.bulk = Some(run);
+        self.apply_bulk(now_ms, events);
+        self.save();
+        Ok(id)
+    }
+
+    /// Advance the bulk run; returns its turns and whether anything changed.
+    pub fn tick_bulk(&mut self, now_ms: u64, dir: &[crate::fleet_bulk::DirCell], _names: &dyn Fn(&str) -> Option<String>) -> (Vec<crate::fleet_bulk::Turn>, bool) {
+        let Some(run) = self.data.bulk.as_ref().filter(|r| !r.is_finished()) else { return (Vec::new(), false) };
+        let mut run = run.clone();
+        let stations = &self.data.stations;
+        let look = |id: &str| {
+            stations.get(id).map(|s| (s.online, s.capabilities.iter().any(|c| c == crate::fleet_config::CONFIG_CAPABILITY), s.cfg.clone(), s.brew_login.clone()))
+        };
+        let (turns, events) = run.tick(now_ms, &look, dir);
+        let changed = Some(&run) != self.data.bulk.as_ref();
+        self.data.bulk = Some(run);
+        self.apply_bulk(now_ms, events);
+        if changed {
+            self.save();
+        }
+        (turns, changed)
+    }
+
+    pub fn bulk_send_result(&mut self, id: &str, result: Result<u32, (String, String)>, now_ms: u64, _names: &dyn Fn(&str) -> Option<String>) {
+        let Some(run) = self.data.bulk.as_mut() else { return };
+        let events = run.send_result(id, result, now_ms);
+        self.apply_bulk(now_ms, events);
+        self.save();
+    }
+
+    pub fn cancel_bulk(&mut self, user: Option<&str>, now_ms: u64) -> bool {
+        let Some(run) = self.data.bulk.as_mut().filter(|r| !r.is_finished()) else { return false };
+        let events = run.cancel_all(user, now_ms);
+        self.apply_bulk(now_ms, events);
+        self.save();
+        true
+    }
+
+    /// Count cell changes (cell names `from`, `to`).
+    pub fn count_moves(&mut self, moves: &[(String, String)], now_ms: u64) {
+        for (a, b) in moves {
+            crate::fleet_bulk::count_move(&mut self.data.moves, a, b, now_ms);
+        }
+        self.save();
+    }
+
+    pub fn move_map(&self) -> std::collections::HashMap<(String, String), u32> {
+        self.data.moves.iter().map(|m| ((m.from.clone(), m.to.clone()), m.count)).collect()
+    }
+}
+
 /// Capability of phase 2 (remote update).
 pub const UPDATE_CAPABILITY: &str = "update-v1";
 /// Live update with the server's repository and branch, radio kept on.
@@ -628,6 +788,9 @@ pub async fn api_list(
         "log": fleet.log(),
         "job": fleet.job(),
         "update_settings": fleet.update_settings(),
+        "templates": fleet.templates(),
+        "bulk": fleet.bulk(),
+        "confirm_secs": fleet.confirm_secs(),
         "update_source": {"repo": ref_repo, "branch": ref_branch},
         "limits": {"build_min": crate::fleet_update::BUILD_LIMIT_MS / 60_000, "return_min": crate::fleet_update::RETURN_LIMIT_MS / 60_000, "max_interrupt_min": crate::fleet_update::MAX_INTERRUPT_MIN},
     }))
@@ -982,6 +1145,8 @@ pub async fn run_updates(state: std::sync::Arc<crate::state::AppState>) {
         }
         // Config changes (phase 5): confirm, alarm, pending changes, edit pages.
         crate::fleet_config::tick(&state).await;
+        // Bulk config changes and counted cell changes (phase 6).
+        crate::fleet_bulk::tick(&state).await;
         let starts = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_job(now_ms());
         for s in starts {
             let state = state.clone();
