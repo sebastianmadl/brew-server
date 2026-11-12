@@ -39,6 +39,10 @@ pub enum ControlCommand {
     /// over-the-air AL service for it to take effect; the exact wire shape may
     /// need to match the Basestation's own codec.
     AmbienceListen { issi: u32, enable: bool },
+    /// Fleet Control (`fleet-v1`): round-trip check, answered with
+    /// `CommandResult` (`ok`, or `fleet_control_off`). Only for stations that
+    /// listed `fleet-v1` in their `StationHello`.
+    FleetPing { #[serde(default)] handle: u32 },
 }
 
 impl ControlCommand {
@@ -62,7 +66,8 @@ impl ControlCommand {
     fn handle(&self) -> Option<u32> {
         match self {
             Self::SendSds { handle, .. } | Self::SendRawSdsType4 { handle, .. }
-            | Self::CommandA { handle, .. } | Self::TestCmdB { handle, .. } => Some(*handle),
+            | Self::CommandA { handle, .. } | Self::TestCmdB { handle, .. }
+            | Self::FleetPing { handle } => Some(*handle),
             _ => None,
         }
     }
@@ -74,6 +79,23 @@ pub enum ControlResponse {
     SendSdsResponse { handle: u32, success: bool },
     KickMsResponse { issi: u32, success: bool },
     AmbienceListenResponse { issi: u32, success: bool },
+    /// Fleet Control: what the station is, sent after connecting (only to a
+    /// server offering `fleet-control`) and whenever its switch changes.
+    StationHello {
+        protocol: u32,
+        version: String,
+        #[serde(default)]
+        brew_login: Option<String>,
+        #[serde(default)]
+        mcc: u16,
+        #[serde(default)]
+        mnc: u16,
+        fleet_control: bool,
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+    /// Fleet Control: the answer to every Fleet Control command.
+    CommandResult { handle: u32, ok: bool, code: String, #[serde(default)] message: String },
 }
 
 struct ControlSession {
@@ -119,7 +141,8 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
     let session = ctl.sessions.get_mut(bts_id).expect("checked above");
     let assigned_handle = match &mut command {
         ControlCommand::SendSds { handle, .. } | ControlCommand::SendRawSdsType4 { handle, .. }
-        | ControlCommand::CommandA { handle, .. } | ControlCommand::TestCmdB { handle, .. } => {
+        | ControlCommand::CommandA { handle, .. } | ControlCommand::TestCmdB { handle, .. }
+        | ControlCommand::FleetPing { handle } => {
             *handle = fresh_handle;
             Some(*handle)
         }
@@ -137,7 +160,7 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
             session.pending_ambience.insert(*issi, tx);
             Some(rx)
         }
-        _ if matches!(command, ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. }) => {
+        _ if matches!(command, ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. } | ControlCommand::FleetPing { .. }) => {
             let handle = assigned_handle.or_else(|| command.handle()).expect("assigned above");
             let (tx, rx) = oneshot::channel();
             session.pending_handle.insert(handle, tx);
@@ -169,6 +192,8 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         subprotocol: "bluestation-control-v1",
         users: state.logins.control.clone(),
         tls: state.config.control.tls.clone(),
+        // Fleet Control is offered whenever the control channel runs.
+        extensions: Some(crate::fleet::CAPABILITY),
     };
     fsnet::serve(cfg, move |socket, identity, _peer| {
         let state = state.clone();
@@ -187,6 +212,7 @@ async fn session(state: Arc<AppState>, socket: WebSocket, identity: Option<Strin
         ctl.sessions.insert(id.clone(), ControlSession { tx, pending_handle: HashMap::new(), pending_kick: HashMap::new(), pending_ambience: HashMap::new() });
     }
     info!(bts = %id, "Basestation control connected");
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).set_online(&id, true, crate::fleet::now_ms());
     state.monitor.emit("control_connected", serde_json::json!({"id": id}));
 
     let writer = tokio::spawn(async move {
@@ -207,6 +233,7 @@ async fn session(state: Arc<AppState>, socket: WebSocket, identity: Option<Strin
 
     writer.abort();
     state.control.write().await.sessions.remove(&id);
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).set_online(&id, false, crate::fleet::now_ms());
     state.monitor.emit("control_disconnected", serde_json::json!({"id": id}));
     info!(bts = %id, "Basestation control disconnected");
 }
@@ -220,6 +247,21 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
     };
 
+    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities } = &response {
+        let hello = crate::fleet::Hello {
+            protocol: *protocol, version: version.clone(), brew_login: brew_login.clone(), mcc: *mcc, mnc: *mnc,
+            fleet_control: *fleet_control, capabilities: capabilities.clone(),
+        };
+        let changed = {
+            let names = station_names(state);
+            let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
+            fleet.hello(id, &hello, crate::fleet::now_ms(), &|k| names.get(k).cloned())
+        };
+        if changed {
+            state.monitor.emit("fleet_changed", serde_json::json!({"id": id, "fleet_control": fleet_control}));
+        }
+        return;
+    }
     let mut ctl = state.control.write().await;
     let Some(session) = ctl.sessions.get_mut(id) else { return };
     match &response {
@@ -229,10 +271,17 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         ControlResponse::AmbienceListenResponse { issi, .. } => {
             if let Some(tx) = session.pending_ambience.remove(issi) { let _ = tx.send(response); }
         }
-        ControlResponse::CommandAResponse { handle, .. } | ControlResponse::SendSdsResponse { handle, .. } => {
+        ControlResponse::CommandAResponse { handle, .. } | ControlResponse::SendSdsResponse { handle, .. }
+        | ControlResponse::CommandResult { handle, .. } => {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
+        ControlResponse::StationHello { .. } => {}
     }
+}
+
+/// Station names given on this server (Accounts: login -> name).
+pub(crate) fn station_names(state: &AppState) -> HashMap<String, String> {
+    state.locations.read().map(|l| l.iter().filter(|(_, v)| !v.name.is_empty()).map(|(k, v)| (k.clone(), v.name.clone())).collect()).unwrap_or_default()
 }
 
 /// Test hook: registers a control session for `id` without a WebSocket and
@@ -268,5 +317,50 @@ mod tests {
         let r: ControlResponse =
             serde_json::from_value(serde_json::json!({"AmbienceListenResponse": {"issi": 2001, "success": true}})).unwrap();
         assert!(matches!(r, ControlResponse::AmbienceListenResponse { issi: 2001, success: true }));
+    }
+
+    fn test_state() -> Arc<AppState> {
+        let (state, _rx) = AppState::new(crate::config::Config::default(), std::path::PathBuf::from("test.toml"));
+        Arc::new(state)
+    }
+
+    #[test]
+    fn fleet_wire_shapes_match_flowstation() {
+        // Same JSON as FlowStation's net_control::fleet tests.
+        let json = ControlCommand::FleetPing { handle: 5 }.to_wire_json();
+        assert_eq!(json, serde_json::json!({"FleetPing": {"handle": 5}}));
+        let hello: ControlResponse = serde_json::from_value(serde_json::json!({"StationHello": {"protocol": 1, "version": "v0.5.9-abc", "brew_login": "1000001", "mcc": 232, "mnc": 20, "fleet_control": true, "capabilities": ["fleet-v1"]}})).unwrap();
+        assert!(matches!(hello, ControlResponse::StationHello { protocol: 1, fleet_control: true, .. }));
+        let res: ControlResponse = serde_json::from_value(serde_json::json!({"CommandResult": {"handle": 3, "ok": false, "code": "fleet_control_off", "message": "off"}})).unwrap();
+        assert!(matches!(res, ControlResponse::CommandResult { handle: 3, ok: false, .. }));
+    }
+
+    #[tokio::test]
+    async fn hello_lists_and_unlists_the_station() {
+        let state = test_state();
+        let _rx = attach_test_session(&state, "bs1").await;
+        let on = br#"{"StationHello":{"protocol":1,"version":"v1","brew_login":"1000001","mcc":232,"mnc":20,"fleet_control":true,"capabilities":["fleet-v1"]}}"#;
+        deliver_test_response(&state, "bs1", on).await;
+        assert_eq!(state.fleet.lock().unwrap().stations().len(), 1);
+        let off = br#"{"StationHello":{"protocol":1,"version":"v1","brew_login":"1000001","mcc":232,"mnc":20,"fleet_control":false,"capabilities":[]}}"#;
+        deliver_test_response(&state, "bs1", off).await;
+        let fleet = state.fleet.lock().unwrap();
+        assert!(fleet.stations().is_empty());
+        assert_eq!(fleet.log()[0].text, "Basestation 1000001 switched off Fleet Control");
+    }
+
+    #[tokio::test]
+    async fn fleet_ping_gets_its_command_result() {
+        let state = test_state();
+        let mut rx = attach_test_session(&state, "bs1").await;
+        let st = state.clone();
+        let ask = tokio::spawn(async move { send_command(&st, "bs1", ControlCommand::FleetPing { handle: 0 }).await });
+        let frame = rx.recv().await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        let handle = v["FleetPing"]["handle"].as_u64().unwrap();
+        let answer = serde_json::json!({"CommandResult": {"handle": handle, "ok": true, "code": "ok", "message": "Fleet Control is on"}});
+        deliver_test_response(&state, "bs1", &serde_json::to_vec(&answer).unwrap()).await;
+        let r = ask.await.unwrap().unwrap();
+        assert!(matches!(r, Some(ControlResponse::CommandResult { ok: true, .. })));
     }
 }

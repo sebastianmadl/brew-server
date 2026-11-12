@@ -16,6 +16,7 @@ mod callsign_db;
 mod emergency;
 mod federation;
 mod fedroute;
+mod fleet;
 mod fsnet;
 mod handover;
 mod ha;

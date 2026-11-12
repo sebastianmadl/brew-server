@@ -819,6 +819,7 @@ pub async fn run(state: Arc<AppState>) -> anyhow::Result<()> {
         subprotocol: "bluestation-telemetry-v2",
         users: state.logins.telemetry.clone(),
         tls: state.config.telemetry.tls.clone(),
+        extensions: None,
     };
     fsnet::serve(cfg, move |socket, identity, peer| {
         let state = state.clone();

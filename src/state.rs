@@ -337,6 +337,8 @@ pub struct AppState {
     pub monitor: Monitor,
     pub telemetry: RwLock<TelemetryState>,
     pub control: RwLock<ControlState>,
+    /// Fleet Control: stations managed from here, change log (`fleet.rs`).
+    pub fleet: std::sync::Mutex<crate::fleet::Fleet>,
     /// SIP subsystem runtime handles, populated when the SIP listener starts.
     /// `None` until then (and when SIP is disabled) so the dashboard can render
     /// an appropriate "disabled" state without panicking.
@@ -643,6 +645,8 @@ impl AppState {
         let brew_auth = config.auth.enabled;
         let allowlist = Allowlist { enabled: config.allowlist.enabled, issis: config.allowlist.issis.iter().copied().collect() };
         let config_hash = crate::ha::config_hash(&config);
+        // Fleet Control file next to the history log (memory only in tests and without storage).
+        let fleet_path = (config.storage.enabled && !cfg!(test)).then(|| crate::fleet::Fleet::path_for(&config.storage.path));
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
             Self {
@@ -652,6 +656,7 @@ impl AppState {
                 monitor,
                 telemetry: RwLock::new(telemetry),
                 control: RwLock::new(ControlState::default()),
+                fleet: std::sync::Mutex::new(crate::fleet::Fleet::load(fleet_path, crate::fleet::now_ms())),
                 sip: RwLock::new(None),
                 aprs_tx,
                 sms_center,

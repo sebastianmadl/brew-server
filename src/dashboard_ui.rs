@@ -446,6 +446,7 @@ const I={
  roam:'<path d="M7 4L3 8l4 4M3 8h13a5 5 0 0 1 0 10h-2M17 20l4-4-4-4M21 16H8"/>',
  globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
  tele:'<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+ fleet:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/>',
  ctl:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
  sip:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M7 14h7M16 10h1"/>',
  sipcfg:'<path d="M4 6h10M4 12h6M4 18h10"/><circle cx="17" cy="6" r="2"/><circle cx="13" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
@@ -471,7 +472,7 @@ const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Infrastructure'],['routing','Routing','routing','Infrastructure'],['roaming','Roaming','roam','Infrastructure'],['multinet','Multi Network','globe','Infrastructure',null,true],
- ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['accounts','Accounts','key','Infrastructure'],
+ ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['fleet','Fleet Control','fleet','Infrastructure'],['accounts','Accounts','key','Infrastructure'],
  ['sip','SIP / VoIP','sip','Integrations'],['sipcfg','SIP Config','sipcfg','Integrations'],
  ['sms','SMS Center','sms','Integrations'],['tsds','Telemetry SDS','tsds','Integrations'],
  ['ha','High Availability','ha','System'],['config','Config file','file','System',null,true],['settings','Server settings','set','System',null,true]
@@ -546,7 +547,7 @@ function setTheme(t){
 }
 document.addEventListener('click',e=>{if(!e.target.closest('#menu'))closeMenu();});
 
-const D={status:null,conn:null,tele:[],pools:[],nets:null,radios:[],who:{admin:false},names:{},issi:{},gssi:{},access:{},tg:{managed:false,hidden:[],listed:[]},ctl:[],emg:[],ha:null,regs:[]};
+const D={fleet:null,status:null,conn:null,tele:[],pools:[],nets:null,radios:[],who:{admin:false},names:{},issi:{},gssi:{},access:{},tg:{managed:false,hidden:[],listed:[]},ctl:[],emg:[],ha:null,regs:[]};
 const UI={page:'overview',open:{},filter:{},sel:new Set(),help:{},msg:{}};
 // Messages survive the periodic re-render (kept in UI.msg, drawn by msgDiv).
 function setMsg(id,cls,text){UI.msg[id]=[cls,text];const e=$(id);if(e){e.className='msg '+cls;e.textContent=text;}}
@@ -595,6 +596,7 @@ function show(p){
   // Lists only this page shows: ask for them now, not at the next slow refresh (up to 5 s of "Loading…").
   if(p==='radios')getJ('/api/registrations').then(v=>{D.regs=v;if(UI.page===p)render();}).catch(()=>{});
   if(p==='accounts'&&mayGet('/api/accounts'))getJ('/api/accounts').then(v=>{D.acc=v;if(UI.page===p)render();}).catch(()=>{});
+  if(mayGet('/api/fleet')&&(p==='fleet'||!D.fleet))getJ('/api/fleet').then(v=>{D.fleet=v;fleetInfo();if(UI.page===p)render();}).catch(()=>{});
 }
 function fitFrame(){const f=document.querySelector('iframe.embed');if(!f)return;f.onload=()=>{try{const d=f.contentDocument;const fit=()=>{f.style.height=Math.max(window.innerHeight-130,d.documentElement.scrollHeight+20)+'px';};fit();new ResizeObserver(fit).observe(d.body);}catch(e){}};}
 function helpBtn(key){return `<button class="help" aria-expanded="${!!UI.help[key]}" aria-controls="h-${key}" onclick="UI.help['${key}']=!UI.help['${key}'];render(true)" title="What is this?">?<span class="sr">Explain</span></button>`;}
@@ -632,6 +634,7 @@ async function refreshSlow(){
   tasks.push(getJ('/api/talkgroups').then(v=>D.tg=v).catch(()=>{}));
   tasks.push(getJ('/api/callsign-db').then(v=>{if(D.csdb&&(D.csdb.updated_ms!==v.updated_ms||D.csdb.enabled!==v.enabled)){D.cs={};CS_ASKED.clear();}D.csdb=v;}).catch(()=>{}));
   if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
+  tasks.push(opt('/api/fleet',v=>{D.fleet=v;fleetInfo();}));
   await Promise.allSettled(tasks);
   await csLookup();
   chrome();render();
@@ -1028,6 +1031,45 @@ R.control=()=>{
     ${msgDiv(s+'_res','padding:0')}<div class="mut" style="font-size:12px">DGNA for several radios at once: <a data-go="routing" href="#routing">Routing</a>.</div></div></div>`;}).join('');
 };
 const v=id=>($(id)||{}).value||'';
+
+/* ---------- Fleet Control (docs/Fleet-Control.md) ---------- */
+const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w']};
+R.fleet=()=>{
+  const f=D.fleet;if(!f)return loading;
+  const st=f.stations||[];const log=f.log||[];const m=f.can_manage;
+  const q=(UI.filter.fleet||'').toLowerCase();
+  const shown=log.filter(e=>!q||(e.label+' '+e.station+' '+e.text+' '+(e.user||'')).toLowerCase().includes(q));
+  return `<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}</div>
+   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page, Server features). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> takes a station off the list (it comes back with its next login while its switch is on). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
+   ${st.length?`<div class="tw"><table><thead><tr><th>Station</th><th>Status</th><th>Software</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');return `<tr>
+     <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
+     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}</td>
+     <td class="m">${esc(x.version)}</td><td class="m">${x.mcc}/${x.mnc}</td>
+     <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
+     ${m?`<td style="text-align:right;white-space:nowrap"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center"><button class="btn" ${x.online?'':'disabled'} onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button><button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button></div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+   :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
+  <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span></div>
+   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];return `<tr><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">station</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
+};
+async function fleetPing(id,sid){setMsg('fl_'+sid,'mut','Sending…');
+  try{const r=await postJ('/api/fleet/ping',{id});setMsg('fl_'+sid,r.ok?'ok':'err',(r.ok?'OK':r.code)+' · '+r.ms+' ms'+(r.ok?'':' · '+r.message));}catch(e){setMsg('fl_'+sid,'err',e.message);}}
+async function fleetRemove(id,label){
+  if(!confirm('Remove '+label+' from the Fleet Manager? It comes back with its next login while its Fleet Control switch is on.'))return;
+  try{await postJ('/api/fleet/remove',{id});D.fleet=await getJ('/api/fleet');render(true);}catch(e){alert(e.message);}}
+// INFO popup when a station switched Fleet Control off (once per entry in this browser).
+function fleetInfo(){
+  const f=D.fleet;if(!f||!can('fleet'))return;
+  let seen=null;try{seen=localStorage.getItem('brew-fleet-info');}catch(e){}
+  const offs=(f.log||[]).filter(e=>e.kind==='fleet_off');
+  const top=offs.reduce((a,e)=>Math.max(a,e.id),0);
+  // First visit in this browser: only the last 24 h.
+  const fresh=offs.filter(e=>seen!=null?e.id>+seen:Date.now()-e.at_ms<864e5).sort((a,b)=>a.id-b.id);
+  try{localStorage.setItem('brew-fleet-info',String(Math.max(top,+(seen||0))));}catch(e){}
+  if(!fresh.length||$('scrim').classList.contains('on'))return;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${ic('info')} INFO</h3></div><div class="sb">${fresh.map(e=>`<div><b>${esc(e.text)}</b><div class="mut" style="font-size:12px">${esc(tmd(e.at_ms))}</div></div>`).join('')}</div>
+   <div class="acts"><button class="btn" data-go="fleet" onclick="closeSheet()">Fleet Control</button><button class="btn pri" onclick="closeSheet()">OK</button></div>`;
+  $('scrim').classList.add('on');
+}
 async function ctl(id,s,cmd){const body=typeof cmd==='string'?{action:cmd}:cmd;setMsg(s+'_res','mut','Sending…');
   try{const r=await postJ('/api/control/'+encodeURIComponent(id),body);setMsg(s+'_res','ok','Sent'+(r&&r.response?': '+JSON.stringify(r.response):''));}catch(e){setMsg(s+'_res','err',e.message);}}
 
@@ -1820,7 +1862,7 @@ R.settings=()=>{
    ${usersCard()}`;
 };
 // Dashboard users (Server settings, admins): who logs in, who is admin, which pages each one sees.
-const pageName=id=>PG[id]?PG[id][1]:id;
+const pageName=id=>id==='fleet_manage'?'Fleet Control management':PG[id]?PG[id][1]:id;
 const pageChips=(list,all)=>all?'<span class="chip a">Every page · edits</span>':(list.length?list.map(p=>`<span class="chip">${esc(pageName(p))}</span>`).join(' '):'<span class="mut">no page</span>');
 function usersCard(){
   const u=D.dusers;if(!u)return loading;
@@ -1837,7 +1879,9 @@ function usersCard(){
 function editUser(i){
   const u=D.dusers,viewer=i==='viewer';
   const x=viewer?{name:'Viewer',admin:false,pages:u.viewer}:i>=0?u.users[i]:{name:'',admin:false,pages:u.viewer};
-  const boxes=PAGES.filter(p=>!p[5]).map(p=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" class="chk du-pg" value="${p[0]}" ${x.admin||x.pages.includes(p[0])?'checked':''} ${x.admin?'disabled':''}> ${esc(p[1])}</label>`).join('');
+  const box=(id,label)=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" class="chk du-pg" value="${id}" ${x.admin||x.pages.includes(id)?'checked':''} ${x.admin?'disabled':''}> ${esc(label)}</label>`;
+  // Fleet Control: visibility (the page) and management (includes visibility; not for Viewer).
+  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management'));
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${viewer?'Viewer (not logged in)':i>=0?'Edit user '+esc(x.name):'New user'}</h3></div><div class="sb">
    ${viewer?`<div class="mut" style="font-size:12.5px">What anyone sees without logging in${D.who.open?'':' once the dashboard is open (<code>[dashboard.ui] open = true</code>; it is closed now, so nobody sees anything without logging in)'}.</div>`:`
    <div><label class="l" for="du-name">User name</label><input class="f" id="du-name" value="${esc(x.name)}" ${i>=0?'disabled':''} placeholder="e.g. oe4sxm" autocomplete="off" spellcheck="false" autocapitalize="off"></div>

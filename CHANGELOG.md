@@ -4,6 +4,20 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 1 (foundation).** Basestations that switch on
+  "Fleet Control" (FlowStation, Infrastructure page) can be managed from this
+  server over the control channel. Offered automatically while `[control]` is
+  on (`X-Brew-Extensions: fleet-control` on the control channel and the Brew
+  connection). New page **Fleet Control**: the stations with their software,
+  network, features and online / offline state (offline stations stay
+  listed), Ping (round trip) and Remove, and a change log kept 90 days
+  (switched on / off, new software, removed by whom). A station that switches
+  Fleet Control off leaves the list (at once while online, else at its next
+  login) with the INFO "Basestation XYZ switched off Fleet Control". New
+  rights "Fleet Control visibility" and "Fleet Control management" for
+  dashboard users. Stations and log survive restarts in
+  `<storage path>.fleet`. Existing control commands do not change. See
+  docs/Fleet-Control.md.
 - **Multi Network: radios registered there, listed.** On the Multi Network
   page, "N radios registered there" opens a list under the network: ISSI with
   its Directory name, the station / cell here, the groups there and since
