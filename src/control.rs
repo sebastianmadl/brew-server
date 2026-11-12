@@ -84,6 +84,31 @@ pub enum ControlCommand {
         #[serde(default)]
         during_call: bool,
     },
+    /// Fleet Control (`config-v1`): read the station's config; answered with
+    /// `ConfigInfo` (settings as JSON, file as TOML, both without secrets).
+    GetConfig { #[serde(default)] handle: u32 },
+    /// Fleet Control (`config-v1`): change the config (keys of the station's
+    /// Infrastructure page, see `docs/Fleet-Control.md` 10), only on the config
+    /// with `base_hash`; the station restarts and rolls back unless it gets
+    /// `ConfirmConfig` within `confirm_secs` after the restart. Answered with
+    /// `CommandResult` (`ok`, `conflict`, `invalid`, `busy`, `call_active`).
+    SetConfig {
+        #[serde(default)]
+        handle: u32,
+        base_hash: String,
+        changes: serde_json::Value,
+        #[serde(default)]
+        confirm_secs: u32,
+        #[serde(default)]
+        during_call: bool,
+        #[serde(default)]
+        by: String,
+    },
+    /// Fleet Control (`config-v1`): keep the config of the last `SetConfig`.
+    ConfirmConfig { #[serde(default)] handle: u32 },
+    /// Fleet Control (`config-v1`): go back to the config before the last
+    /// `SetConfig` at once (restart).
+    RollbackConfig { #[serde(default)] handle: u32 },
 }
 
 impl ControlCommand {
@@ -110,7 +135,9 @@ impl ControlCommand {
             | Self::CommandA { handle, .. } | Self::TestCmdB { handle, .. }
             | Self::FleetPing { handle } | Self::CheckUpdate { handle }
             | Self::StartUpdate { handle, .. } | Self::SetMaintenance { handle, .. }
-            | Self::RestartStation { handle, .. } => Some(*handle),
+            | Self::RestartStation { handle, .. } | Self::GetConfig { handle }
+            | Self::SetConfig { handle, .. } | Self::ConfirmConfig { handle }
+            | Self::RollbackConfig { handle } => Some(*handle),
             _ => None,
         }
     }
@@ -145,6 +172,29 @@ pub enum ControlResponse {
         fleet_control: bool,
         #[serde(default)]
         capabilities: Vec<String>,
+        /// `config-v1`: hash of the station's config file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_hash: Option<String>,
+        /// `config-v1`: seconds left to confirm the last `SetConfig`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_pending: Option<u32>,
+    },
+    /// Fleet Control (`config-v1`): the answer to `GetConfig`.
+    ConfigInfo {
+        handle: u32,
+        ok: bool,
+        #[serde(default)]
+        code: String,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        hash: String,
+        #[serde(default)]
+        config: serde_json::Value,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        pending: Option<u32>,
     },
     /// Fleet Control: the answer to every Fleet Control command.
     CommandResult { handle: u32, ok: bool, code: String, #[serde(default)] message: String },
@@ -227,7 +277,9 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
         | ControlCommand::CommandA { handle, .. } | ControlCommand::TestCmdB { handle, .. }
         | ControlCommand::FleetPing { handle } | ControlCommand::CheckUpdate { handle }
         | ControlCommand::StartUpdate { handle, .. } | ControlCommand::SetMaintenance { handle, .. }
-        | ControlCommand::RestartStation { handle, .. } => {
+        | ControlCommand::RestartStation { handle, .. } | ControlCommand::GetConfig { handle }
+        | ControlCommand::SetConfig { handle, .. } | ControlCommand::ConfirmConfig { handle }
+        | ControlCommand::RollbackConfig { handle } => {
             *handle = fresh_handle;
             Some(*handle)
         }
@@ -250,6 +302,8 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
             ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. } | ControlCommand::FleetPing { .. }
                 | ControlCommand::CheckUpdate { .. } | ControlCommand::StartUpdate { .. }
                 | ControlCommand::SetMaintenance { .. } | ControlCommand::RestartStation { .. }
+                | ControlCommand::GetConfig { .. } | ControlCommand::SetConfig { .. }
+                | ControlCommand::ConfirmConfig { .. } | ControlCommand::RollbackConfig { .. }
         ) => {
             let handle = assigned_handle.or_else(|| command.handle()).expect("assigned above");
             let (tx, rx) = oneshot::channel();
@@ -338,7 +392,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
     };
 
-    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities } = &response {
+    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities, config_hash, config_pending } = &response {
         let hello = crate::fleet::Hello {
             protocol: *protocol, version: version.clone(), brew_login: brew_login.clone(), mcc: *mcc, mnc: *mnc,
             fleet_control: *fleet_control, capabilities: capabilities.clone(),
@@ -359,6 +413,9 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         if changed {
             state.monitor.emit("fleet_changed", serde_json::json!({"id": id, "fleet_control": fleet_control}));
         }
+        if *fleet_control {
+            crate::fleet_config::after_hello(state, id, config_hash.clone(), *config_pending);
+        }
         return;
     }
     if let ControlResponse::UpdateProgress { stage, percent, message, version, .. } = &response {
@@ -377,7 +434,8 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             if let Some(tx) = session.pending_ambience.remove(issi) { let _ = tx.send(response); }
         }
         ControlResponse::CommandAResponse { handle, .. } | ControlResponse::SendSdsResponse { handle, .. }
-        | ControlResponse::CommandResult { handle, .. } | ControlResponse::UpdateInfo { handle, .. } => {
+        | ControlResponse::CommandResult { handle, .. } | ControlResponse::UpdateInfo { handle, .. }
+        | ControlResponse::ConfigInfo { handle, .. } => {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
         ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } => {}

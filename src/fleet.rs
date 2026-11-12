@@ -68,6 +68,9 @@ pub struct Station {
     /// A restart / reboot was sent and the station is not back yet, phase 3.
     #[serde(default)]
     pub restart: Option<RestartInfo>,
+    /// Config copy, local changes, pending and running changes (`config-v1`), phases 4/5.
+    #[serde(default)]
+    pub cfg: crate::fleet_config::StationConfig,
 }
 
 /// Maintenance flag of a station (the station's own copy runs out at the same time).
@@ -197,6 +200,8 @@ struct File {
 pub struct Fleet {
     path: Option<PathBuf>,
     data: File,
+    /// Open edit pages per station (not kept over a restart), phase 5.
+    pub edits: std::collections::HashMap<String, crate::fleet_config::EditSession>,
 }
 
 /// Name for log lines: the name given to the station on this server, else its
@@ -213,7 +218,7 @@ impl Fleet {
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| serde_json::from_slice::<File>(&b).ok())
             .unwrap_or_default();
-        let mut fleet = Self { path, data };
+        let mut fleet = Self { path, data, edits: Default::default() };
         fleet.prune(now_ms);
         if let Some(job) = fleet.data.job.as_mut() {
             job.after_restart();
@@ -236,9 +241,24 @@ impl Fleet {
         self.data.log.iter().rev().cloned().collect()
     }
 
-    #[cfg(test)]
     pub fn get(&self, id: &str) -> Option<&Station> {
         self.data.stations.get(id)
+    }
+
+    /// Change one station and save; `None` when it is not listed.
+    pub fn with_station<R>(&mut self, id: &str, f: impl FnOnce(&mut Station) -> R) -> Option<R> {
+        let r = f(self.data.stations.get_mut(id)?);
+        self.save();
+        Some(r)
+    }
+
+    /// A change log line about station `id` (its label from `names`).
+    pub fn log_station(&mut self, id: &str, user: Option<&str>, kind: &str, text: impl FnOnce(&str) -> String, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) {
+        let brew = self.data.stations.get(id).and_then(|s| s.brew_login.clone());
+        let label = label(names, id, brew.as_deref());
+        let text = text(&label);
+        self.push(now_ms, id, label, user, kind, text);
+        self.save();
     }
 
     /// Drops log entries older than 90 days.
@@ -301,6 +321,7 @@ impl Fleet {
             progress: entry.as_ref().and_then(|s| s.progress.clone()),
             maintenance: entry.as_ref().and_then(|s| s.maintenance.clone()),
             restart: None,
+            cfg: entry.as_ref().map(|s| s.cfg.clone()).unwrap_or_default(),
         };
         if let Some(r) = entry.as_ref().and_then(|s| s.restart.as_ref()) {
             let secs = now_ms.saturating_sub(r.at_ms) / 1000;
@@ -569,6 +590,8 @@ struct StationView {
     other_source: bool,
     /// Online and can take a live update (`update-live-v1`).
     live: bool,
+    /// Config state for the list (the copy itself is asked per station).
+    config: serde_json::Value,
 }
 
 /// `GET /api/fleet` (Fleet Control visibility): the listed stations, the change
@@ -592,7 +615,8 @@ pub async fn api_list(
             updatable: fleet.updatable(&s.id),
             live: fleet.live_capable(&s.id),
             other_source: s.check.as_ref().is_some_and(|c| !c.repo.is_empty() && (!same_repo(&c.repo, &ref_repo) || c.branch != ref_branch)),
-            station: s,
+            config: crate::fleet_config::list_summary(&s.cfg),
+            station: Station { cfg: Default::default(), ..s },
         })
         .collect();
     axum::Json(serde_json::json!({
@@ -956,6 +980,8 @@ pub async fn run_updates(state: std::sync::Arc<crate::state::AppState>) {
             let names = crate::control::station_names(&state);
             state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_stations(now_ms(), &|k| names.get(k).cloned());
         }
+        // Config changes (phase 5): confirm, alarm, pending changes, edit pages.
+        crate::fleet_config::tick(&state).await;
         let starts = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_job(now_ms());
         for s in starts {
             let state = state.clone();

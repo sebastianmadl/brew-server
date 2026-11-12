@@ -4,6 +4,21 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phases 4/5 (station config).** Fleet Control → **Edit**
+  opens one page per station (back arrow) with its Infrastructure settings:
+  Brew link, cells (carrier, colour code, LA, network, add / remove), Multi
+  Network, cell reselection, neighbours per cell (manual or from the server's
+  cell list), telemetry, command channel, update source and the
+  config file (read only, passwords and keys removed). **Apply to station**
+  writes the change; the station restarts and must be back on this server
+  (and on Brew) within 180 s, else it restores its old config by itself;
+  **Undo** in between. Offline stations get the change as pending, applied at
+  their next login. The server keeps a copy of each station's config; a
+  station edited locally shows "Config differs from server copy" and asks to
+  import its config or apply the server's. The station is in maintenance
+  while the page is open. Fleet Control management may change all of it (visibility gets no edit
+  page). Needs FlowStation with `config-v1`. See docs/Fleet-Control.md
+  section 10.
 - **Fleet Control: progress bar for the whole run.** The "Update run" card
   shows the progress of the whole run in %: each station counts the same,
   with its build progress while it builds and its full share once it is

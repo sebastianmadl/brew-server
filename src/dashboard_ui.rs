@@ -480,7 +480,8 @@ const PAGES=[
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 // Pages this login sees (Server settings -> Users): an admin all of them, any other login the ones
 // ticked for it, someone not logged in the Viewer pages. The server refuses the rest anyway.
-const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p)));
+// The station config page (Fleet Control -> Edit) goes with the Fleet Control page.
+const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'?'fleet':p)));
 const canAny=(...ps)=>ps.some(can);
 // A read route this login may ask (whoami 'allowed'); asking others would only be refused.
 const mayGet=u=>D.who.admin||(D.who.allowed||[]).includes(u.split('?')[0]);
@@ -579,8 +580,9 @@ function show(p){
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
   if(UI.navKey!==navKey())buildNav();
   UI.page=p;document.body.classList.remove('sbopen');
-  document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===p));
-  document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===p));
+  const navP=p==='fleetcfg'?'fleet':p;
+  document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===navP));
+  document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===navP));
   $('title').textContent=PG[p][1];
   document.title=PG[p][1]+' · '+document.querySelector('.bname').textContent;
   const emb=PG[p][4];
@@ -1033,7 +1035,7 @@ R.control=()=>{
 const v=id=>($(id)||{}).value||'';
 
 /* ---------- Fleet Control (docs/Fleet-Control.md) ---------- */
-const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i'],log_clear:['Cleared','i'],maintenance:['Maintenance','w'],restart:['Restart','b'],restart_alarm:['Alarm','d']};
+const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i'],log_clear:['Cleared','i'],maintenance:['Maintenance','w'],restart:['Restart','b'],restart_alarm:['Alarm','d'],config:['Config','i'],config_alarm:['Alarm','d']};
 const FLEET_STAGE={download:'Download',build:'Build',install:'Installing',restart:'Restarting',up_to_date:'Up to date',failed:'Failed'};
 if(!UI.fsel)UI.fsel=new Set();
 const fleetJobOn=f=>!!(f&&f.job&&!f.job.finished_ms);
@@ -1093,10 +1095,10 @@ R.fleet=()=>{
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
      ${m?`<td><input type="checkbox" class="chk" aria-label="Tick ${esc(x.label)}" ${UI.fsel.has(x.id)?'checked':''} onclick="fleetSel('${esc(x.id)}',this.checked)"></td>`:''}
      <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
-     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
+     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
      <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
-     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
    ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm'||e.kind==='restart_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
@@ -1174,6 +1176,348 @@ async function fleetCancel(id){
   if(!confirm(id?'Take this station out of the update run?':'Cancel the update run? No further station starts; a station that is updating finishes.'))return;
   try{await postJ('/api/fleet/update/cancel',id?{id}:{});fleetReload();}catch(e){alert(e.message);}
 }
+/* ---------- Fleet Control: station config (phases 4/5, docs/Fleet-Control.md 10) ---------- */
+// Own page per station (back arrow to Fleet Control). The station's settings as its own
+// Infrastructure page shows them; every change is marked, applied in one go (restart, 180 s to
+// confirm, else the station rolls back) or kept as pending for an offline station.
+PG.fleetcfg=['fleetcfg','Fleet Control','fleet','Infrastructure'];
+const FC_RESEL=[['fast_threshold_db','Fast threshold (dB)'],['slow_threshold_db','Slow threshold above fast (dB)'],['fast_hysteresis_db','Fast hysteresis (dB)'],['slow_hysteresis_db','Slow hysteresis (dB)']];
+const FC_SVC=[['registration','registration'],['deregistration','deregistration'],['priority_cell','priority cell'],['no_minimum_mode','no minimum mode'],['migration','migration'],['system_wide_services','system wide'],['voice_service','voice'],['circuit_mode_data_service','circuit data'],['sndcp_service','SNDCP'],['aie_service','AIE'],['advanced_link','advanced link']];
+const FC_TYPES=['0 · not supported','1 · type 1 (seamless)','2 · type 2','3 · type 3'];
+const fcClone=o=>o==null?o:JSON.parse(JSON.stringify(o));
+const fcSame=(a,b)=>JSON.stringify(a??null)===JSON.stringify(b??null);
+function fcGet(o,p){return p.split('.').reduce((x,k)=>x==null?undefined:x[k],o);}
+function fcPut(o,p,v){const ks=p.split('.');let x=o;for(const k of ks.slice(0,-1)){if(x[k]==null)x[k]=/^\d+$/.test(k)?[]:{};x=x[k];}x[ks[ks.length-1]]=v;}
+// Open the page for one station.
+function fleetEdit(id){
+  UI.fc={id,data:null,orig:null,v:null,nb:{cell:0,edit:null,pick:false},add:false,conn:null};
+  show('fleetcfg');fcLoad(true);
+  getJ('/api/connections').then(c=>{if(UI.fc&&UI.fc.id===id){UI.fc.conn=c;if(UI.page==='fleetcfg')render(true);}}).catch(()=>{});
+}
+async function fcLoad(fresh){
+  const fc=UI.fc;if(!fc)return;
+  try{const d=await getJ('/api/fleet/config?id='+encodeURIComponent(fc.id));if(UI.fc!==fc)return;
+    const was=fc.data&&fc.data.cfg.copy&&fc.data.cfg.copy.hash;
+    fc.data=d;const copy=d.cfg.copy;
+    // A new copy (first load, confirmed change, import): start editing from it.
+    if(fresh||!fc.v||(copy&&copy.hash!==was&&!fcDirty())){fc.orig=copy?copy.config:null;fc.v=fcClone(fc.orig);fc.nb.edit=null;}
+    if(fresh){fcHeartbeat(true);if(d.cfg.drift)fcDriftDlg();}
+  }catch(e){fc.err=e.message;}
+  if(UI.page==='fleetcfg')render(true);
+}
+// Maintenance while the page is open: a heartbeat every minute, off when the page is left.
+function fcHeartbeat(on){
+  clearInterval(UI.fcBeat);
+  const fc=UI.fc;if(!fc)return;
+  if(!on){fetch('/api/fleet/edit',{method:'POST',keepalive:true,headers:{'content-type':'application/json','x-brew-ui':'1'},body:JSON.stringify({id:fc.id,open:false})}).catch(()=>{});return;}
+  const beat=()=>postJ('/api/fleet/edit',{id:fc.id,open:true}).catch(()=>{});
+  beat();UI.fcBeat=setInterval(()=>{if(UI.page==='fleetcfg'&&UI.fc===fc)beat();},60000);
+}
+// Leaving the page (other page, closed tab) ends the edit session.
+{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';return show0(p);};}
+window.addEventListener('pagehide',()=>{if(UI.page==='fleetcfg'&&UI.fc)fcHeartbeat(false);});
+// Follow a running change every 3 s.
+setInterval(()=>{const fc=UI.fc;if(UI.page==='fleetcfg'&&fc&&fc.data&&(fc.data.cfg.apply||(!fc.data.cfg.copy&&fc.data.online))&&!$('scrim').classList.contains('on'))fcLoad(false);},3000);
+
+// ---- the changes: request body for SetConfig + one line per setting ----
+function fcNetBody(n){return {name:n.name,mcc:n.mcc,mnc:n.mnc,via:n.mode==='via'?(n.via||''):'',brew:n.mode==='core'&&n.brew?{host:n.brew.host||'',port:n.brew.port||443,tls:n.brew.tls!==false,username:n.brew.username,password:n.brew.password||''}:null};}
+function fcLinkBody(l){if(!l)return {enabled:false,host:''};const b={enabled:l.enabled!==false,host:l.host||'',port:l.port||443,use_tls:!!l.use_tls,username:l.username||'',password:l.password||''};if('site_name' in l){b.site_name=l.site_name||'';b.latitude=l.latitude??null;b.longitude=l.longitude??null;}return b;}
+const fcStrip=o=>{if(o==null||typeof o!=='object')return o;const c=Array.isArray(o)?o.map(fcStrip):{};if(!Array.isArray(o))for(const k in o)if(!['password','password_set','server_check','link_up','configured','extensions','fleet_control'].includes(k))c[k]=fcStrip(o[k]);return c;};
+const fcShow=v=>v==null||v===''?'—':typeof v==='boolean'?(v?'on':'off'):typeof v==='object'?JSON.stringify(v):String(v);
+function fcDiff(o,v){
+  const body={},lines=[];if(!o||!v)return {body,lines};
+  const line=(what,a,b)=>lines.push(`${what}: ${fcShow(a)} → ${fcShow(b)}`);
+  // Cells (radio, LA, network, neighbours), added and removed cells.
+  const cells=[];
+  for(const c of v.cells){const oc=o.cells.find(x=>x.id===c.id);if(!oc)continue;
+    if((v.cells_remove||[]).includes(c.id))continue;
+    const e={id:c.id};const name=`Cell ${c.id}`;
+    if(c.main_carrier!==oc.main_carrier){e.main_carrier=c.main_carrier;line(name+' carrier',oc.main_carrier,c.main_carrier);}
+    if(c.colour_code!==oc.colour_code){e.colour_code=c.colour_code;line(name+' colour code',oc.colour_code,c.colour_code);}
+    const la=c.primary?c.location_area:(c.location_area_own?c.location_area:null),ola=oc.primary?oc.location_area:(oc.location_area_own?oc.location_area:null);
+    if(la!==ola){e.location_area=la;line(name+' LA',ola??'as cell 0',la??'as cell 0');}
+    if(v.networks_explicit&&c.network!==oc.network){e.network=c.network;line(name+' network',oc.network,c.network);}
+    const nb=c.own_list||c.primary?c.neighbours:null,onb=oc.own_list||oc.primary?oc.neighbours:null;
+    if(!fcSame(nb,onb)){e.neighbours=nb;line(name+' neighbours',(onb||[]).length+' entries',nb==null?'station cells only':nb.length+' entries');}
+    if(Object.keys(e).length>1)cells.push(e);}
+  if(cells.length)body.cells=cells;
+  if((v.cells_remove||[]).length){body.cells_remove=v.cells_remove;v.cells_remove.forEach(id=>lines.push(`Cell ${id}: removed`));}
+  if((v.cells_new||[]).length){body.cells_add=v.cells_new.map(c=>({device:c.device,main_carrier:c.main_carrier,colour_code:c.colour_code??null,location_area:c.location_area??null}));v.cells_new.forEach(c=>lines.push(`New cell: carrier ${c.main_carrier} on ${c.device}`));}
+  // Reselection and presence.
+  if(!fcSame(v.reselect,o.reselect)){body.reselect=v.reselect;FC_RESEL.forEach(([k,l])=>{if(v.reselect[k]!==o.reselect[k])line(l,o.reselect[k],v.reselect[k]);});}
+  if(v.rxlev_access_min_dbm!==o.rxlev_access_min_dbm){body.rxlev_access_min_dbm=v.rxlev_access_min_dbm;line('Min. access level (dBm)',o.rxlev_access_min_dbm??'default -110',v.rxlev_access_min_dbm??'default -110');}
+  if(v.migration!==o.migration){body.migration=v.migration;line('Migration',o.migration,v.migration);}
+  if(v.presence_check_secs!==o.presence_check_secs){body.presence_check_secs=v.presence_check_secs;line('Presence check (s)',o.presence_check_secs,v.presence_check_secs);}
+  // Multi Network.
+  if(v.multi_network_enabled!==o.multi_network_enabled){body.multi_network_enabled=v.multi_network_enabled;line('Multi Network',o.multi_network_enabled,v.multi_network_enabled);}
+  if(v.multi_network_enabled){const nets=[];
+    for(const n of v.networks){const on=o.networks.find(x=>x.name===n.name);
+      if(n.removed){if(on){nets.push({name:n.name,remove:true});lines.push(`Network ${n.name}: removed`);}continue;}
+      if(!on||!fcSame(fcStrip(n),fcStrip(on))||(n.brew&&n.brew.password)){nets.push(fcNetBody(n));lines.push(on?`Network ${n.name}: changed`:`Network ${n.name}: added (${n.mcc}/${n.mnc})`);}}
+    if(nets.length)body.networks=nets;}
+  // Links.
+  if(!v.networks_explicit&&v.brew&&v.brew.link){const b=v.brew.link,ob=o.brew.link||{};
+    if(!fcSame(fcStrip(b),fcStrip(ob))||b.password){body.brew={host:b.host||'',port:b.port||443,tls:b.tls!==false,username:b.username,password:b.password||''};
+      ['host','port','username','tls'].forEach(k=>{if(b[k]!==ob[k])line('Brew '+k,ob[k],b[k]);});if(b.password)lines.push('Brew password: changed');}}
+  if(!v.networks_explicit&&v.net_info&&!fcSame(v.net_info,o.net_info)){body.net_info=v.net_info;line('MCC / MNC',`${o.net_info.mcc}/${o.net_info.mnc}`,`${v.net_info.mcc}/${v.net_info.mnc}`);}
+  for(const [k,l] of [['telemetry','Telemetry'],['command','Control channel']]){
+    const a=v[k],b=o[k];
+    if(!fcSame(fcStrip(a),fcStrip(b))||(a&&a.password)){body[k]=fcLinkBody(a);
+      if(!a)lines.push(l+': removed');else if(!b)lines.push(l+': set up ('+(a.host||'')+')');
+      else{for(const f of ['enabled','host','port','use_tls','username','site_name','latitude','longitude'])if(a[f]!==b[f]&&(f in a))line(l+' '+f.replace('_',' '),b[f],a[f]);if(a.password)lines.push(l+' password: changed');}}}
+  // Update source.
+  if(v.ota&&(v.ota.channel!==o.ota.channel||(v.ota.channel==='custom'&&(v.ota.repo!==o.ota.repo||v.ota.branch!==o.ota.branch)))){
+    body.ota={channel:v.ota.channel,repo:v.ota.repo||null,branch:v.ota.branch||null};
+    line('Update source',o.ota.channel==='custom'?`${o.ota.repo} (${o.ota.branch})`:o.ota.channel,v.ota.channel==='custom'?`${v.ota.repo} (${v.ota.branch})`:v.ota.channel);}
+  return {body,lines};
+}
+function fcDirty(){const fc=UI.fc;return !!(fc&&fc.v&&fc.data&&Object.keys(fcDiff(fc.orig,fc.v).body).length);}
+function fcCount(){const fc=UI.fc;if(!fc||!fc.v)return;const n=fcDiff(fc.orig,fc.v).lines.length;const e=$('fc-count');if(e)e.textContent=n?n+(n===1?' change':' changes'):'no changes';
+  ['fc-apply','fc-discard'].forEach(id=>{const b=$(id);if(b)b.disabled=!n;});}
+// An input changed: store it, mark it, count again (no redraw, so typing goes on).
+function fcIn(el){
+  const fc=UI.fc;const p=el.dataset.p,t=el.dataset.t||'str';let val;
+  if(t==='bool')val=el.getAttribute('aria-checked')!=='true';
+  else if(t==='int'||t==='intn'){const s=el.value.trim();val=s===''?(t==='intn'?null:undefined):parseInt(s,10);if(val!==null&&val!==undefined&&!isFinite(val))val=undefined;}
+  else if(t==='num'){const s=el.value.trim();val=s===''?null:parseFloat(s);}
+  else val=el.value;
+  if(val===undefined&&t==='int')return;
+  if(t==='bool')el.setAttribute('aria-checked',val);
+  fcPut(fc.v,p,val);
+  if(p.endsWith('.location_area')&&/^cells\.\d+\./.test(p)){const c=fcGet(fc.v,p.replace(/\.location_area$/,''));if(c&&!c.primary)c.location_area_own=val!=null;}
+  const o=fcGet(fc.orig,p);el.classList.toggle('chg',!fcSame(o,val)&&!(t==='str'&&p.endsWith('password')&&!val));
+  if(el.dataset.redraw)render(true);else fcCount();
+}
+// Field helpers: value from the working copy, marked when it differs from the station's.
+function fcF(p,t,extra,w){const fc=UI.fc;const v=fcGet(fc.v,p),o=fcGet(fc.orig,p);const chg=!fcSame(v,o)&&!(p.endsWith('password')&&!v);
+  return `<input class="f${chg?' chg':''}" data-p="${p}" data-t="${t||'str'}" value="${esc(v??'')}" oninput="fcIn(this)" style="width:${w||'100%'}" ${extra||''}>`;}
+function fcSel(p,opts,t,extra,w){const fc=UI.fc;const v=fcGet(fc.v,p),o=fcGet(fc.orig,p);
+  return `<select class="f${fcSame(v,o)?'':' chg'}" data-p="${p}" data-t="${t||'str'}" onchange="fcIn(this)" style="width:${w||'100%'}" ${extra||''}>${opts.map(([k,l])=>`<option value="${esc(k??'')}" ${String(k??'')===String(v??'')?'selected':''}>${esc(l)}</option>`).join('')}</select>`;}
+function fcTog(p,extra){const fc=UI.fc;const v=!!fcGet(fc.v,p),o=!!fcGet(fc.orig,p);return `<button class="tog${v===o?'':' chg'}" role="switch" aria-checked="${v}" data-p="${p}" data-t="bool" onclick="fcIn(this)" ${extra||''}></button>`;}
+const fcFld=(l,ctl)=>`<div><label class="l">${l}</label>${ctl}</div>`;
+const fcGrid=(...f)=>`<div class="fcg">${f.join('')}</div>`;
+const fcHelp=t=>`<div class="mut" style="font-size:12.5px;padding:10px 18px 0">${t}</div>`;
+const fcCard=(title,acts,body,id)=>`<div class="card"${id?` id="${id}"`:''}><div class="ch"><h2>${title}</h2>${acts||''}</div>${body}</div>`;
+const fcDb=(a,b,s)=>{const o=[];for(let x=a;x<=b;x+=s)o.push([x,String(x)]);return o;};
+
+R.fleetcfg=()=>{
+  const fc=UI.fc;if(!fc)return loading;
+  const d=fc.data;if(!d)return fc.err?`<div class="card"><div class="empty">${esc(fc.err)} <button class="btn" onclick="show('fleet')">Back</button></div></div>`:loading;
+  const c=d.cfg,v=fc.v,o=fc.orig;
+  const back=`<button class="btn ic" title="Back to Fleet Control" aria-label="Back to Fleet Control" onclick="show('fleet')">‹</button>`;
+  const maint=d.maintenance&&d.maintenance.until_ms>Date.now()?`<span class="chip w" title="${d.edit&&d.edit.auto_maintenance?'Set while this page is open, refreshed every minute, off when you leave':'Set by hand'}">Maintenance · ${esc(d.maintenance.by||'')}${d.edit&&d.edit.auto_maintenance?' (editing)':''}</span>`:'';
+  const sync=!c.copy?'<span class="chip i">no copy yet</span>':c.drift?'<span class="chip d">differs from the station</span>':`<span class="chip i" title="Config hash; read ${esc(tmd(c.copy.at_ms))}">Config ${esc(c.copy.hash.slice(0,6))} · ${c.reported_hash===c.copy.hash?'in sync':d.online?'checking':'as last seen'}</span>`;
+  const busy=!!c.apply;
+  const locked=busy||!!c.drift||!d.capable||!v;
+  const n=v?fcDiff(o,v).lines.length:0;
+  const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">${esc(d.label)} <span class="mut m" style="font-size:12px;font-weight:500">${esc(d.id)}</span></h2>
+    ${d.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(d.last_seen_ms)}</span>`}${maint}${sync}
+    <span class="sp"></span>${locked?'':`<span class="mut" id="fc-count" style="font-size:12px">${n?n+(n===1?' change':' changes'):'no changes'}</span>
+    <button class="btn" id="fc-discard" ${n?'':'disabled'} onclick="fcReset()">Discard</button>
+    <button class="btn pri" id="fc-apply" ${n?'':'disabled'} onclick="fcApplyDlg()">${d.online?'Apply to station':'Save as pending'}</button>`}</div>
+    <div class="note">${ic('info')}<div>${!d.capable?'This station cannot read or change its config from here: it needs FlowStation with Fleet Control config (<code>config-v1</code>).':d.online
+      ?`While this page is open the station shows the red maintenance banner (refreshed every minute, off when you leave; it runs out by itself after ${3} min without this page). <b>Apply to station</b> checks the whole config on the station, saves the old one, writes the new one and restarts the service (about 20 s off the air). The change stays when the station is back on this server within ${d.confirm_secs} s (and on Brew, if it has a Brew login); otherwise the station restores the old config and restarts again.`
+      :`The station is offline (shown: the server copy from ${c.copy?esc(tmd(c.copy.at_ms)):'—'}). <b>Save as pending</b> keeps the change on the server; at the next login of the station it is applied (after a running call has ended), the station restarts and has ${d.confirm_secs} s to come back, else it restores its old config. If the config on the station changed in the meantime, nothing is applied and the change is shown as a conflict.`}${d.read_error?`<div style="color:var(--danger);margin-top:6px">Could not read the station now: ${esc(d.read_error)}</div>`:''}</div></div>${msgDiv('fc_top','padding:0 18px 12px')}</div>`;
+  let cards='';
+  if(c.apply){const a=c.apply;const back2=a.back_ms;const left=back2?Math.max(0,d.confirm_secs-Math.floor((Date.now()-back2)/1000)):null;
+    cards+=fcCard('Config change running',`<span class="chip b">${a.rollback_by!=null?'undoing':back2?'back · confirming':'station restarting'}</span><span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(a.at_ms))}${a.by?' · '+esc(a.by):''}</span>`,
+      `<div class="svc" style="font-size:13px">${back2?`The station is back with the new config; the server confirms it as soon as ${d.brew_login?'its Brew link is up':'it answers'}${left!=null?` (it rolls back by itself in ${left} s otherwise)`:''}.`:'The station restarts with the new config (about 20 s). If it does not come back in time it restores the old one by itself.'}</div>
+      <div class="svc" style="display:block;font-size:12.5px">${(a.summary||[]).map(l=>`<div>${esc(l)}</div>`).join('')||'<span class="mut">no details</span>'}</div>
+      ${a.rollback_by==null&&d.online?`<div style="padding:12px 18px"><button class="btn danger" onclick="fcRollback()">Undo (old config back)</button></div>`:''}`);}
+  if(c.pending){const p=c.pending;
+    cards+=fcCard('Pending change',`${p.conflict?'<span class="chip d">conflict</span>':'<span class="chip w">waiting for the station</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">saved ${esc(tmd(p.at_ms))}${p.by?' · '+esc(p.by):''}</span>`,
+      `<div class="svc" style="display:block;font-size:12.5px">${(p.summary||[]).map(l=>`<div>${esc(l)}</div>`).join('')}</div>${p.message?`<div class="svc" style="font-size:12.5px;color:${p.conflict?'var(--danger)':'var(--text2)'}">${esc(p.message)}</div>`:''}
+      <div style="display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap"><button class="btn danger" onclick="fcDiscardPending()">Discard pending change</button>${p.conflict?'<span class="mut" style="font-size:12px;align-self:center">Discard it and make the change again on the station\'s current config.</span>':''}</div>`);}
+  if(c.drift)cards+=fcCard('Config changed on the station','<span class="chip d">differs</span>',`<div class="svc" style="font-size:13px">The config on the station is not the server copy. Nothing can be changed from here until you choose.</div><div style="padding:12px 18px"><button class="btn pri" onclick="fcDriftDlg()">Resolve…</button></div>`);
+  if(!v)return head+cards+`<div class="card"><div class="empty">${d.online&&d.capable?'Reading the config from the station…':'No copy of this station\'s config on the server yet: it is read at the station\'s next login.'}</div></div>`;
+  const dis=locked?'disabled':'';
+  const fieldset=html=>`<fieldset class="fcfs" ${dis}>${html}</fieldset>`;
+  const net=!v.networks_explicit;
+  // Brew link (classic config) and network.
+  let brew='';
+  if(net&&v.brew&&v.brew.link)brew=fcCard('Brew link',`${!d.online||c.apply?'':v.brew.link_up?'<span class="chip a">connected</span>':'<span class="chip i">not connected</span>'}`,`<div style="padding:12px 18px">${fcGrid(
+      fcFld('Brew server (host)',fcF('brew.link.host','str','autocomplete="off" spellcheck="false"')),fcFld('Port',fcF('brew.link.port','int','inputmode="numeric"')),
+      fcFld('Login (ISSI)',fcF('brew.link.username','int','inputmode="numeric"')),fcFld('Password',fcF('brew.link.password','str',`type="password" autocomplete="new-password" placeholder="${v.brew.link.password_set?'unchanged':'not set'}"`)),
+      fcFld('TLS',`<div style="padding-top:3px">${fcTog('brew.link.tls')}</div>`),fcFld('MCC',fcF('net_info.mcc','int','inputmode="numeric"')),fcFld('MNC',fcF('net_info.mnc','int','inputmode="numeric"')))}</div>`);
+  // Cells.
+  const netOpts=v.networks.filter(x=>!x.removed).map(x=>[x.name,`${x.name} (${x.mcc}/${x.mnc})`]);
+  const prim=v.cells.find(x=>x.primary)||{};
+  const rmv=v.cells_remove||[];
+  const cellRows=v.cells.map((cl,i)=>{const gone=rmv.includes(cl.id);
+    return `<tr${gone?' style="opacity:.45;text-decoration:line-through"':''}><td style="white-space:nowrap"><b>Cell ${cl.id}</b>${cl.primary?' ★':''}</td><td class="m">${esc(cl.global_id||'—')}</td><td class="m mut" style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${esc(cl.device||'')}">${esc(cl.device||'—')}</td>
+     <td>${fcF(`cells.${i}.main_carrier`,'int',`inputmode="numeric" ${cl.carrier_fixed?`disabled title="${esc(cl.carrier_fixed)}"`:''}`,'84px')}</td><td>${fcF(`cells.${i}.colour_code`,'int','inputmode="numeric"','64px')}</td>
+     <td>${cl.primary?fcF(`cells.${i}.location_area`,'int','inputmode="numeric"','78px'):fcF(`cells.${i}.location_area`,'intn',`inputmode="numeric" placeholder="${esc(prim.location_area)}"`,'78px')}</td>
+     <td>${v.networks_explicit?fcSel(`cells.${i}.network`,netOpts,'str','','170px'):`<span class="m">${v.mcc}/${v.mnc}</span>`}</td>
+     <td style="text-align:right">${cl.primary?'':gone?`<button class="btn" onclick="fcCellRemove(${cl.id},false)">Keep</button>`:`<button class="btn danger" onclick="fcCellRemove(${cl.id},true)">Remove</button>`}</td></tr>`;}).join('')
+    +(v.cells_new||[]).map((cl,i)=>`<tr><td><b>New</b> <span class="chip w">added</span></td><td class="mut">—</td><td class="m" style="font-size:12px">${esc(cl.device)}</td><td class="m">${cl.main_carrier}</td><td class="m">${cl.colour_code??'—'}</td><td class="m">${cl.location_area??'—'}</td><td></td><td style="text-align:right"><button class="btn" onclick="fcCellNewDrop(${i})">Drop</button></td></tr>`).join('');
+  const cells=fcCard('Cells and location areas',`<span class="cnt">${v.cells.length}</span><span class="sp"></span><button class="btn" ${dis} onclick="UI.fc.add=!UI.fc.add;render(true)">${ic('plus')}Add cell</button>`,
+    fcHelp('Same as on the station\'s Infrastructure page. A new carrier moves the cell\'s SDR frequencies with it. Empty LA on an extra cell = the LA of cell 0. Same LA on all cells: radios change cell without registering; own LA per cell: radios register on every change (TS 100 392-2 clause 18.3.4.7.1a).')+
+    `<div class="tw"><table><thead><tr><th>Cell</th><th>Global cell id</th><th>SDR</th><th>Carrier</th><th>CC</th><th>LA</th><th>Network</th><th></th></tr></thead><tbody>${cellRows}</tbody></table></div>
+    ${fc.add?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:12px 18px;border-top:1px solid var(--sep)">${fcFld('SDR device',`<input class="f" id="fc-nc-dev" placeholder="driver=plutosdr,uri=ip:192.168.3.1" style="width:260px">`)}${fcFld('Carrier',`<input class="f" id="fc-nc-car" inputmode="numeric" style="width:90px">`)}${fcFld('CC',`<input class="f" id="fc-nc-cc" inputmode="numeric" style="width:70px" placeholder="${esc(prim.colour_code)}">`)}${fcFld('LA',`<input class="f" id="fc-nc-la" inputmode="numeric" style="width:80px" placeholder="${esc(prim.location_area)}">`)}<button class="btn pri" onclick="fcCellAdd()">Add</button></div>`:''}`);
+  // Multi Network.
+  const mnOn=!!v.multi_network_enabled;
+  const nets=fcCard('Networks (Multi Network)',`<span class="sp"></span><span class="mut" style="font-size:12.5px">${mnOn?'On':'Off'}</span>${fcTog('multi_network_enabled','data-redraw="1"')}`,
+    fcHelp('A cell broadcasts exactly one network (MCC / MNC, TS 100 392-2 table 18.17); pick it per cell above. Own server: the network\'s own Brew link; via: through another network\'s Brew server; local: inside this station.'+(mnOn?'':' Switching Multi Network off turns the networks back into the classic config.'))+
+    (v.networks_explicit?`<div class="tw"><table><thead><tr><th>Name</th><th>MCC</th><th>MNC</th><th>Reached</th><th>Brew server</th><th></th></tr></thead><tbody>${v.networks.map((x,i)=>`<tr${x.removed?' style="opacity:.45;text-decoration:line-through"':''}><td><b>${esc(x.name)}</b>${o.networks.some(y=>y.name===x.name)?'':' <span class="chip w">new</span>'}</td><td>${fcF(`networks.${i}.mcc`,'int','inputmode="numeric"','74px')}</td><td>${fcF(`networks.${i}.mnc`,'int','inputmode="numeric"','86px')}</td>
+      <td>${x.mode==='core'?'<span class="chip a">own server</span>':x.mode==='via'?`<span class="chip b">via ${esc(x.via)}</span>`:'<span class="chip i">local</span>'}</td><td class="m">${x.mode==='core'&&x.brew?esc((x.brew.host||'')+':'+(x.brew.port||443)):'—'}</td>
+      <td style="text-align:right">${i===0?'':x.removed?`<button class="btn" onclick="fcNetRemove(${i},false)">Keep</button>`:`<button class="btn danger" onclick="fcNetRemove(${i},true)">Remove</button>`}</td></tr>`).join('')}</tbody></table></div>`:'')+
+    (mnOn?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:12px 18px">${fcFld('Name',`<input class="f" id="fc-nn-name" style="width:120px">`)}${fcFld('MCC',`<input class="f" id="fc-nn-mcc" inputmode="numeric" style="width:80px">`)}${fcFld('MNC',`<input class="f" id="fc-nn-mnc" inputmode="numeric" style="width:90px">`)}
+      ${fcFld('Reached',`<select class="f" id="fc-nn-via" style="width:150px" onchange="$('fc-nn-own').style.display=this.value==='@core'?'flex':'none'">${v.networks.filter(x=>!x.removed&&x.mode==='core').map(x=>`<option value="${esc(x.name)}">via ${esc(x.name)}</option>`).join('')}<option value="@core">own server</option><option value="@local">local</option></select>`)}
+      <span id="fc-nn-own" style="display:none;gap:8px;flex-wrap:wrap;align-items:flex-end">${fcFld('Brew server',`<input class="f" id="fc-nn-host" style="width:170px">`)}${fcFld('Port',`<input class="f" id="fc-nn-port" inputmode="numeric" value="443" style="width:80px">`)}${fcFld('Login',`<input class="f" id="fc-nn-user" inputmode="numeric" style="width:110px">`)}${fcFld('Password',`<input class="f" id="fc-nn-pass" type="password" autocomplete="new-password" style="width:120px">`)}</span>
+      <button class="btn" onclick="fcNetAdd()">${ic('plus')}Add network</button></div>${fcServerNets()}`:''));
+  // Reselection.
+  const rx=[[null,'default (-110)']].concat(fcDb(-125,-50,5));
+  const resel=`<details class="card fcdet"><summary class="ch"><h2>Cell reselection (advanced, all cells)</h2><span class="sp"></span><span class="mut" style="font-size:12px">Show / hide</span></summary><div style="padding:12px 18px">${fcGrid(
+    ...FC_RESEL.map(([k,l])=>fcFld(l,fcSel('reselect.'+k,fcDb(0,30,2),'int'))),
+    fcFld('Min. access level (dBm)',fcSel('rxlev_access_min_dbm',rx,'intn')),fcFld('Presence check after silence (s)',fcF('presence_check_secs','int','inputmode="numeric"')),
+    fcFld('Migration supported',`<div style="padding-top:3px">${fcTog('migration',mnOn?'disabled title="On while Multi Network is on"':'')}</div>`))}</div></details>`;
+  // Neighbours.
+  const ci=Math.min(fc.nb.cell,v.cells.length-1);const cell=v.cells[ci];
+  const own=cell.primary||cell.own_list;const list=own?cell.neighbours||[]:[];
+  const scells=(fc.conn&&fc.conn.cells||[]).filter(x=>x.station!==d.brew_login);
+  const onServer=nb=>scells.find(x=>x.carrier===nb.main_carrier_number&&(nb.main_carrier_number_extension==null||x.carrier_ext==null||x.carrier_ext===nb.main_carrier_number_extension)&&(nb.location_area==null||x.location_area===nb.location_area)&&(nb.mcc==null||x.mcc===nb.mcc));
+  const svcTxt=s=>FC_SVC.filter(([k])=>s&&s[k]).map(([,l])=>l).join(', ')||'—';
+  const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td>
+    <td>${sv?`<span class="chip a">${esc(sv.name)}</span>`:'<span class="chip w">not on the server</span>'}</td><td>${esc(FC_TYPES[nb.cell_reselection_types_supported]||'—')}</td><td class="mut" style="font-size:12px;max-width:220px">${esc(svcTxt(nb.bs_service_details))}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn" ${dis} onclick="fcNbEdit(${i})">Edit</button> <button class="btn danger" ${dis} onclick="fcNbDel(${i})">Remove</button></td></tr>`;}).join('')
+    +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
+  const nb=fcCard('Neighbour cells',`<span class="sp"></span><select class="f" style="min-width:110px" onchange="UI.fc.nb.cell=+this.value;UI.fc.nb.edit=null;UI.fc.nb.pick=false;render(true)">${v.cells.map((x,i)=>`<option value="${i}" ${i===ci?'selected':''}>Cell ${x.id}</option>`).join('')}</select>
+      <button class="btn" ${dis} onclick="fcNbNew(null)">${ic('plus')}Add manually</button><button class="btn pri" ${dis} onclick="UI.fc.nb.pick=!UI.fc.nb.pick;UI.fc.nb.edit=null;render(true)">${ic('plus')}Add from server list</button>`,
+    fcHelp('What the cell broadcasts in D-NWRK-BROADCAST (at most 7, TS 100 392-2 clause 18.5.17). The station\'s other cells are added automatically.')+
+    (cell.primary?'':`<div style="display:flex;align-items:center;gap:10px;padding:10px 18px 4px;font-size:13px"><button class="tog" role="switch" aria-checked="${!!cell.own_list}" ${dis} onclick="fcNbOwn()"></button> Own neighbour list for this cell</div>`)+
+    `<div class="tw"><table><thead><tr><th>ID</th><th>Carrier</th><th>LA</th><th>On the server</th><th>Reselection</th><th>Services</th><th></th></tr></thead><tbody>${nbRows||'<tr><td colspan="7" class="mut">No neighbours.</td></tr>'}</tbody></table></div>
+    ${fc.nb.pick?fcNbPicker(scells,list,d):''}${fc.nb.edit?fcNbEditor():''}`);
+  // Telemetry and control channel.
+  const link=(k,title,help)=>{const l=v[k];const ro=false;
+    if(!l)return fcCard(title,`<span class="chip i">not set up</span><span class="sp"></span><button class="btn" ${dis||ro?'disabled':''} onclick="fcLinkNew('${k}')">Set up</button>`,fcHelp(help)+'<div style="height:12px"></div>');
+    const lk=ro?'disabled':'';
+    return fcCard(title,`<span class="sp"></span><span class="mut" style="font-size:12.5px">Connect</span>${fcTog(k+'.enabled',lk)}`,
+      fcHelp(help)+`<div style="padding:12px 18px">${fcGrid(fcFld('Server (host)',fcF(k+'.host','str','autocomplete="off" spellcheck="false" '+lk)),fcFld('Port',fcF(k+'.port','int','inputmode="numeric" '+lk)),
+      fcFld('Username',fcF(k+'.username','str','autocomplete="off" spellcheck="false" '+lk)),fcFld('Password',fcF(k+'.password','str',`type="password" autocomplete="new-password" placeholder="${l.password_set?'unchanged':'not set'}" ${lk}`)),
+      fcFld('TLS (wss://)',`<div style="padding-top:3px">${fcTog(k+'.use_tls',lk)}</div>`),
+      ...(k==='telemetry'?[fcFld('Site name',fcF(k+'.site_name')),fcFld('Latitude',fcF(k+'.latitude','num','inputmode="decimal"')),fcFld('Longitude',fcF(k+'.longitude','num','inputmode="decimal"'))]:[]))}</div>`);};
+  const tel=link('telemetry','Telemetry','Where the station sends its telemetry (position, health).');
+  const cmd=link('command','Remote command / control','The channel this page works over. A wrong value here is caught by the rollback: the station goes back to the old values when it cannot reach this server with the new ones.');
+  // Update source.
+  const us=D.fleet&&D.fleet.update_source;const ov=v.ota||{};
+  const ota=fcCard('Update source',`<span class="sp"></span>${us?`<button class="btn" ${dis} onclick="fcOtaFromServer()" title="Server settings → Updates repo">Use the server's Updates repo</button>`:''}`,`<div style="padding:12px 18px">${fcGrid(
+    fcFld('Channel',fcSel('ota.channel',[['installed','installed (as installed)'],['stable','stable'],['beta','beta'],['custom','custom']],'str','data-redraw="1"')),
+    ...(ov.channel==='custom'?[fcFld('Repository',fcF('ota.repo','str','spellcheck="false"')),fcFld('Branch',fcF('ota.branch','str','spellcheck="false"'))]:[]))}
+    <div class="mut" style="font-size:12px;margin-top:8px">Now: <span class="m">${esc(o.ota.effective_repo||'—')}</span> (${esc(o.ota.effective_branch||'—')})${us?` · Server Updates repo: <span class="m">${esc(us.repo)}</span> (${esc(us.branch)})`:''}</div></div>`);
+  const raw=c.copy?`<details class="card fcdet"><summary class="ch"><h2>Config file (read only)</h2><span class="chip i">passwords and keys removed</span><span class="sp"></span><span class="mut" style="font-size:12px">${esc(c.copy.how)} ${esc(tmd(c.copy.at_ms))} · ${esc(c.copy.hash)}</span></summary><pre class="m fcraw">${esc(c.copy.text)}</pre></details>`:'';
+  const css=`<style>.f.chg,.tog.chg{border-color:var(--warn)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 25%,transparent)}.fcg{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px 18px}.fcfs{border:0;margin:0;padding:0;min-width:0;display:grid;gap:18px}.fcdet>summary{cursor:pointer;list-style:none}.fcdet>summary::-webkit-details-marker{display:none}.fcraw{margin:0;padding:12px 18px;font-size:12px;white-space:pre-wrap;max-height:420px;overflow:auto;border-top:1px solid var(--sep)}</style>`;
+  return css+head+cards+fieldset(brew+cells+nets+resel+nb+tel+cmd+ota)+raw;
+};
+// Networks of this server (Multi Network page), to fill in a new network.
+function fcServerNets(){const nets=D.nets&&D.nets.networks;if(!nets||!nets.length)return '';
+  return `<div class="mut" style="font-size:12px;padding:0 18px 12px">Networks of this server: ${nets.map(n=>`<a href="#" onclick="event.preventDefault();$('fc-nn-name').value='${esc(n.name)}';$('fc-nn-mcc').value='${n.mcc}';$('fc-nn-mnc').value='${n.mnc}'">${esc(n.name)} (${n.mcc}/${n.mnc})</a>`).join(', ')}: click one to fill in.</div>`;}
+function fcReset(){const fc=UI.fc;fc.v=fcClone(fc.orig);fc.nb.edit=null;fc.add=false;render(true);}
+function fcCellRemove(id,on){const v=UI.fc.v;v.cells_remove=(v.cells_remove||[]).filter(x=>x!==id);if(on)v.cells_remove.push(id);render(true);}
+function fcCellNewDrop(i){UI.fc.v.cells_new.splice(i,1);render(true);}
+function fcCellAdd(){const v=UI.fc.v;const num=id=>{const s=$(id).value.trim();return s===''?null:parseInt(s,10);};
+  const dev=$('fc-nc-dev').value.trim(),car=num('fc-nc-car');if(!dev||car==null||!(car>=0&&car<4096)){setMsg('fc_top','err','New cell: SDR device and carrier (0-4095) are needed');render(true);return;}
+  (v.cells_new=v.cells_new||[]).push({device:dev,main_carrier:car,colour_code:num('fc-nc-cc'),location_area:num('fc-nc-la')});UI.fc.add=false;render(true);}
+function fcNetRemove(i,on){UI.fc.v.networks[i].removed=on;render(true);}
+function fcNetAdd(){const v=UI.fc.v;const name=$('fc-nn-name').value.trim(),mcc=parseInt($('fc-nn-mcc').value,10),mnc=parseInt($('fc-nn-mnc').value,10),via=$('fc-nn-via').value;
+  if(!/^[A-Za-z0-9_-]+$/.test(name)||!isFinite(mcc)||!isFinite(mnc)){setMsg('fc_top','err','Network: name (letters, digits, _ -), MCC and MNC');render(true);return;}
+  if(v.networks.some(x=>x.name===name)){setMsg('fc_top','err','There is a network '+name+' already');render(true);return;}
+  const n={name,mcc,mnc,mode:via==='@core'?'core':via==='@local'?'local':'via',via:via.startsWith('@')?null:via};
+  if(n.mode==='core'){n.brew={host:$('fc-nn-host').value.trim(),port:parseInt($('fc-nn-port').value,10)||443,tls:true,username:parseInt($('fc-nn-user').value,10),password:$('fc-nn-pass').value};}
+  if(!v.networks_explicit){v.networks_explicit=true;if(v.networks[0]&&o0name(v.networks[0]))v.networks[0].name='home';}
+  v.networks.push(n);render(true);}
+const o0name=n=>n.name==='default';
+function fcLinkNew(k){UI.fc.v[k]={enabled:true,host:'',port:443,use_tls:true,username:'',password:'',password_set:false,...(k==='telemetry'?{site_name:'',latitude:null,longitude:null}:{})};render(true);}
+function fcOtaFromServer(){const us=D.fleet.update_source;UI.fc.v.ota=Object.assign({},UI.fc.v.ota,{channel:'custom',repo:us.repo,branch:us.branch});render(true);}
+// Neighbour list of the selected cell.
+function fcCellNow(){const fc=UI.fc;return fc.v.cells[Math.min(fc.nb.cell,fc.v.cells.length-1)];}
+function fcNbOwn(){const c=fcCellNow();c.own_list=!c.own_list;c.neighbours=c.own_list?(c.neighbours||[]):[];render(true);}
+function fcNbFreeId(c){const used=(c.neighbours||[]).map(n=>n.cell_identifier_ca).concat((c.siblings||[]).map(s=>s.cell_identifier_ca));let id=0;while(used.includes(id)&&id<31)id++;return id;}
+function fcNbNew(sc){const fc=UI.fc,c=fcCellNow();
+  const e={cell_identifier_ca:fcNbFreeId(c),cell_reselection_types_supported:2,neighbor_cell_synchronized:false,cell_load_ca:0,main_carrier_number:'',bs_service_details:Object.assign({},fc.v.service_details)};
+  if(sc){e.main_carrier_number=sc.carrier;if(sc.carrier_ext!=null)e.main_carrier_number_extension=sc.carrier_ext;e.location_area=sc.location_area;
+    if(sc.mcc!==fc.v.mcc||sc.mnc!==fc.v.mnc){e.mcc=sc.mcc;e.mnc=sc.mnc;}
+    if(sc.rxlev_access_min_dbm!=null)e.minimum_rx_access_level=(sc.rxlev_access_min_dbm+125)/5;
+    if(sc.ms_txpwr_max_dbm!=null)e.maximum_ms_transmit_power=(sc.ms_txpwr_max_dbm-10)/5;}
+  fc.nb.edit={idx:-1,e,from:sc?sc.name:null};fc.nb.pick=false;render(true);}
+function fcNbEdit(i){const c=fcCellNow();UI.fc.nb.edit={idx:i,e:fcClone(c.neighbours[i])};UI.fc.nb.pick=false;render(true);}
+function fcNbDel(i){const c=fcCellNow();c.neighbours.splice(i,1);if(!c.primary)c.own_list=true;UI.fc.nb.edit=null;render(true);}
+function fcNbPicker(scells,list,d){
+  const listed=sc=>list.some(nb=>nb.main_carrier_number===sc.carrier&&(nb.location_area==null||nb.location_area===sc.location_area));
+  const rows=scells.map((sc,i)=>{const back=(sc.neighbours||[]).some(n=>d.brew_login&&n.startsWith(d.brew_login+'/'));
+    return `<tr><td class="m">${esc(sc.name)}</td><td>${esc(sc.station)} ${sc.online===false?'<span class="st d" style="font-size:12px"><i></i></span>':'<span class="st" style="font-size:12px"><i></i></span>'}</td><td class="m">${sc.carrier}</td><td class="m">${sc.location_area}</td><td class="m">${sc.mcc}/${sc.mnc}</td><td>${back?'<span class="chip a">yes</span>':'<span class="chip i">no</span>'}</td>
+    <td style="text-align:right">${listed(sc)?'<span class="chip i">listed</span>':`<button class="btn pri" onclick="fcNbNew(UI.fc.pick[${i}])">Add</button>`}</td></tr>`;}).join('');
+  UI.fc.pick=scells;
+  return `<div style="margin:4px 18px 16px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);overflow:hidden"><div class="ch"><h2 style="font-size:13.5px">Add neighbour from the server list</h2><span class="sp"></span><button class="btn" onclick="UI.fc.nb.pick=false;render(true)">Close</button></div>
+    <div class="tw"><table><thead><tr><th>Cell</th><th>Station</th><th>Carrier</th><th>LA</th><th>Network</th><th>Lists ${esc(d.label)}</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="mut">No other cells on this server.</td></tr>'}</tbody></table></div>
+    <div class="mut" style="font-size:12px;padding:8px 18px 12px">Fills in carrier, LA, MCC/MNC, access level and MS power from what that cell broadcasts (cell directory); edit it afterwards like a manual entry. Both cells should list each other (clause 18.3.4.1).</div></div>`;}
+function fcNbEditor(){const ed=UI.fc.nb.edit,e=ed.e;
+  const num=(k,l,max,ph)=>fcFld(l,`<input class="f" data-k="${k}" inputmode="numeric" value="${esc(e[k]??'')}" placeholder="${ph||''}" style="width:100%" oninput="fcNbSet(this,${max})">`);
+  const sel=(k,l,opts)=>fcFld(l,`<select class="f" data-k="${k}" style="width:100%" onchange="fcNbSet(this,99)">${opts.map(([v,t])=>`<option value="${v??''}" ${String(e[k]??'')===String(v??'')?'selected':''}>${esc(t)}</option>`).join('')}</select>`);
+  const rxl=[[null,'not broadcast']].concat([...Array(16).keys()].map(i=>[i,(-125+5*i)+' dBm'])),txp=[[null,'not broadcast']].concat([1,2,3,4,5,6,7].map(i=>[i,(10+5*i)+' dBm']));
+  return `<div style="margin:4px 18px 16px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg3)"><div style="font-weight:650;margin-bottom:10px">${ed.idx<0?'New neighbour':'Neighbour '+e.cell_identifier_ca}${ed.from?` <span class="mut" style="font-weight:500">from ${esc(ed.from)}</span>`:''}</div>
+    ${fcGrid(num('cell_identifier_ca','Cell identifier (0-31)',31),num('main_carrier_number','Main carrier (0-4095)',4095),num('main_carrier_number_extension','Carrier extension (optional)',1023),
+      sel('cell_reselection_types_supported','Reselection types',FC_TYPES.map((t,i)=>[i,t])),sel('cell_load_ca','Cell load',[[0,'0'],[1,'1'],[2,'2'],[3,'3']]),num('location_area','Location area (optional)',16383),
+      num('mcc','MCC (optional)',1023),num('mnc','MNC (optional)',16383),sel('minimum_rx_access_level','Min. RX access level',rxl),sel('maximum_ms_transmit_power','Max. MS TX power',txp),
+      fcFld('Synchronised with this cell',`<div style="padding-top:3px"><button class="tog" role="switch" aria-checked="${!!e.neighbor_cell_synchronized}" onclick="UI.fc.nb.edit.e.neighbor_cell_synchronized=!UI.fc.nb.edit.e.neighbor_cell_synchronized;this.setAttribute('aria-checked',UI.fc.nb.edit.e.neighbor_cell_synchronized)"></button></div>`))}
+    <div class="mut" style="font-size:12px;margin:10px 0 6px">BS service details of the neighbour (table 18.26); missing flags are broadcast as "not supported".</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px">${FC_SVC.map(([k,l])=>`<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" class="chk" ${e.bs_service_details&&e.bs_service_details[k]?'checked':''} onchange="(UI.fc.nb.edit.e.bs_service_details=UI.fc.nb.edit.e.bs_service_details||{})['${k}']=this.checked"> ${l}</label>`).join('')}</div>
+    <div style="display:flex;gap:8px;margin-top:12px"><button class="btn pri" onclick="fcNbApply()">Apply</button><button class="btn" onclick="UI.fc.nb.edit=null;render(true)">Cancel</button></div></div>`;}
+function fcNbSet(el,max){const e=UI.fc.nb.edit.e,k=el.dataset.k,s=el.value.trim();if(s===''){delete e[k];return;}const n=parseInt(s,10);if(isFinite(n)&&n>=0&&n<=max)e[k]=n;}
+function fcNbApply(){const fc=UI.fc,ed=fc.nb.edit,c=fcCellNow();const e=ed.e;
+  if(e.cell_identifier_ca==null||e.main_carrier_number===''||e.main_carrier_number==null){setMsg('fc_top','err','Neighbour: cell identifier and main carrier are needed');render(true);return;}
+  const d=e.bs_service_details||{};e.bs_service_details=Object.fromEntries(Object.entries(d).filter(([,on])=>on));
+  ['main_carrier_number_extension','location_area','mcc','mnc','minimum_rx_access_level','maximum_ms_transmit_power'].forEach(k=>{if(e[k]==null||e[k]==='')delete e[k];});
+  c.neighbours=c.neighbours||[];
+  if(ed.idx>=0)c.neighbours[ed.idx]=e;else{if(c.neighbours.length>=7){setMsg('fc_top','err','At most 7 neighbours per cell (D-NWRK-BROADCAST)');render(true);return;}c.neighbours.push(e);}
+  if(!c.primary)c.own_list=true;fc.nb.edit=null;render(true);}
+// Apply / save as pending, with what changes.
+function fcApplyDlg(){
+  const fc=UI.fc,d=fc.data;const {lines}=fcDiff(fc.orig,fc.v);if(!lines.length)return;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${d.online?'Apply to':'Save for'} ${esc(d.label)}</h3></div><div class="sb">
+   <div class="tw" style="border:1px solid var(--border);border-radius:8px;max-height:280px;overflow:auto"><table><tbody>${lines.map(l=>`<tr><td style="font-size:12.5px">${esc(l)}</td></tr>`).join('')}</tbody></table></div>
+   ${d.online?`<label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fc-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Apply during a call <span class="mut" style="font-size:12px">(else refused while a call runs)</span></label>
+   <div class="mut" style="font-size:12.5px">The station checks the config, restarts its service (about 20 s off the air) and must be back on this server${d.brew_login?' and on Brew':''} within ${d.confirm_secs} s, else it restores the old config by itself.</div>`
+   :`<div class="mut" style="font-size:12.5px">The station is offline. The change is kept on the server and applied at the station's next login (after a running call), only if its config has not changed in the meantime.</div>`}
+   ${msgDiv('fca-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="fcApply()">${d.online?'Apply now':'Save as pending'}</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function fcApply(resolve){
+  const fc=UI.fc,d=fc.data;
+  const base=resolve?d.cfg.drift.hash:(d.cfg.copy&&d.cfg.copy.hash);
+  const from=resolve?d.cfg.drift.config:fc.orig,to=resolve?d.cfg.copy.config:fc.v;
+  const {body,lines}=fcDiff(from,to);
+  const call=$('fc-call');
+  try{const r=await postJ('/api/fleet/config/apply',{id:fc.id,base_hash:base,changes:body,summary:lines,during_call:!!(call&&call.getAttribute('aria-checked')==='true'),resolve:!!resolve});
+    fc.v=fcClone(fc.orig);fc.nb.edit=null;closeSheet();setMsg('fc_top','ok',r.pending?'Saved: applied at the station\'s next login':'Sent: the station restarts with the new config');await fcLoad(false);
+  }catch(e){setMsg(resolve?'fcd-msg':'fca-msg','err',e.message);}
+}
+async function fcRollback(){if(!confirm('Undo the change? The station restores its old config and restarts.'))return;
+  try{await postJ('/api/fleet/config/rollback',{id:UI.fc.id});setMsg('fc_top','ok','Undo sent');}catch(e){setMsg('fc_top','err',e.message);}fcLoad(false);}
+async function fcDiscardPending(){if(!confirm('Discard the pending change?'))return;
+  try{await postJ('/api/fleet/config/discard',{id:UI.fc.id});}catch(e){setMsg('fc_top','err',e.message);}fcLoad(false);}
+// The station's config differs from the server copy: import it or apply the copy.
+function fcDriftDlg(){
+  const fc=UI.fc,d=fc.data,c=d.cfg;if(!c.drift)return;
+  const {lines}=c.copy?fcDiff(c.drift.config,c.copy.config,true):{lines:[]};
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${esc(d.label)}: config changed on the station</h3></div><div class="sb">
+   <div style="font-size:13px">The config on the station is not the one this server last applied or read (seen ${esc(tmd(c.drift.at_ms))}). Until you choose, nothing on this station can be changed from here.</div>
+   <div class="tw" style="border:1px solid var(--border);border-radius:8px;max-height:240px;overflow:auto"><table><thead><tr><th>Station → server copy</th></tr></thead><tbody>${lines.map(l=>`<tr><td style="font-size:12.5px">${esc(l)}</td></tr>`).join('')||'<tr><td class="mut" style="font-size:12.5px">Only settings this page does not show differ (see the config file).</td></tr>'}</tbody></table></div>
+   <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fcd" value="import" checked style="margin-top:3px;accent-color:var(--accent)"><span><b>Import base station config to server</b><span class="mut" style="display:block;font-size:12px">The station's config becomes the server copy. Nothing changes on the station.</span></span></label>
+   <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fcd" value="apply" ${d.online&&lines.length?'':'disabled'} style="margin-top:3px;accent-color:var(--accent)"><span><b>Apply server config to base station</b><span class="mut" style="display:block;font-size:12px">The station goes back to the server copy (the settings above; passwords stay as they are on the station): restart, ${d.confirm_secs} s to come back, else rollback.${d.online?'':' Only while the station is online.'}</span></span></label>
+   ${msgDiv('fcd-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Later</button><button class="btn pri" onclick="fcDriftGo()">Continue</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function fcDriftGo(){const m=document.querySelector('input[name=fcd]:checked');if(!m)return;
+  if(m.value==='apply')return fcApply(true);
+  try{await postJ('/api/fleet/config/import',{id:UI.fc.id});closeSheet();setMsg('fc_top','ok','Station config imported');await fcLoad(true);}catch(e){setMsg('fcd-msg','err',e.message);}}
+// Fleet list: chip for the config state of a station.
+function fleetCfgChip(x){const c=x.config||{};
+  if(c.apply)return `<div><span class="chip b" title="Sent ${esc(tmd(c.apply))}">Config change running</span></div>`;
+  if(c.drift)return '<div><span class="chip d" title="The config on the station differs from the server copy">Config differs from server copy</span></div>';
+  if(c.pending)return `<div><span class="chip ${c.conflict?'d':'w'}" title="${c.conflict?'Not sent: the config on the station changed':'Applied at the next login'}">${c.conflict?'Pending change · conflict':'Pending change · '+c.pending+(c.pending===1?' setting':' settings')}</span></div>`;
+  return '';}
 // The Fleet Control page follows a running update every 3 s.
 setInterval(()=>{if(UI.page==='fleet'&&(fleetJobOn(D.fleet)||(D.fleet&&(D.fleet.stations||[]).some(x=>x.restart||fleetMaintOn(x))))&&!$('scrim').classList.contains('on'))fleetReload();},3000);
 async function fleetPing(id,sid){setMsg('fl_'+sid,'mut','Sending…');
@@ -2300,6 +2644,16 @@ mod tests {
             assert!(body.contains("sdsChip(") && body.contains("kindSel(") && body.contains("kindOk("), "{page} shows and filters the kind");
         }
         assert!(PAGE_HTML.contains("${sdsChip(s.protocol_id)?' '+sdsChip(s.protocol_id):''}"), "Overview shows the kind");
+    }
+
+    #[test]
+    fn fleet_management_edits_every_config_section() {
+        // Sebastian 2026-11-12: Fleet Control management changes everything, the control channel
+        // included; only clearing the change log is for admins.
+        let page = &PAGE_HTML[PAGE_HTML.find("function fcDiff(o,v){").unwrap()..];
+        let page = &page[..page.find("function fleetCfgChip(").unwrap()];
+        assert!(!page.contains("admin"), "no admin-only part on the config page");
+        assert!(PAGE_HTML.contains("${f.is_admin?`<button class=\"btn danger\""), "Clear stays admins only");
     }
 
     #[test]

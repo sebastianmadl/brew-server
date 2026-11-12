@@ -8,7 +8,9 @@ existing Basestation control channel (WebSocket, subprotocol
 new port.
 
 This document is the protocol and behaviour reference for phase 1
-(foundation) and phase 2 (remote update, section 8). Later phases add
+(foundation), phase 2 (remote update, section 8), phase 3 (maintenance and
+restart, section 9) and phases 4/5 (reading and changing the config,
+section 10). Later phases add
 commands to the same scheme; each new command is announced as a capability
 first, so older stations and servers keep working.
 
@@ -451,8 +453,8 @@ closed browser never leaves it on. The server keeps it in the Fleet file and
 sends it again (with the time left) when the station connects again, e.g.
 after a restart. The table shows a red chip "Maintenance · user · n min left".
 
-Phase 5 (config editing) will set it automatically while the edit dialog is
-open and refresh it while the dialog stays open.
+The config edit page (section 10) sets it automatically while it is open and
+refreshes it while it stays open.
 
 A live update (8.6) shows its own banner on the station ("Live system update:
 RF on!") without this flag.
@@ -478,3 +480,118 @@ as root.
 A station without `maintenance-v1` / `restart-v1` gets no buttons and the API
 refuses with 400; a phase 2 server never sends the new commands.
 
+## 10. Station config (phases 4/5, `config-v1`)
+
+The server reads each station's config, keeps a copy, and changes it with a
+safety net: the station writes the new config, restarts and must be back on
+this server (and on Brew, if it has a Brew login) within **180 s**, else it
+restores the old config by itself. Keys (`[security]`, TEA/SCK) are never
+read or written; passwords are never sent to the server.
+
+### 10.1 Messages
+
+The hello carries the config state (absent from older stations):
+
+```json
+{"StationHello": {"...": "...", "config_hash": "211602a72878a9a4", "config_pending": 170}}
+```
+
+`config_hash`: md5 (16 hex) of the parsed config, re-serialized, without
+`[command] fleet_control` (comments and layout do not count).
+`config_pending`: seconds left of a change waiting for confirmation, absent
+when none waits. The station sends a new hello when either changes (checked
+every 5 s), so an edit on the station shows up on the server.
+
+```json
+{"GetConfig": {"handle": 5}}
+{"SetConfig": {"handle": 6, "base_hash": "211602a72878a9a4", "changes": {"cells": [{"id": 0, "location_area": 2}]}, "confirm_secs": 180, "during_call": false, "by": "admin"}}
+{"ConfirmConfig": {"handle": 7}}
+{"RollbackConfig": {"handle": 8}}
+```
+
+- `GetConfig` → `ConfigInfo {handle, ok, code, message, hash, config, text,
+  pending}`: `config` is the station's Infrastructure view as JSON (cells, LA,
+  colour code, networks / Multi Network, neighbours per cell, reselection,
+  rxlev, migration, presence check, Brew link, telemetry, command channel, OTA
+  source) without passwords (`password_set` only); `text` is the config file
+  with passwords and keys replaced by `***`.
+- `SetConfig` → `CommandResult`: `ok` (written, restart in 3 s), `conflict`
+  (the config is not `base_hash` any more), `invalid` (the result does not
+  give a valid config, unknown keys are refused), `call_active`, `busy` (an
+  update runs or a change already waits), `fleet_control_off`. `changes`
+  holds only the changed sections; an empty password means "unchanged". The
+  station validates the whole config like its own dashboard does, saves the
+  old file as `<config>.fleet-backup` and notes the change in
+  `<config>.fleet-pending.json` before it writes the new one.
+- `ConfirmConfig` → `CommandResult`: `ok`, `not_pending`, `not_restarted`
+  (the process that wrote the change has not restarted yet: the hello it
+  re-announces before the restart already says "pending"; the server waits
+  for the hello after the restart).
+- `RollbackConfig` → `CommandResult`: `ok` (old config back, restart),
+  `not_pending`.
+
+The window runs from the restart (`written + 3 s + confirm_secs`, at least
+20 s after the boot). A watchdog armed at boot restores the backup and
+restarts when it runs out, so a change that cuts the station off (wrong
+server, login or network) undoes itself.
+
+### 10.2 Server behaviour
+
+- **Copy.** At the first hello with `config-v1` and whenever the reported hash
+  differs from the copy, the server reads the config. The copy is kept in the
+  Fleet file and shown when the station is offline.
+- **Difference.** A station whose config differs from the copy (edited on the
+  station) gets the chip "Config differs from server copy" and the alarm
+  `config_alarm` in the change log. Its edit page shows a dialog: **Import base
+  station config to server** (the station's config becomes the copy) or
+  **Apply server config to base station** (the station goes back to the copy,
+  passwords stay as they are on the station). Nothing is editable before that.
+- **Apply.** An online station gets `SetConfig` at once; when it is back with
+  `config_pending` and its Brew client (by Brew login) is connected, the
+  server sends `ConfirmConfig` (retried every 10 s). **Undo** in the running
+  card sends `RollbackConfig`. A station back on its old hash means a
+  rollback: ALARM in the change log (or "undone" after Undo).
+- **Pending (offline).** For an offline station the change is kept as
+  pending (one per station) and sent at its next login, once no call runs and
+  only if the station's config is still `base_hash`; otherwise it is marked
+  as conflict and not sent.
+- **Rights.** Fleet Control management changes every section, the command
+  channel (the channel Fleet Control itself works over) included; a wrong
+  value there is caught by the rollback. Fleet Control visibility gets no
+  edit page. Clearing the change log stays for admins.
+- **Maintenance.** While the edit page is open it sends a heartbeat every
+  minute; the station is in maintenance for 3 min per heartbeat ("editing
+  config"), off again when the page is left. Maintenance set by hand stays.
+- **Log.** Each change is logged with who, what (one line per setting, old →
+  new, passwords only "changed") and the outcome.
+
+### 10.3 Dashboard
+
+Fleet Control → **Edit** (or **Resolve…** when the config differs) opens one
+page per station with a back arrow: Brew link, cells (carrier, colour code,
+LA, network; add / remove), Multi Network, cell reselection, neighbours per
+cell (manual or picked from the server's cell directory), telemetry, command
+channel, update source and the config file (read only, passwords and
+keys removed). Changed fields are marked; **Apply to station** (online) or
+**Save as pending** (offline) shows the list of changes first.
+
+### 10.4 HTTP API (Fleet Control management)
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `GET /api/fleet/config?id=` | | station, copy, difference, pending, running change (reads fresh when online) |
+| `POST /api/fleet/config/apply` | `{id, base_hash, changes, summary, during_call, resolve}` | send or keep as pending |
+| `POST /api/fleet/config/discard` | `{id}` | drop the pending change |
+| `POST /api/fleet/config/import` | `{id}` | the station's config becomes the copy |
+| `POST /api/fleet/config/rollback` | `{id}` | Undo a running change |
+| `POST /api/fleet/edit` | `{id, open}` | edit page heartbeat / closed |
+
+`GET /api/fleet` gives each station a small `config` summary (`apply`,
+`drift`, `pending`, `conflict`, `copy`).
+
+### 10.5 Backwards compatibility
+
+New options need both a FlowStation and a server update: the station
+validates every key and refuses unknown ones. A station without `config-v1`
+gets no Edit button; an older server ignores the new hello fields and never
+sends the new commands.

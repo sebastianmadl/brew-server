@@ -168,6 +168,12 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/log/clear", axum::routing::post(crate::fleet::api_clear_log))
         .route("/api/fleet/maintenance", axum::routing::post(crate::fleet::api_maintenance))
         .route("/api/fleet/restart", axum::routing::post(crate::fleet::api_restart))
+        .route("/api/fleet/config", get(crate::fleet_config::api_get))
+        .route("/api/fleet/config/apply", axum::routing::post(crate::fleet_config::api_apply))
+        .route("/api/fleet/config/discard", axum::routing::post(crate::fleet_config::api_discard))
+        .route("/api/fleet/config/import", axum::routing::post(crate::fleet_config::api_import))
+        .route("/api/fleet/config/rollback", axum::routing::post(crate::fleet_config::api_rollback))
+        .route("/api/fleet/edit", axum::routing::post(crate::fleet_config::api_edit))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -295,7 +301,9 @@ fn need(path: &str) -> Need {
         "/sms-center" | "/api/sms-center" => &["sms"],
         "/ha" => &["ha"],
         "/api/fleet" => &["fleet"],
-        "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" | "/api/fleet/maintenance" | "/api/fleet/restart" => &["fleet_manage"],
+        "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" | "/api/fleet/maintenance" | "/api/fleet/restart"
+        | "/api/fleet/config" | "/api/fleet/config/apply" | "/api/fleet/config/discard" | "/api/fleet/config/import"
+        | "/api/fleet/config/rollback" | "/api/fleet/edit" => &["fleet_manage"],
         _ => return Need::Admin,
     })
 }

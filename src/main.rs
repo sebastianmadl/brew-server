@@ -17,6 +17,7 @@ mod emergency;
 mod federation;
 mod fedroute;
 mod fleet;
+mod fleet_config;
 mod fleet_update;
 mod fsnet;
 mod handover;
