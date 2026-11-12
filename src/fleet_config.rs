@@ -524,6 +524,60 @@ pub struct ApplyRequest {
     /// "Apply server config to base station" after a difference.
     #[serde(default)]
     pub resolve: bool,
+    /// The config editor's text: only what differs from the copy goes to the station.
+    #[serde(default)]
+    pub raw_text: Option<String>,
+}
+
+/// Single values that differ between the copy's text (`old`, secrets as `***`) and the edited
+/// text, as `raw` patches for `SetConfig` plus one line each. Tables are compared key by key,
+/// arrays element by element while the length stays. Hidden values cannot be written back.
+pub fn raw_patches(old: &str, new: &str) -> Result<(Vec<serde_json::Value>, Vec<String>), String> {
+    let old: toml::Value = toml::from_str(old).map_err(|e| format!("server copy does not parse: {e}"))?;
+    let new: toml::Value = toml::from_str(new).map_err(|e| format!("config file: {e}"))?;
+    let mut out = Vec::new();
+    diff_value(&mut Vec::new(), Some(&old), Some(&new), &mut out);
+    let mut patches = Vec::new();
+    let mut lines = Vec::new();
+    for (path, before, after) in out {
+        let name = path.iter().map(|s| s.as_str().map(str::to_owned).unwrap_or_else(|| s.to_string())).collect::<Vec<_>>().join(".");
+        let shown = |v: &Option<toml::Value>| v.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "—".into());
+        if after.as_ref().is_some_and(|v| v.to_string().contains("\"***\"")) {
+            return Err(format!("{name}: a hidden value (***) cannot be written back; set passwords in their fields"));
+        }
+        lines.push(format!("{name}: {} → {}", shown(&before), shown(&after)));
+        patches.push(match after {
+            Some(v) => serde_json::json!({"path": path, "value": serde_json::to_value(v).map_err(|e| e.to_string())?}),
+            None => serde_json::json!({"path": path, "remove": true}),
+        });
+    }
+    Ok((patches, lines))
+}
+
+type RawDiff = (Vec<serde_json::Value>, Option<toml::Value>, Option<toml::Value>);
+
+fn diff_value(path: &mut Vec<serde_json::Value>, a: Option<&toml::Value>, b: Option<&toml::Value>, out: &mut Vec<RawDiff>) {
+    match (a, b) {
+        (Some(toml::Value::Table(x)), Some(toml::Value::Table(y))) => {
+            let mut keys: Vec<&String> = x.keys().chain(y.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys {
+                path.push(serde_json::Value::String(k.clone()));
+                diff_value(path, x.get(k), y.get(k), out);
+                path.pop();
+            }
+        }
+        (Some(toml::Value::Array(x)), Some(toml::Value::Array(y))) if x.len() == y.len() && x.iter().chain(y).any(|v| v.is_table()) => {
+            for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                path.push(serde_json::json!(i));
+                diff_value(path, Some(p), Some(q), out);
+                path.pop();
+            }
+        }
+        (x, y) if x != y => out.push((path.clone(), x.cloned(), y.cloned())),
+        _ => {}
+    }
 }
 
 /// `POST /api/fleet/config/apply`: send a change (online) or keep it as
@@ -534,10 +588,32 @@ pub async fn api_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, J
     if !a.manages_fleet() {
         return refuse();
     }
-    if !req.changes.is_object() || req.changes.as_object().is_some_and(|o| o.is_empty()) {
+    if !req.changes.is_object() || (req.changes.as_object().is_some_and(|o| o.is_empty()) && req.raw_text.is_none()) {
         return (StatusCode::BAD_REQUEST, "Nothing to change").into_response();
     }
-    let summary: Vec<String> = req.summary.iter().take(60).map(|l| l.chars().take(200).collect()).collect();
+    let mut summary: Vec<String> = req.summary.iter().take(60).map(|l| l.chars().take(200).collect()).collect();
+    let mut changes = req.changes;
+    if let Some(text) = req.raw_text.as_deref() {
+        let copy = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).get(&req.id).and_then(|s| s.cfg.copy.as_ref().map(|c| c.text.clone()));
+        let Some(copy) = copy else { return (StatusCode::CONFLICT, "No server copy of this station's config").into_response() };
+        match raw_patches(&copy, text) {
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+            Ok((patches, lines)) => {
+                if !patches.is_empty() {
+                    if let Some(o) = changes.as_object_mut() {
+                        let raw = o.entry("raw").or_insert_with(|| serde_json::json!([]));
+                        if let Some(a) = raw.as_array_mut() {
+                            a.extend(patches);
+                        }
+                    }
+                    summary.extend(lines.into_iter().map(|l| format!("Config file: {}", l.chars().take(180).collect::<String>())));
+                }
+            }
+        }
+    }
+    if changes.as_object().is_some_and(|o| o.is_empty()) {
+        return (StatusCode::BAD_REQUEST, "Nothing to change").into_response();
+    }
     let (online, cap, drift, running) = {
         let fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = fleet.get(&req.id) else { return (StatusCode::NOT_FOUND, "No such station in the Fleet Manager").into_response() };
@@ -553,18 +629,39 @@ pub async fn api_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, J
         return (StatusCode::CONFLICT, "The config on the station differs from the server copy: import it or apply the server copy first").into_response();
     }
     if online {
-        return match send_change(&state, &req.id, req.base_hash, req.changes, summary, a.user.clone(), req.during_call, false).await {
+        return match send_change(&state, &req.id, req.base_hash, changes, summary, a.user.clone(), req.during_call, false).await {
             Ok(()) => Json(serde_json::json!({"ok": true, "sent": true})).into_response(),
             Err((status, msg)) => (status, msg).into_response(),
         };
     }
     let lines = summary_text(&summary);
     state.fleet.lock().unwrap_or_else(|e| e.into_inner()).with_station(&req.id, |s| {
-        s.cfg.pending = Some(PendingChange { base_hash: req.base_hash, changes: req.changes, summary, by: a.user.clone(), at_ms: now_ms(), conflict: false, message: String::new(), next_try_ms: 0 });
+        s.cfg.pending = Some(PendingChange { base_hash: req.base_hash, changes, summary, by: a.user.clone(), at_ms: now_ms(), conflict: false, message: String::new(), next_try_ms: 0 });
     });
     log_all(&state, &req.id, a.user.as_deref(), vec![("config", format!("config change saved, sent at the next login ({lines})"))]);
     state.monitor.emit("fleet_changed", serde_json::json!({"id": req.id}));
     Json(serde_json::json!({"ok": true, "pending": true})).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RawPreviewRequest {
+    pub id: String,
+    pub text: String,
+}
+
+/// `POST /api/fleet/config/raw_preview`: what the edited config file would change (the lines
+/// of the Apply dialog), or why it cannot be sent.
+pub async fn api_raw_preview(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(req): Json<RawPreviewRequest>) -> Response {
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_fleet() {
+        return refuse();
+    }
+    let copy = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).get(&req.id).and_then(|s| s.cfg.copy.as_ref().map(|c| c.text.clone()));
+    let Some(copy) = copy else { return (StatusCode::CONFLICT, "No server copy of this station's config").into_response() };
+    match raw_patches(&copy, &req.text) {
+        Ok((_, lines)) => Json(serde_json::json!({"lines": lines})).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -809,6 +906,24 @@ mod tests {
         assert_eq!((after.copy.as_ref().unwrap().hash.as_str(), after.copy.as_ref().unwrap().how.as_str()), ("bb", "applied"));
         let log = state.fleet.lock().unwrap().log();
         assert_eq!(log.len(), logs_before + 1, "only the confirmation is logged: {:?}", log.iter().map(|l| &l.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_config_editor_sends_only_what_changed() {
+        let old = "[cell_info]\nmain_carrier = 1521\nlocation_area = 1\n\n[brew]\nhost = \"h\"\npassword = \"***\"\n\n[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1525\n";
+        let new = "# edited\n[cell_info]\nmain_carrier = 1521\nlocation_area = 2\n\n[brew]\nhost = \"h\"\npassword = \"***\"\n\n[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1527\n\n[security]\nissi_whitelist = [1, 2]\n";
+        let (patches, lines) = raw_patches(old, new).unwrap();
+        assert_eq!(patches, vec![
+            serde_json::json!({"path": ["cell_info", "location_area"], "value": 2}),
+            serde_json::json!({"path": ["cells", 0, "cell_info", "main_carrier"], "value": 1527}),
+            serde_json::json!({"path": ["security"], "value": {"issi_whitelist": [1, 2]}}),
+        ], "comments, layout and the hidden password do not count");
+        assert_eq!(lines[0], "cell_info.location_area: 1 → 2");
+        let (removed, _) = raw_patches(old, &old.replace("location_area = 1\n", "")).unwrap();
+        assert_eq!(removed, vec![serde_json::json!({"path": ["cell_info", "location_area"], "remove": true})]);
+        assert!(raw_patches(old, &old.replace("host = \"h\"", "host = \"***\"")).is_err(), "*** never goes back");
+        assert!(raw_patches(old, "not toml [").is_err());
+        assert!(raw_patches(old, old).unwrap().0.is_empty());
     }
 
     #[test]

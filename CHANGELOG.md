@@ -16,7 +16,10 @@ Unreleased:
   their next login. The server keeps a copy of each station's config; a
   station edited locally shows "Config differs from server copy" and asks to
   import its config or apply the server's. The station is in maintenance
-  while the page is open. Multi Network follows the station's own page (the classic network
+  while the page is open. The config file at the bottom is an editor: only the values that
+  changed go to the station (passwords and keys stay hidden). Home Mode
+  Display, ISSI whitelist, the home network's whole Brew link and the MCC /
+  MNC of neighbours are editable. Multi Network follows the station's own page (the classic network
   becomes "home", every network but home can be removed, a network without
   a cell is caught before Apply). Fleet Control management may change all of it (visibility gets no edit
   page). Needs FlowStation with `config-v1`. See docs/Fleet-Control.md

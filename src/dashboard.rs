@@ -173,6 +173,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/config/discard", axum::routing::post(crate::fleet_config::api_discard))
         .route("/api/fleet/config/import", axum::routing::post(crate::fleet_config::api_import))
         .route("/api/fleet/config/rollback", axum::routing::post(crate::fleet_config::api_rollback))
+        .route("/api/fleet/config/raw_preview", axum::routing::post(crate::fleet_config::api_raw_preview))
         .route("/api/fleet/edit", axum::routing::post(crate::fleet_config::api_edit))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
@@ -303,7 +304,7 @@ fn need(path: &str) -> Need {
         "/api/fleet" => &["fleet"],
         "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" | "/api/fleet/maintenance" | "/api/fleet/restart"
         | "/api/fleet/config" | "/api/fleet/config/apply" | "/api/fleet/config/discard" | "/api/fleet/config/import"
-        | "/api/fleet/config/rollback" | "/api/fleet/edit" => &["fleet_manage"],
+        | "/api/fleet/config/rollback" | "/api/fleet/config/raw_preview" | "/api/fleet/edit" => &["fleet_manage"],
         _ => return Need::Admin,
     })
 }

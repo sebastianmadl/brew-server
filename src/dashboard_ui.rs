@@ -1200,7 +1200,7 @@ async function fcLoad(fresh){
     const was=fc.data&&fc.data.cfg.copy&&fc.data.cfg.copy.hash;
     fc.data=d;const copy=d.cfg.copy;
     // A new copy (first load, confirmed change, import): start editing from it.
-    if(fresh||!fc.v||(copy&&copy.hash!==was&&!fcDirty())){fc.orig=copy?copy.config:null;fcSortNets(fc.orig);fc.v=fcClone(fc.orig);fc.nb.edit=null;}
+    if(fresh||!fc.v||(copy&&copy.hash!==was&&!fcDirty())){fc.raw=null;fc.orig=copy?copy.config:null;fcSortNets(fc.orig);fc.v=fcClone(fc.orig);fc.nb.edit=null;}
     if(fresh){fcHeartbeat(true);if(d.cfg.drift)fcDriftDlg();}
   }catch(e){fc.err=e.message;}
   if(UI.page==='fleetcfg')render(true);
@@ -1253,8 +1253,26 @@ function fcDiff(o,v){
   if(v.multi_network_enabled){const nets=[];
     for(const n of v.networks){if(n.converted)continue;const on=o.networks.find(x=>x.name===n.name);
       if(n.removed){if(on){nets.push({name:n.name,remove:true});lines.push(`Network ${n.name}: removed`);}continue;}
-      if(!on||!fcSame(fcStrip(n),fcStrip(on))||(n.brew&&n.brew.password)){nets.push(fcNetBody(n));lines.push(on?`Network ${n.name}: changed`:`Network ${n.name}: added (${n.mcc}/${n.mnc})`);}}
+      if(!on||!fcSame(fcStrip(n),fcStrip(on))||(n.brew&&n.brew.password)){nets.push(fcNetBody(n));
+        if(!on){lines.push(`Network ${n.name}: added (${n.mcc}/${n.mnc})`);continue;}
+        const nb=n.brew||{},ob=on.brew||{};let any=false;
+        [['mcc',n.mcc,on.mcc],['mnc',n.mnc,on.mnc],['Brew host',nb.host,ob.host],['Brew port',nb.port,ob.port],['Brew login',nb.username,ob.username],['Brew TLS',nb.tls,ob.tls]].forEach(([k,a,b])=>{if(!fcSame(a,b)){line(`Network ${n.name} ${k}`,b,a);any=true;}});
+        if(nb.password){lines.push(`Network ${n.name} Brew password: changed`);any=true;}
+        if(!any)lines.push(`Network ${n.name}: changed`);}}
     if(nets.length)body.networks=nets;}
+  // Home Mode Display and ISSI whitelist: single values of the file (`raw`).
+  const raw=[];
+  if(v.access){const oh=o.home_mode_display,vh=v.home_mode_display,P=['cell_info','home_mode_display'];
+    const clean=h=>Object.fromEntries(Object.entries(h).filter(([,x])=>x!=null&&x!==''));
+    if(!fcSame(oh,vh)){
+      if(vh==null){raw.push({path:P,remove:true});lines.push('Home mode display: off');}
+      else if(oh==null){raw.push({path:P,value:clean(vh)});lines.push(`Home mode display: on ("${vh.text||''}")`);}
+      else for(const k of [...new Set(Object.keys(oh).concat(Object.keys(vh)))]){if(fcSame(oh[k],vh[k]))continue;
+        raw.push(vh[k]==null||vh[k]===''?{path:P.concat(k),remove:true}:{path:P.concat(k),value:vh[k]});line('Home mode display '+k.replace(/_/g,' '),oh[k],vh[k]);}}
+    const oa=o.access,va=v.access;
+    if(!fcSame(oa.issi_whitelist,va.issi_whitelist)){raw.push({path:['security','issi_whitelist'],value:va.issi_whitelist});line('ISSI whitelist',oa.issi_whitelist.join(', ')||'empty',va.issi_whitelist.join(', ')||'empty');}
+    if(oa.whitelist_mode!==va.whitelist_mode){raw.push({path:['security','whitelist_mode'],value:va.whitelist_mode});line('Whitelist mode',oa.whitelist_mode,va.whitelist_mode);}}
+  if(raw.length)body.raw=raw;
   // Links.
   if(!v.networks_explicit&&v.brew&&v.brew.link){const b=v.brew.link,ob=o.brew.link||{};
     if(!fcSame(fcStrip(b),fcStrip(ob))||b.password){body.brew={host:b.host||'',port:b.port||443,tls:b.tls!==false,username:b.username,password:b.password||''};
@@ -1271,8 +1289,11 @@ function fcDiff(o,v){
     line('Update source',o.ota.channel==='custom'?`${o.ota.repo} (${o.ota.branch})`:o.ota.channel,v.ota.channel==='custom'?`${v.ota.repo} (${v.ota.branch})`:v.ota.channel);}
   return {body,lines};
 }
-function fcDirty(){const fc=UI.fc;return !!(fc&&fc.v&&fc.data&&Object.keys(fcDiff(fc.orig,fc.v).body).length);}
-function fcCount(){const fc=UI.fc;if(!fc||!fc.v)return;const n=fcDiff(fc.orig,fc.v).lines.length;const e=$('fc-count');if(e)e.textContent=n?n+(n===1?' change':' changes'):'no changes';
+// The config editor (bottom of the page) changed: only what differs goes to the station (the server compares).
+function fcRawChanged(){const fc=UI.fc;return !!(fc&&fc.raw!=null&&fc.data&&fc.data.cfg.copy&&fc.raw!==fc.data.cfg.copy.text);}
+function fcN(){const fc=UI.fc;return fcDiff(fc.orig,fc.v).lines.length+(fcRawChanged()?1:0);}
+function fcDirty(){const fc=UI.fc;return !!(fc&&fc.v&&fc.data&&(Object.keys(fcDiff(fc.orig,fc.v).body).length||fcRawChanged()));}
+function fcCount(){const fc=UI.fc;if(!fc||!fc.v)return;const n=fcN();const e=$('fc-count');if(e)e.textContent=n?n+(n===1?' change':' changes'):'no changes';
   ['fc-apply','fc-discard'].forEach(id=>{const b=$(id);if(b)b.disabled=!n;});}
 // An input changed: store it, mark it, count again (no redraw, so typing goes on).
 function fcIn(el){
@@ -1309,7 +1330,7 @@ R.fleetcfg=()=>{
   const sync=!c.copy?'<span class="chip i">no copy yet</span>':c.drift?'<span class="chip d">differs from the station</span>':`<span class="chip i" title="Config hash; read ${esc(tmd(c.copy.at_ms))}">Config ${esc(c.copy.hash.slice(0,6))} · ${c.reported_hash===c.copy.hash?'in sync':d.online?'checking':'as last seen'}</span>`;
   const busy=!!c.apply;
   const locked=busy||!!c.drift||!d.capable||!v;
-  const n=v?fcDiff(o,v).lines.length:0;
+  const n=v?fcN():0;
   const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">${esc(d.label)} <span class="mut m" style="font-size:12px;font-weight:500">${esc(d.id)}</span></h2>
     ${d.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(d.last_seen_ms)}</span>`}${maint}${sync}
     <span class="sp"></span>${locked?'':`<span class="mut" id="fc-count" style="font-size:12px">${n?n+(n===1?' change':' changes'):'no changes'}</span>
@@ -1360,7 +1381,7 @@ R.fleetcfg=()=>{
     fcHelp('A cell broadcasts exactly one network (MCC / MNC, TS 100 392-2 table 18.17); pick it per cell above. Own server: the network\'s own Brew link; via: through another network\'s Brew server; local: inside this station.'+(mnOn?'':' Switching Multi Network off turns the networks back into the classic config.'))+
     (v.networks_explicit||mnOn?`<div class="tw"><table><thead><tr><th>Name</th><th>MCC</th><th>MNC</th><th>Reached</th><th>Brew server</th><th></th></tr></thead><tbody>${v.networks.map((x,i)=>`<tr${x.removed?' style="opacity:.45;text-decoration:line-through"':''}><td><b>${esc(x.name)}</b>${o.networks.some(y=>y.name===x.name)||x.converted?'':' <span class="chip w">new</span>'}${!x.removed&&fcUnserved().includes(x.name)?' <span class="chip d" title="Every network needs a cell: bind one above or remove the network">no cell</span>':''}</td>${v.networks_explicit?`<td>${fcF(`networks.${i}.mcc`,'int','inputmode="numeric"','74px')}</td><td>${fcF(`networks.${i}.mnc`,'int','inputmode="numeric"','86px')}</td>`:`<td class="m">${x.mcc}</td><td class="m">${x.mnc}</td>`}
       <td>${x.mode==='core'?'<span class="chip a">own server</span>':x.mode==='via'?`<span class="chip b">via ${esc(x.via)}</span>`:'<span class="chip i">local</span>'}</td><td class="m">${x.mode==='core'&&x.brew?esc((x.brew.host||'')+':'+(x.brew.port||443)):'—'}</td>
-      <td style="text-align:right">${x.name===fcPrimaryNet()||x.converted?'':x.removed?`<button class="btn" onclick="fcNetRemove(${i},false)">Keep</button>`:`<button class="btn danger" onclick="fcNetRemove(${i},true)">Remove</button>`}</td></tr>`).join('')}</tbody></table></div>`:'')+
+      <td style="text-align:right">${x.name===fcPrimaryNet()||x.converted?'':x.removed?`<button class="btn" onclick="fcNetRemove(${i},false)">Keep</button>`:`<button class="btn danger" onclick="fcNetRemove(${i},true)">Remove</button>`}</td></tr>${fcNetBrewRow(x,i)}`).join('')}</tbody></table></div>`:'')+
     (mnOn?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:12px 18px">${fcFld('Name',`<input class="f" id="fc-nn-name" style="width:120px">`)}${fcFld('MCC',`<input class="f" id="fc-nn-mcc" inputmode="numeric" style="width:80px">`)}${fcFld('MNC',`<input class="f" id="fc-nn-mnc" inputmode="numeric" style="width:90px">`)}
       ${fcFld('Reached',`<select class="f" id="fc-nn-via" style="width:150px" onchange="$('fc-nn-own').style.display=this.value==='@core'?'flex':'none'">${v.networks.filter(x=>!x.removed&&x.mode==='core').map(x=>`<option value="${esc(x.name)}">via ${esc(x.name)}</option>`).join('')}<option value="@core">own server</option><option value="@local">local</option></select>`)}
       <span id="fc-nn-own" style="display:none;gap:8px;flex-wrap:wrap;align-items:flex-end">${fcFld('Brew server',`<input class="f" id="fc-nn-host" style="width:170px">`)}${fcFld('Port',`<input class="f" id="fc-nn-port" inputmode="numeric" value="443" style="width:80px">`)}${fcFld('Login',`<input class="f" id="fc-nn-user" inputmode="numeric" style="width:110px">`)}${fcFld('Password',`<input class="f" id="fc-nn-pass" type="password" autocomplete="new-password" style="width:120px">`)}</span>
@@ -1377,15 +1398,15 @@ R.fleetcfg=()=>{
   const scells=(fc.conn&&fc.conn.cells||[]).filter(x=>x.station!==d.brew_login);
   const onServer=nb=>scells.find(x=>x.carrier===nb.main_carrier_number&&(nb.main_carrier_number_extension==null||x.carrier_ext==null||x.carrier_ext===nb.main_carrier_number_extension)&&(nb.location_area==null||x.location_area===nb.location_area)&&(nb.mcc==null||x.mcc===nb.mcc));
   const svcTxt=s=>FC_SVC.filter(([k])=>s&&s[k]).map(([,l])=>l).join(', ')||'—';
-  const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td>
+  const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td><td class="m">${nb.mcc!=null||nb.mnc!=null?`${nb.mcc??v.mcc}/${nb.mnc??v.mnc}`:'<span class="mut">same</span>'}</td>
     <td>${sv?`<span class="chip a">${esc(sv.name)}</span>`:'<span class="chip w">not on the server</span>'}</td><td>${esc(FC_TYPES[nb.cell_reselection_types_supported]||'—')}</td><td class="mut" style="font-size:12px;max-width:220px">${esc(svcTxt(nb.bs_service_details))}</td>
     <td style="text-align:right;white-space:nowrap"><button class="btn" ${dis} onclick="fcNbEdit(${i})">Edit</button> <button class="btn danger" ${dis} onclick="fcNbDel(${i})">Remove</button></td></tr>`;}).join('')
-    +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
+    +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td></td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
   const nb=fcCard('Neighbour cells',`<span class="sp"></span><select class="f" style="min-width:110px" onchange="UI.fc.nb.cell=+this.value;UI.fc.nb.edit=null;UI.fc.nb.pick=false;render(true)">${v.cells.map((x,i)=>`<option value="${i}" ${i===ci?'selected':''}>Cell ${x.id}</option>`).join('')}</select>
       <button class="btn" ${dis} onclick="fcNbNew(null)">${ic('plus')}Add manually</button><button class="btn pri" ${dis} onclick="UI.fc.nb.pick=!UI.fc.nb.pick;UI.fc.nb.edit=null;render(true)">${ic('plus')}Add from server list</button>`,
     fcHelp('What the cell broadcasts in D-NWRK-BROADCAST (at most 7, TS 100 392-2 clause 18.5.17). The station\'s other cells are added automatically.')+
     (cell.primary?'':`<div style="display:flex;align-items:center;gap:10px;padding:10px 18px 4px;font-size:13px"><button class="tog" role="switch" aria-checked="${!!cell.own_list}" ${dis} onclick="fcNbOwn()"></button> Own neighbour list for this cell</div>`)+
-    `<div class="tw"><table><thead><tr><th>ID</th><th>Carrier</th><th>LA</th><th>On the server</th><th>Reselection</th><th>Services</th><th></th></tr></thead><tbody>${nbRows||'<tr><td colspan="7" class="mut">No neighbours.</td></tr>'}</tbody></table></div>
+    `<div class="tw"><table><thead><tr><th>ID</th><th>Carrier</th><th>LA</th><th>MCC/MNC</th><th>On the server</th><th>Reselection</th><th>Services</th><th></th></tr></thead><tbody>${nbRows||'<tr><td colspan="8" class="mut">No neighbours.</td></tr>'}</tbody></table></div>
     ${fc.nb.pick?fcNbPicker(scells,list,d):''}${fc.nb.edit?fcNbEditor():''}`);
   // Telemetry and control channel.
   const link=(k,title,help)=>{const l=v[k];const ro=false;
@@ -1404,14 +1425,37 @@ R.fleetcfg=()=>{
     fcFld('Channel',fcSel('ota.channel',[['installed','installed (as installed)'],['stable','stable'],['beta','beta'],['custom','custom']],'str','data-redraw="1"')),
     ...(ov.channel==='custom'?[fcFld('Repository',fcF('ota.repo','str','spellcheck="false"')),fcFld('Branch',fcF('ota.branch','str','spellcheck="false"'))]:[]))}
     <div class="mut" style="font-size:12px;margin-top:8px">Now: <span class="m">${esc(o.ota.effective_repo||'—')}</span> (${esc(o.ota.effective_branch||'—')})${us?` · Server Updates repo: <span class="m">${esc(us.repo)}</span> (${esc(us.branch)})`:''}</div></div>`);
-  const raw=c.copy?`<details class="card fcdet"><summary class="ch"><h2>Config file (read only)</h2><span class="chip i">passwords and keys removed</span><span class="sp"></span><span class="mut" style="font-size:12px">${esc(c.copy.how)} ${esc(tmd(c.copy.at_ms))} · ${esc(c.copy.hash)}</span></summary><pre class="m fcraw">${esc(c.copy.text)}</pre></details>`:'';
-  const css=`<style>.f.chg,.tog.chg{border-color:var(--warn)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 25%,transparent)}.fcg{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px 18px}.fcfs{border:0;margin:0;padding:0;min-width:0;display:grid;gap:18px}.fcdet>summary{cursor:pointer;list-style:none}.fcdet>summary::-webkit-details-marker{display:none}.fcraw{margin:0;padding:12px 18px;font-size:12px;white-space:pre-wrap;max-height:420px;overflow:auto;border-top:1px solid var(--sep)}</style>`;
-  return css+head+cards+fieldset(brew+cells+nets+resel+nb+tel+cmd+ota)+raw;
+  const rawChg=fcRawChanged();
+  const raw=c.copy?`<details class="card fcdet" ${fc.rawOpen?'open':''} ontoggle="UI.fc.rawOpen=this.open"><summary class="ch"><h2>Config file</h2><span class="chip i">passwords and keys hidden</span>${rawChg?'<span class="chip w">edited</span>':''}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(c.copy.how)} ${esc(tmd(c.copy.at_ms))} · ${esc(c.copy.hash)}</span></summary>
+    <div class="mut" style="font-size:12.5px;padding:10px 18px 0">Edit any value here; only the values you change go to the station (comments and layout do not count). Hidden values (***) stay as they are: set passwords in their fields above, keys only on the station.${rawChg?` <a href="#" onclick="event.preventDefault();UI.fc.raw=null;render(true)">Undo edits</a>`:''}</div>
+    <textarea class="f m fcraw${rawChg?' chg':''}" id="fc-raw" spellcheck="false" ${locked?'disabled':''} oninput="UI.fc.raw=this.value;this.classList.toggle('chg',fcRawChanged());fcCount()">${esc(fc.raw??c.copy.text)}</textarea></details>`:'';
+  const css=`<style>.f.chg,.tog.chg{border-color:var(--warn)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 25%,transparent)}.fcg{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px 18px}.fcfs{border:0;margin:0;padding:0;min-width:0;display:grid;gap:18px}.fcdet>summary{cursor:pointer;list-style:none}.fcdet>summary::-webkit-details-marker{display:none}.fcraw{font-family:var(--mono)!important;display:block;box-sizing:border-box;width:calc(100% - 36px);margin:10px 18px 16px;padding:10px 12px;font-size:12px;line-height:1.45;white-space:pre;min-height:420px;resize:vertical;overflow:auto}</style>`;
+  // Home Mode Display ([cell_info.home_mode_display]) and ISSI whitelist ([security]); stations with config-v1 from 2026-11-12 on.
+  let hmd='',wl='';
+  if(v.access){const h=v.home_mode_display;
+    hmd=fcCard('Home mode display',`<span class="sp"></span><span class="mut" style="font-size:12.5px">${h?'On':'Off'}</span><button class="tog${fcSame(h==null,o.home_mode_display==null)?'':' chg'}" role="switch" aria-checked="${!!h}" onclick="fcHmdToggle()"></button>`,
+      fcHelp('Text the radios show on their home screen, sent as a periodic SDS (protocol 220).')+(h?`<div style="padding:12px 18px">${fcGrid(fcFld('Text',fcF('home_mode_display.text','str','maxlength="64"')),
+        fcFld('Sender ISSI',fcF('home_mode_display.source_issi','intn','inputmode="numeric" placeholder="0"')),fcFld('Interval (multiframes, ~1 s)',fcF('home_mode_display.interval_multiframes','intn','inputmode="numeric" placeholder="96"')),
+        fcFld('Protocol id',fcF('home_mode_display.protocol_id','intn','inputmode="numeric" placeholder="220"')),fcFld('Coding',fcSel('home_mode_display.text_coding_scheme',[[null,'LATIN (default)'],['LATIN','LATIN (ISO-8859-1)'],['UTF16','UTF16']],'str')))}</div>`:'<div style="height:12px"></div>'));
+    const a=v.access,chgL=!fcSame(a.issi_whitelist,o.access.issi_whitelist);
+    wl=fcCard('ISSI whitelist','',fcHelp('Which radios may register here. auto: empty list = everyone, else only the list; open: everyone; enforce: only the list (empty = nobody).')+
+      `<div style="padding:12px 18px">${fcGrid(fcFld('Mode',fcSel('access.whitelist_mode',[['auto','auto'],['open','open'],['enforce','enforce']],'str')),
+        fcFld('ISSIs (comma or space separated)',`<input class="f${chgL?' chg':''}" value="${esc(a.issi_whitelist.join(', '))}" inputmode="numeric" spellcheck="false" onchange="fcWl(this)">`))}</div>`);}
+  return css+head+cards+fieldset(brew+cells+nets+resel+nb+hmd+wl+tel+cmd+ota)+raw;
 };
 // Networks of this server (Multi Network page), to fill in a new network.
 function fcServerNets(){const nets=D.nets&&D.nets.networks;if(!nets||!nets.length)return '';
   return `<div class="mut" style="font-size:12px;padding:0 18px 12px">Networks of this server: ${nets.map(n=>`<a href="#" onclick="event.preventDefault();$('fc-nn-name').value='${esc(n.name)}';$('fc-nn-mcc').value='${n.mcc}';$('fc-nn-mnc').value='${n.mnc}'">${esc(n.name)} (${n.mcc}/${n.mnc})</a>`).join(', ')}: click one to fill in.</div>`;}
-function fcReset(){const fc=UI.fc;fc.v=fcClone(fc.orig);fc.nb.edit=null;fc.add=false;render(true);}
+// A network with its own Brew server (the home network too): the whole link editable, as the classic Brew card.
+function fcNetBrewRow(x,i){const v=UI.fc.v;if(!v.networks_explicit||x.removed||x.mode!=='core'||!x.brew)return '';const k=`networks.${i}.brew`;
+  return `<tr><td colspan="6" style="padding:4px 18px 14px">${fcGrid(fcFld('Brew server (host)',fcF(k+'.host','str','autocomplete="off" spellcheck="false"')),fcFld('Port',fcF(k+'.port','int','inputmode="numeric"')),
+    fcFld('Login (ISSI)',fcF(k+'.username','int','inputmode="numeric"')),fcFld('Password',fcF(k+'.password','str',`type="password" autocomplete="new-password" placeholder="${x.brew.password_set?'unchanged':'not set'}"`)),
+    fcFld('TLS',`<div style="padding-top:3px">${fcTog(k+'.tls')}</div>`))}</td></tr>`;}
+function fcHmdToggle(){const v=UI.fc.v,o=UI.fc.orig;v.home_mode_display=v.home_mode_display?null:(fcClone(o.home_mode_display)||{text:'',source_issi:16777215,interval_multiframes:96});render(true);}
+function fcWl(el){const l=el.value.split(/[\s,;]+/).filter(Boolean).map(x=>parseInt(x,10));
+  if(l.some(x=>!(x>=1&&x<=16777215))){setMsg('fc_top','err','ISSI whitelist: numbers 1-16777215');render(true);return;}
+  UI.fc.v.access.issi_whitelist=[...new Set(l)];render(true);}
+function fcReset(){const fc=UI.fc;fc.v=fcClone(fc.orig);fc.raw=null;fc.nb.edit=null;fc.add=false;render(true);}
 function fcCellRemove(id,on){const v=UI.fc.v;v.cells_remove=(v.cells_remove||[]).filter(x=>x!==id);if(on)v.cells_remove.push(id);render(true);}
 function fcCellNewDrop(i){UI.fc.v.cells_new.splice(i,1);render(true);}
 function fcCellAdd(){const v=UI.fc.v;const num=id=>{const s=$(id).value.trim();return s===''?null:parseInt(s,10);};
@@ -1473,7 +1517,7 @@ function fcNbEditor(){const ed=UI.fc.nb.edit,e=ed.e;
   return `<div style="margin:4px 18px 16px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg3)"><div style="font-weight:650;margin-bottom:10px">${ed.idx<0?'New neighbour':'Neighbour '+e.cell_identifier_ca}${ed.from?` <span class="mut" style="font-weight:500">from ${esc(ed.from)}</span>`:''}</div>
     ${fcGrid(num('cell_identifier_ca','Cell identifier (0-31)',31),num('main_carrier_number','Main carrier (0-4095)',4095),num('main_carrier_number_extension','Carrier extension (optional)',1023),
       sel('cell_reselection_types_supported','Reselection types',FC_TYPES.map((t,i)=>[i,t])),sel('cell_load_ca','Cell load',[[0,'0'],[1,'1'],[2,'2'],[3,'3']]),num('location_area','Location area (optional)',16383),
-      num('mcc','MCC (optional)',1023),num('mnc','MNC (optional)',16383),sel('minimum_rx_access_level','Min. RX access level',rxl),sel('maximum_ms_transmit_power','Max. MS TX power',txp),
+      num('mcc','MCC (empty = this cell\'s)',1023,UI.fc.v.mcc),num('mnc','MNC (empty = this cell\'s)',16383,UI.fc.v.mnc),sel('minimum_rx_access_level','Min. RX access level',rxl),sel('maximum_ms_transmit_power','Max. MS TX power',txp),
       fcFld('Synchronised with this cell',`<div style="padding-top:3px"><button class="tog" role="switch" aria-checked="${!!e.neighbor_cell_synchronized}" onclick="UI.fc.nb.edit.e.neighbor_cell_synchronized=!UI.fc.nb.edit.e.neighbor_cell_synchronized;this.setAttribute('aria-checked',UI.fc.nb.edit.e.neighbor_cell_synchronized)"></button></div>`))}
     <div class="mut" style="font-size:12px;margin:10px 0 6px">BS service details of the neighbour (table 18.26); missing flags are broadcast as "not supported".</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px">${FC_SVC.map(([k,l])=>`<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" class="chk" ${e.bs_service_details&&e.bs_service_details[k]?'checked':''} onchange="(UI.fc.nb.edit.e.bs_service_details=UI.fc.nb.edit.e.bs_service_details||{})['${k}']=this.checked"> ${l}</label>`).join('')}</div>
@@ -1487,8 +1531,10 @@ function fcNbApply(){const fc=UI.fc,ed=fc.nb.edit,c=fcCellNow();const e=ed.e;
   if(ed.idx>=0)c.neighbours[ed.idx]=e;else{if(c.neighbours.length>=7){setMsg('fc_top','err','At most 7 neighbours per cell (D-NWRK-BROADCAST)');render(true);return;}c.neighbours.push(e);}
   if(!c.primary)c.own_list=true;fc.nb.edit=null;render(true);}
 // Apply / save as pending, with what changes.
-function fcApplyDlg(){
-  const fc=UI.fc,d=fc.data;const {lines}=fcDiff(fc.orig,fc.v);if(!lines.length)return;
+async function fcApplyDlg(){
+  const fc=UI.fc,d=fc.data;const lines=fcDiff(fc.orig,fc.v).lines.slice();
+  if(fcRawChanged()){try{const r=await postJ('/api/fleet/config/raw_preview',{id:fc.id,text:fc.raw});r.lines.forEach(l=>lines.push('Config file: '+l));}catch(e){setMsg('fc_top','err','Config file: '+e.message);render(true);return;}}
+  if(!lines.length){setMsg('fc_top','err','Nothing to change');render(true);return;}
   const un=fcUnserved();if(un.length){setMsg('fc_top','err',`Every network needs a cell: bind a cell to ${un.join(', ')} or remove it`);render(true);return;}
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${d.online?'Apply to':'Save for'} ${esc(d.label)}</h3></div><div class="sb">
    <div class="tw" style="border:1px solid var(--border);border-radius:8px;max-height:280px;overflow:auto"><table><tbody>${lines.map(l=>`<tr><td style="font-size:12.5px">${esc(l)}</td></tr>`).join('')}</tbody></table></div>
@@ -1505,8 +1551,10 @@ async function fcApply(resolve){
   const from=resolve?d.cfg.drift.config:fc.orig,to=resolve?d.cfg.copy.config:fc.v;
   const {body,lines}=fcDiff(from,to);
   const call=$('fc-call');
-  try{const r=await postJ('/api/fleet/config/apply',{id:fc.id,base_hash:base,changes:body,summary:lines,during_call:!!(call&&call.getAttribute('aria-checked')==='true'),resolve:!!resolve});
-    fc.v=fcClone(fc.orig);fc.nb.edit=null;closeSheet();setMsg('fc_top','ok',r.pending?'Saved: applied at the station\'s next login':'Sent: the station restarts with the new config');await fcLoad(false);
+  const req={id:fc.id,base_hash:base,changes:body,summary:lines,during_call:!!(call&&call.getAttribute('aria-checked')==='true'),resolve:!!resolve};
+  if(!resolve&&fcRawChanged())req.raw_text=fc.raw;
+  try{const r=await postJ('/api/fleet/config/apply',req);
+    fc.v=fcClone(fc.orig);fc.raw=null;fc.nb.edit=null;closeSheet();setMsg('fc_top','ok',r.pending?'Saved: applied at the station\'s next login':'Sent: the station restarts with the new config');await fcLoad(false);
   }catch(e){setMsg(resolve?'fcd-msg':'fca-msg','err',e.message);}
 }
 async function fcRollback(){if(!confirm('Undo the change? The station restores its old config and restarts.'))return;
@@ -2682,6 +2730,11 @@ mod tests {
         assert!(PAGE_HTML.contains("x.name===fcPrimaryNet()||x.converted?'':"));
         assert!(PAGE_HTML.contains("const un=fcUnserved();if(un.length)"));
         assert!(PAGE_HTML.contains("via==='default'?'home':via"));
+        // The config editor sends its text; the server turns it into single-value patches.
+        assert!(PAGE_HTML.contains("if(!resolve&&fcRawChanged())req.raw_text=fc.raw;"));
+        assert!(PAGE_HTML.contains("'/api/fleet/config/raw_preview'"));
+        assert!(PAGE_HTML.contains("path:['security','issi_whitelist']"));
+        assert!(PAGE_HTML.contains("vh=v.home_mode_display,P=['cell_info','home_mode_display']"));
     }
 
     #[test]

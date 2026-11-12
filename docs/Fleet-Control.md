@@ -529,6 +529,12 @@ every 5 s), so an edit on the station shows up on the server.
   for the hello after the restart).
 - `RollbackConfig` → `CommandResult`: `ok` (old config back, restart),
   `not_pending`.
+- `raw` in `changes`: `[{path: [key | index, ..], value?, remove?}]`, single
+  values of the config file, applied last on the station. The server builds
+  them from its config editor (it compares the edited text with the copy's
+  text, so comments and layout do not count) and from the Home Mode Display
+  and ISSI whitelist cards. Paths through a password or key name and hidden
+  values (`***`) are refused on both sides.
 
 The window runs from the restart (`written + 3 s + confirm_secs`, at least
 20 s after the boot). A watchdog armed at boot restores the backup and
@@ -571,8 +577,9 @@ Fleet Control → **Edit** (or **Resolve…** when the config differs) opens one
 page per station with a back arrow: Brew link, cells (carrier, colour code,
 LA, network; add / remove), Multi Network, cell reselection, neighbours per
 cell (manual or picked from the server's cell directory), telemetry, command
-channel, update source and the config file (read only, passwords and
-keys removed). Changed fields are marked; **Apply to station** (online) or
+channel, Home Mode Display, ISSI whitelist, update source and the config
+file (editable; passwords and keys hidden, only changed values are sent).
+Networks with their own Brew server (home included) show their whole link. Changed fields are marked; **Apply to station** (online) or
 **Save as pending** (offline) shows the list of changes first.
 
 ### 10.4 HTTP API (Fleet Control management)
@@ -580,10 +587,11 @@ keys removed). Changed fields are marked; **Apply to station** (online) or
 | Route | Body | Does |
 | --- | --- | --- |
 | `GET /api/fleet/config?id=` | | station, copy, difference, pending, running change (reads fresh when online) |
-| `POST /api/fleet/config/apply` | `{id, base_hash, changes, summary, during_call, resolve}` | send or keep as pending |
+| `POST /api/fleet/config/apply` | `{id, base_hash, changes, summary, during_call, resolve, raw_text?}` | send or keep as pending |
 | `POST /api/fleet/config/discard` | `{id}` | drop the pending change |
 | `POST /api/fleet/config/import` | `{id}` | the station's config becomes the copy |
 | `POST /api/fleet/config/rollback` | `{id}` | Undo a running change |
+| `POST /api/fleet/config/raw_preview` | `{id, text}` | lines the edited config file would change |
 | `POST /api/fleet/edit` | `{id, open}` | edit page heartbeat / closed |
 
 `GET /api/fleet` gives each station a small `config` summary (`apply`,
