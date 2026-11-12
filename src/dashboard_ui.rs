@@ -1401,11 +1401,14 @@ R.fleetcfg=()=>{
   const own=cell.primary||cell.own_list;const list=own?cell.neighbours||[]:[];
   const scells=(fc.conn&&fc.conn.cells||[]).filter(x=>x.station!==d.brew_login);
   const onServer=nb=>scells.find(x=>x.carrier===nb.main_carrier_number&&(nb.main_carrier_number_extension==null||x.carrier_ext==null||x.carrier_ext===nb.main_carrier_number_extension)&&(nb.location_area==null||x.location_area===nb.location_area)&&(nb.mcc==null||x.mcc===nb.mcc));
+  // MCC/MNC a cell broadcasts: its network (Multi Network), else the station's.
+  const cellMm=cl=>{const n=v.networks_explicit&&cl?v.networks.find(x=>x.name===cl.network):null;return n?[n.mcc,n.mnc]:[v.mcc,v.mnc];};
+  const [cmcc,cmnc]=cellMm(cell);
   const svcTxt=s=>FC_SVC.filter(([k])=>s&&s[k]).map(([,l])=>l).join(', ')||'—';
-  const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td><td class="m">${nb.mcc!=null||nb.mnc!=null?`${nb.mcc??v.mcc}/${nb.mnc??v.mnc}`:'<span class="mut">same</span>'}</td>
+  const nbRows=list.map((nb,i)=>{const sv=onServer(nb);return `<tr><td class="m">${nb.cell_identifier_ca}</td><td class="m">${nb.main_carrier_number}${nb.main_carrier_number_extension!=null?' / '+nb.main_carrier_number_extension:''}</td><td class="m">${nb.location_area??'—'}</td><td class="m">${nb.mcc??cmcc}/${nb.mnc??cmnc}</td>
     <td>${(()=>{const mk=fcSugMark(cell,nb);return mk?(mk.kind==='la'?`<span class="chip w" style="white-space:normal">${esc(mk.text)}</span> <button class="btn" ${dis} onclick="fcNbFixLa(${i},${mk.location_area})">Use LA ${mk.location_area}</button>`:`<span class="chip d" style="white-space:normal" title="${esc(mk.text)}">outdated · not in the cell directory</span>`):sv?`<span class="chip a">${esc(sv.name)}</span>`:'<span class="chip w">not on the server</span>';})()}</td><td>${esc(FC_TYPES[nb.cell_reselection_types_supported]||'—')}</td><td class="mut" style="font-size:12px;max-width:220px">${esc(svcTxt(nb.bs_service_details))}</td>
     <td style="text-align:right;white-space:nowrap"><button class="btn" ${dis} onclick="fcNbEdit(${i})">Edit</button> <button class="btn danger" ${dis} onclick="fcNbDel(${i})">Remove</button></td></tr>`;}).join('')
-    +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td></td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
+    +(cell.siblings||[]).map(s=>`<tr class="mut"><td class="m">${s.cell_identifier_ca}</td><td class="m">${s.main_carrier_number}</td><td class="m">${s.location_area??'—'}</td><td class="m">${(()=>{const sc=v.cells.find(x=>x.main_carrier===s.main_carrier_number);const [a,b]=cellMm(sc||cell);return s.mcc!=null?`${s.mcc}/${s.mnc}`:`${a}/${b}`;})()}</td><td colspan="4" style="font-size:12px">this station's cell (added automatically)</td></tr>`).join('');
   const nb=fcCard('Neighbour cells',`<span class="sp"></span><select class="f" style="min-width:110px" onchange="UI.fc.nb.cell=+this.value;UI.fc.nb.edit=null;UI.fc.nb.pick=false;render(true)">${v.cells.map((x,i)=>`<option value="${i}" ${i===ci?'selected':''}>Cell ${x.id}</option>`).join('')}</select>
       <button class="btn" ${dis} onclick="fcNbNew(null)">${ic('plus')}Add manually</button><button class="btn pri" ${dis} onclick="UI.fc.nb.pick=!UI.fc.nb.pick;UI.fc.nb.edit=null;render(true)">${ic('plus')}Add from server list</button>`,
     fcHelp('What the cell broadcasts in D-NWRK-BROADCAST (at most 7, TS 100 392-2 clause 18.5.17). The station\'s other cells are added automatically.')+
@@ -1806,7 +1809,7 @@ function fcSugBlock(cell,list,dis){const fc=UI.fc;const s=fc.sug;
   const c=fcSugCell(cell);const full=list.length+(cell.siblings||[]).length>=7;
   const rows=(c?c.suggestions:[]).filter(x=>!list.some(nb=>nb.main_carrier_number===x.cell.carrier&&(nb.mcc??fc.v.mcc)===x.cell.mcc&&(nb.mnc??fc.v.mnc)===x.cell.mnc));
   return `<div style="margin:6px 18px 16px;border:1px dashed var(--border);border-radius:10px;overflow:hidden"><div class="ch" style="gap:8px"><h2 style="font-size:13.5px">Suggestions</h2><span class="cnt">${rows.length}</span><span class="sp"></span><label class="mut" style="font-size:12px;display:flex;gap:6px;align-items:center">Close by within <input class="f" type="number" min="1" max="500" value="${fc.radius||30}" style="width:70px" onchange="UI.fc.radius=Math.max(1,Math.min(500,+this.value||30));fcSugLoad()"> km</label></div>
-   ${rows.length?`<div class="tw"><table><thead><tr><th>Cell</th><th>Carrier</th><th>LA</th><th>Why</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><b class="m">${esc(x.cell.name)}</b> ${x.cell.online?'<span class="st" style="font-size:12px"><i></i></span>':'<span class="st d" style="font-size:12px" title="offline"><i></i></span>'}</td><td class="m">${x.cell.carrier}</td><td class="m">${x.cell.location_area}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap">${x.why.map(w=>(SUG_WHY[w.kind]||(()=>''))(w)).join('')}</div></td>
+   ${rows.length?`<div class="tw"><table><thead><tr><th>Cell</th><th>Carrier</th><th>LA</th><th>MCC/MNC</th><th>Why</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><b class="m">${esc(x.cell.name)}</b> ${x.cell.online?'<span class="st" style="font-size:12px"><i></i></span>':'<span class="st d" style="font-size:12px" title="offline"><i></i></span>'}</td><td class="m">${x.cell.carrier}</td><td class="m">${x.cell.location_area}</td><td class="m">${x.cell.mcc}/${x.cell.mnc}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap">${x.why.map(w=>(SUG_WHY[w.kind]||(()=>''))(w)).join('')}</div></td>
      <td style="text-align:right"><button class="btn pri" ${dis} ${full?'disabled title="7 neighbours at most (siblings included)"':''} onclick="fcSugAdd('${esc(x.cell.name)}')">${ic('plus')}Add</button></td></tr>`).join('')}</tbody></table></div>`:`<div class="mut" style="font-size:12.5px;padding:10px 18px">No suggestions for this cell${s.position?'':' (no position for this station: Accounts or its telemetry)'}.</div>`}
    <div class="mut" style="font-size:12px;padding:8px 18px 12px">From the server's cell directory: cells that list this cell, cells radios moved to or from (30 days) and cells close by. Nothing is added by itself; an added entry is filled in from what that cell broadcasts and can be edited like any other.</div></div>`;}
 function fcSugAdd(name){const fc=UI.fc;const c=fcCellNow();const s=fcSugCell(c);const x=s&&s.suggestions.find(y=>y.cell.name===name);if(!x)return;
@@ -2911,6 +2914,15 @@ mod tests {
         // "Apply server config" is open whenever the station is online with a copy, also when
         // only settings the page does not show differ (the server sends those as raw patches).
         assert!(PAGE_HTML.contains(r#"value="apply" ${d.online&&c.copy?'':'disabled'}"#));
+    }
+
+    #[test]
+    fn neighbour_tables_always_show_mcc_mnc() {
+        // Sebastian 2026-11-12: always show MCC/MNC, never "same" (the cell's own network when the
+        // entry has none).
+        assert!(!PAGE_HTML.contains(r#"<span class="mut">same</span>"#));
+        assert!(PAGE_HTML.contains("${nb.mcc??cmcc}/${nb.mnc??cmnc}</td>"));
+        assert!(PAGE_HTML.contains("<th>Cell</th><th>Carrier</th><th>LA</th><th>MCC/MNC</th><th>Why</th>"));
     }
 
     #[test]

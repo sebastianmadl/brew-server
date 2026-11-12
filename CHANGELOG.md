@@ -20,6 +20,11 @@ Unreleased:
   is now 90 s and a server setting (60 to 900 s). The change log table scrolls
   after about 10 rows. See docs/Fleet-Control.md section 11.
 
+- **Neighbour tables always show MCC/MNC.** On the fleet edit page the
+  neighbour list, the station's own cells and the suggestions show the MCC/MNC
+  of every entry (the cell's own network when the entry has none) instead of
+  "same".
+
 - **Fleet config page: order and "Apply server config".** Cards in the order
   Brew link, networks, cells, neighbour cells, cell reselection, Home Mode
   Display, ISSI whitelist, telemetry, control channel, update source. In the
