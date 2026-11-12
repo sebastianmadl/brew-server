@@ -4,6 +4,10 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control: the run card goes away after a clean run.** 30 s after a
+  run in which every station updated, the "Update run" card is hidden (the
+  change log keeps the story). It stays while the run goes and after a run
+  with a failed or skipped station, or one that was cancelled.
 - **Fleet Control, phase 3 (maintenance and restart).** Per station:
   **Maintenance** puts a solid red banner "work on this base station in
   progress" (with user, minutes left, note) on every page of the station's

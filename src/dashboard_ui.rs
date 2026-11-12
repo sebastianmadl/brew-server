@@ -1082,7 +1082,7 @@ R.fleet=()=>{
   const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
      <button class="btn pri" ${canUpd&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${canUpd?'':'Check for updates first: only stations with a newer version can be updated (or that can take a live update)'}">${sel.length?'Update ('+Math.max(target.length,liveT.length)+')':'Update all'}</button>
      ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}`:'';
-  const jobCard=job?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
+  const jobCard=job&&!fleetJobHidden(job,live)?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
@@ -1100,6 +1100,21 @@ R.fleet=()=>{
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
    ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm'||e.kind==='restart_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
 };
+// The run card goes away 30 s after a clean end (the change log keeps the story). It stays while
+// the run goes on, and after a run with a failed or skipped station, or one that was cancelled.
+// The 30 s count from the server's end time or from when this browser first saw the end, whichever
+// is earlier, so a browser clock that is behind does not keep the card.
+const FLEET_JOB_HIDE_MS=30000;
+function fleetJobHidden(job,live){
+  if(live||!job.finished_ms||job.cancelled)return false;
+  if(job.items.some(i=>['failed','skipped'].includes(i.state.state)))return false;
+  const key=job.started_ms+':'+job.finished_ms;
+  if(UI.jobSeen?.key!==key)UI.jobSeen={key,at:Date.now()};
+  const age=Math.max(Date.now()-job.finished_ms,Date.now()-UI.jobSeen.at);
+  if(age>=FLEET_JOB_HIDE_MS)return true;
+  clearTimeout(UI.jobHideT);UI.jobHideT=setTimeout(()=>{if(UI.page==='fleet')render(true);},FLEET_JOB_HIDE_MS-age+50);
+  return false;
+}
 function fleetSel(id,on){if(on)UI.fsel.add(id);else UI.fsel.delete(id);render(true);}
 function fleetSelAll(on){UI.fsel.clear();if(on)(D.fleet.stations||[]).forEach(x=>UI.fsel.add(x.id));render(true);}
 async function fleetReload(){try{D.fleet=await getJ('/api/fleet');}catch(e){}render(true);}
@@ -2096,6 +2111,16 @@ mod tests {
 
     /// The polls must not ask admin-only routes for a visitor who is not signed in: their 401
     /// opens the login window, so an open (read-only) dashboard would show it every 5 s.
+    #[test]
+    fn fleet_run_card_hides_only_after_a_clean_end() {
+        let start = PAGE_HTML.find("function fleetJobHidden(").expect("fleetJobHidden");
+        let body = &PAGE_HTML[start..start + PAGE_HTML[start..].find("\n}\n").expect("end")];
+        assert!(body.contains("if(live||!job.finished_ms||job.cancelled)return false;"), "stays while running or after a cancel");
+        assert!(body.contains("['failed','skipped'].includes(i.state.state)"), "stays after a failed or skipped station");
+        assert!(PAGE_HTML.contains("const FLEET_JOB_HIDE_MS=30000;"));
+        assert!(PAGE_HTML.contains("const jobCard=job&&!fleetJobHidden(job,live)?"), "the card uses it");
+    }
+
     #[test]
     fn polls_ask_admin_routes_only_for_admins() {
         let start = PAGE_HTML.find("async function refreshSlow(){").expect("refreshSlow");
