@@ -341,8 +341,9 @@ tooltip.
 
 ### 8.4 Update run
 
-**Update all** (nothing ticked) or **Update (n)** (ticked stations), or
-**Update** on one station, opens a dialog:
+**Update all** (nothing ticked) or **Update (n)** (ticked stations; tick one
+for a single station) opens a dialog. There is no Update button per station;
+a station in a running rollout has **Cancel** to take it out of the queue.
 
 | Field | Meaning |
 | --- | --- |

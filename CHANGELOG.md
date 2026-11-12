@@ -24,7 +24,7 @@ Unreleased:
 - **Fleet Control, phase 2 (remote update).** On the Fleet Control page,
   **Check for updates** lets every station (or the ticked ones) check its own
   update source; the table shows "Newer: <version>" / "Up to date". **Update
-  all** (or **Update** for ticked stations, or one station) asks for
+  all** (or **Update** for ticked stations) asks for
   **Rolling** (one after another: the next starts when the previous one is
   back with the new software, so the network is never fully off the air) or
   **Parallel** (all at once), **Update during call**, and how long to wait
