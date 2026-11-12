@@ -1441,7 +1441,7 @@ R.fleetcfg=()=>{
     wl=fcCard('ISSI whitelist','',fcHelp('Which radios may register here. auto: empty list = everyone, else only the list; open: everyone; enforce: only the list (empty = nobody).')+
       `<div style="padding:12px 18px">${fcGrid(fcFld('Mode',fcSel('access.whitelist_mode',[['auto','auto'],['open','open'],['enforce','enforce']],'str')),
         fcFld('ISSIs (comma or space separated)',`<input class="f${chgL?' chg':''}" value="${esc(a.issi_whitelist.join(', '))}" inputmode="numeric" spellcheck="false" onchange="fcWl(this)">`))}</div>`);}
-  return css+head+cards+fieldset(brew+cells+nb+resel+nets+hmd+wl+tel+cmd+ota)+raw;
+  return css+head+cards+fieldset(brew+nets+cells+nb+resel+hmd+wl+tel+cmd+ota)+raw;
 };
 // Networks of this server (Multi Network page), to fill in a new network.
 function fcServerNets(){const nets=D.nets&&D.nets.networks;if(!nets||!nets.length)return '';
@@ -2739,9 +2739,9 @@ mod tests {
 
     #[test]
     fn config_page_order_and_resolve() {
-        // Sebastian 2026-11-12: Brew link, cells, neighbours, reselection, networks, Home Mode
+        // Sebastian 2026-11-12: Brew link, networks, cells, neighbours, reselection, Home Mode
         // Display, whitelist, telemetry, control, update source.
-        assert!(PAGE_HTML.contains("fieldset(brew+cells+nb+resel+nets+hmd+wl+tel+cmd+ota)+raw"));
+        assert!(PAGE_HTML.contains("fieldset(brew+nets+cells+nb+resel+hmd+wl+tel+cmd+ota)+raw"));
         // "Apply server config" is open whenever the station is online with a copy, also when
         // only settings the page does not show differ (the server sends those as raw patches).
         assert!(PAGE_HTML.contains(r#"value="apply" ${d.online&&c.copy?'':'disabled'}"#));
