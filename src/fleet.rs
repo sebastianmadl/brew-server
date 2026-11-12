@@ -56,6 +56,75 @@ pub struct Station {
     pub online: bool,
     pub first_seen_ms: u64,
     pub last_seen_ms: u64,
+    /// Last update check (`CheckUpdate`), phase 2.
+    #[serde(default)]
+    pub check: Option<CheckInfo>,
+    /// Last `UpdateProgress` of an OTA run (whoever started it), phase 2.
+    #[serde(default)]
+    pub progress: Option<ProgressInfo>,
+}
+
+/// Result of the last update check of a station.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckInfo {
+    pub at_ms: u64,
+    /// The check reached the repository.
+    pub ok: bool,
+    pub current: String,
+    pub latest: Option<String>,
+    pub update_available: bool,
+    /// OTA source of the station.
+    pub channel: String,
+    pub repo: String,
+    pub branch: String,
+    pub message: String,
+}
+
+/// Last reported OTA progress of a station.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgressInfo {
+    pub at_ms: u64,
+    pub stage: String,
+    pub percent: u8,
+    pub message: String,
+}
+
+/// Server setting "Updates repo": the reference source the Fleet Manager
+/// compares the stations' OTA sources with (empty: the product repository,
+/// branch `main`). Phase 2 only shows a hint; stations keep their own source.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateSettings {
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub branch: String,
+}
+
+/// Product repository and branch used when "Updates repo" is empty.
+pub const DEFAULT_UPDATE_REPO: &str = "https://github.com/Aitorrio/bost-flowstation";
+pub const DEFAULT_UPDATE_BRANCH: &str = "main";
+
+impl UpdateSettings {
+    /// Repository and branch in effect.
+    pub fn effective(&self) -> (String, String) {
+        let repo = if self.repo.trim().is_empty() { DEFAULT_UPDATE_REPO } else { self.repo.trim() };
+        let branch = if self.branch.trim().is_empty() { DEFAULT_UPDATE_BRANCH } else { self.branch.trim() };
+        (repo.to_owned(), branch.to_owned())
+    }
+}
+
+/// Repository URLs compared without case, `.git`, trailing slash or credentials.
+pub fn same_repo(a: &str, b: &str) -> bool {
+    fn norm(u: &str) -> String {
+        let u = u.trim().to_ascii_lowercase();
+        let u = match u.split_once("://") {
+            Some((scheme, rest)) => format!("{scheme}://{}", rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest)),
+            None => u,
+        };
+        let u = u.trim_end_matches('/');
+        u.strip_suffix(".git").unwrap_or(u).to_owned()
+    }
+    norm(a) == norm(b)
 }
 
 /// One change log line.
@@ -70,7 +139,9 @@ pub struct LogEntry {
     pub label: String,
     /// Dashboard user who did it (`None`: the station itself).
     pub user: Option<String>,
-    /// `fleet_on`, `fleet_off`, `version`, `removed`.
+    /// `fleet_on`, `fleet_off`, `version`, `removed`; phase 2: `update`,
+    /// `update_done`, `update_alarm` (shown red), `update_skip`, `update_end`,
+    /// `settings`.
     pub kind: String,
     pub text: String,
 }
@@ -80,6 +151,13 @@ struct File {
     stations: BTreeMap<String, Station>,
     log: VecDeque<LogEntry>,
     next_id: u64,
+    /// The current or last update run (phase 2).
+    #[serde(default)]
+    job: Option<crate::fleet_update::Job>,
+    #[serde(default)]
+    next_job: u64,
+    #[serde(default)]
+    update_settings: UpdateSettings,
 }
 
 /// The Fleet Manager's data.
@@ -105,6 +183,9 @@ impl Fleet {
             .unwrap_or_default();
         let mut fleet = Self { path, data };
         fleet.prune(now_ms);
+        if let Some(job) = fleet.data.job.as_mut() {
+            job.after_restart();
+        }
         fleet
     }
 
@@ -183,15 +264,23 @@ impl Fleet {
             online: true,
             first_seen_ms: entry.as_ref().map(|s| s.first_seen_ms).unwrap_or(now_ms),
             last_seen_ms: now_ms,
+            // A check is only valid for the software it was made with.
+            check: entry.as_ref().and_then(|s| s.check.clone()).filter(|c| c.current == h.version),
+            progress: entry.as_ref().and_then(|s| s.progress.clone()),
         };
+        // An update run that ends with this hello logs the software change itself.
+        let events = self.data.job.as_mut().map(|j| j.hello(id, &h.version, now_ms)).unwrap_or_default();
+        let run_logs_it = events.iter().any(|e| e.kind == "update_done");
         match &entry {
             None => self.push(now_ms, id, label.clone(), None, "fleet_on", format!("Basestation {label} switched on Fleet Control")),
+            Some(_) if run_logs_it => {}
             Some(old) if old.version != h.version => {
                 self.push(now_ms, id, label.clone(), None, "version", format!("Basestation {label}: software {} → {}", old.version, h.version))
             }
             Some(_) => {}
         }
         self.data.stations.insert(id.to_owned(), station);
+        self.apply(now_ms, events);
         self.save();
         true
     }
@@ -218,6 +307,137 @@ impl Fleet {
     }
 }
 
+/// Phase 2: update checks and runs.
+impl Fleet {
+    /// Write run events to the change log.
+    fn apply(&mut self, now_ms: u64, events: Vec<crate::fleet_update::Event>) {
+        for e in events {
+            self.push(now_ms, &e.station, e.label, e.user.as_deref(), e.kind, e.text);
+        }
+    }
+
+    pub fn job(&self) -> Option<&crate::fleet_update::Job> {
+        self.data.job.as_ref()
+    }
+
+    pub fn update_settings(&self) -> &UpdateSettings {
+        &self.data.update_settings
+    }
+
+    /// Admin changes "Updates repo".
+    pub fn set_update_settings(&mut self, s: UpdateSettings, user: Option<&str>, now_ms: u64) {
+        let (repo, branch) = s.effective();
+        self.data.update_settings = s;
+        self.push(now_ms, "", String::new(), user, "settings", format!("Updates repo set to {repo} ({branch})"));
+        self.save();
+    }
+
+    /// Store the result of an update check.
+    pub fn set_check(&mut self, id: &str, check: CheckInfo) {
+        if let Some(s) = self.data.stations.get_mut(id) {
+            s.check = Some(check);
+            self.save();
+        }
+    }
+
+    /// An `UpdateProgress` from station `id` (also for runs started on its own dashboard).
+    pub fn progress(&mut self, id: &str, stage: &str, percent: u8, message: &str, _version: &str, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) {
+        let Some(s) = self.data.stations.get_mut(id) else { return };
+        s.progress = Some(ProgressInfo { at_ms: now_ms, stage: stage.to_owned(), percent, message: message.to_owned() });
+        let in_job = self.data.job.as_ref().is_some_and(|j| !j.is_finished() && j.items.iter().any(|i| i.id == id));
+        let events = match self.data.job.as_mut() {
+            Some(j) if in_job => j.progress(id, stage, percent, message, now_ms),
+            _ => {
+                // An update the server did not start (local dashboard): log its end only.
+                let label = label(names, id, self.data.stations.get(id).and_then(|s| s.brew_login.as_deref()));
+                match stage {
+                    "restart" => vec![crate::fleet_update::Event { station: id.to_owned(), label: label.clone(), kind: "update", text: format!("Basestation {label}: local update built, restarting"), user: None }],
+                    "failed" => vec![crate::fleet_update::Event { station: id.to_owned(), label: label.clone(), kind: "update_alarm", text: format!("ALARM Basestation {label}: local update failed ({message})"), user: None }],
+                    _ => vec![],
+                }
+            }
+        };
+        let changed = !events.is_empty();
+        self.apply(now_ms, events);
+        if changed || matches!(stage, "restart" | "failed" | "up_to_date") {
+            self.save();
+        }
+    }
+
+    /// Stations that can be updated now: listed, online, `update-v1`, and their
+    /// last check (for the software they run) found a newer version.
+    pub fn updatable(&self, id: &str) -> bool {
+        self.data.stations.get(id).is_some_and(|s| {
+            s.online && s.capabilities.iter().any(|c| c == UPDATE_CAPABILITY) && s.check.as_ref().is_some_and(|c| c.ok && c.update_available && c.current == s.version)
+        })
+    }
+
+    /// Start a run over `ids` (in this order). Err: a run is still going, or no station.
+    pub fn start_job(&mut self, ids: &[String], options: crate::fleet_update::Options, user: Option<&str>, now_ms: u64, names: &dyn Fn(&str) -> Option<String>) -> Result<u64, &'static str> {
+        if self.data.job.as_ref().is_some_and(|j| !j.is_finished()) {
+            return Err("An update run is in progress: wait for it or cancel it");
+        }
+        let stations: Vec<(String, String, String, bool)> = ids
+            .iter()
+            .filter_map(|id| self.data.stations.get(id))
+            .filter(|s| s.capabilities.iter().any(|c| c == UPDATE_CAPABILITY))
+            .map(|s| (s.id.clone(), label(names, &s.id, s.brew_login.as_deref()), s.version.clone(), self.updatable(&s.id)))
+            .collect();
+        if stations.is_empty() {
+            return Err("No station to update");
+        }
+        self.data.next_job += 1;
+        let id = self.data.next_job;
+        let (job, events) = crate::fleet_update::Job::new(id, now_ms, user.map(str::to_owned), options, stations);
+        self.data.job = Some(job);
+        self.apply(now_ms, events);
+        self.save();
+        Ok(id)
+    }
+
+    /// Advance the run; returns the `StartUpdate` commands to send.
+    pub fn tick_job(&mut self, now_ms: u64) -> Vec<crate::fleet_update::Start> {
+        let online: std::collections::HashSet<String> = self.data.stations.values().filter(|s| s.online).map(|s| s.id.clone()).collect();
+        let Some(job) = self.data.job.as_mut() else { return Vec::new() };
+        if job.is_finished() {
+            return Vec::new();
+        }
+        let before = job.clone();
+        let (starts, events) = job.tick(now_ms, &|id| online.contains(id));
+        let changed = *job != before;
+        self.apply(now_ms, events);
+        if changed {
+            self.save();
+        }
+        starts
+    }
+
+    pub fn start_result(&mut self, id: &str, outcome: crate::fleet_update::StartOutcome, now_ms: u64) {
+        let Some(job) = self.data.job.as_mut() else { return };
+        let events = job.start_result(id, outcome, now_ms);
+        self.apply(now_ms, events);
+        self.save();
+    }
+
+    /// Cancel the whole run (`station` None) or one station of it. False: nothing to cancel.
+    pub fn cancel(&mut self, station: Option<&str>, user: Option<&str>, now_ms: u64) -> bool {
+        let Some(job) = self.data.job.as_mut().filter(|j| !j.is_finished()) else { return false };
+        let events = match station {
+            None => job.cancel_all(user, now_ms),
+            Some(id) => match job.cancel_one(id, user, now_ms) {
+                Some(e) => e,
+                None => return false,
+            },
+        };
+        self.apply(now_ms, events);
+        self.save();
+        true
+    }
+}
+
+/// Capability of phase 2 (remote update).
+pub const UPDATE_CAPABILITY: &str = "update-v1";
+
 /// Station as the Fleet Manager shows it.
 #[derive(Serialize)]
 struct StationView {
@@ -225,6 +445,10 @@ struct StationView {
     station: Station,
     online: bool,
     label: String,
+    /// Its last check found a newer version (the Update button is offered).
+    updatable: bool,
+    /// Its OTA source differs from the server's "Updates repo" (hint only).
+    other_source: bool,
 }
 
 /// `GET /api/fleet` (Fleet Control visibility): the listed stations, the change
@@ -238,17 +462,29 @@ pub async fn api_list(
     let lookup = |k: &str| names.get(k).cloned();
     let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
     fleet.prune(now_ms());
+    let (ref_repo, ref_branch) = fleet.update_settings().effective();
     let stations: Vec<StationView> = fleet
         .stations()
         .into_iter()
-        .map(|s| StationView { online: s.online, label: label(&lookup, &s.id, s.brew_login.as_deref()), station: s })
+        .map(|s| StationView {
+            online: s.online,
+            label: label(&lookup, &s.id, s.brew_login.as_deref()),
+            updatable: fleet.updatable(&s.id),
+            other_source: s.check.as_ref().is_some_and(|c| !c.repo.is_empty() && (!same_repo(&c.repo, &ref_repo) || c.branch != ref_branch)),
+            station: s,
+        })
         .collect();
     axum::Json(serde_json::json!({
         "offered": state.config.control.enabled,
         "protocol": PROTOCOL,
         "can_manage": a.manages_fleet(),
+        "is_admin": a.admin,
         "stations": stations,
         "log": fleet.log(),
+        "job": fleet.job(),
+        "update_settings": fleet.update_settings(),
+        "update_source": {"repo": ref_repo, "branch": ref_branch},
+        "limits": {"build_min": crate::fleet_update::BUILD_LIMIT_MS / 60_000, "return_min": crate::fleet_update::RETURN_LIMIT_MS / 60_000, "max_interrupt_min": crate::fleet_update::MAX_INTERRUPT_MIN},
     }))
 }
 
@@ -301,6 +537,200 @@ pub async fn api_ping(
         Ok(_) => (axum::http::StatusCode::BAD_GATEWAY, "unexpected answer from the station").into_response(),
         Err(crate::control::SendError::NotConnected) => (axum::http::StatusCode::NOT_FOUND, "The station is not connected").into_response(),
         Err(crate::control::SendError::Timeout) => (axum::http::StatusCode::GATEWAY_TIMEOUT, "No answer from the station within 5 s").into_response(),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct IdsRequest {
+    /// Control logins; empty: every station that can do it.
+    #[serde(default)]
+    pub ids: Vec<String>,
+}
+
+/// `POST /api/fleet/check` `{"ids": [...]}` (Fleet Control management): every
+/// station (online, `update-v1`; empty list: all of them) runs its update check
+/// against its own OTA source. Waits for all answers (up to 60 s).
+pub async fn api_check(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<IdsRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !crate::dashboard::access(&state, &headers).manages_fleet() {
+        return refuse();
+    }
+    let ids: Vec<String> = {
+        let fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
+        fleet
+            .stations()
+            .into_iter()
+            .filter(|s| s.online && s.capabilities.iter().any(|c| c == UPDATE_CAPABILITY))
+            .filter(|s| req.ids.is_empty() || req.ids.contains(&s.id))
+            .map(|s| s.id)
+            .collect()
+    };
+    let asks = ids.into_iter().map(|id| {
+        let state = state.clone();
+        async move {
+            let r = crate::control::send_command(&state, &id, crate::control::ControlCommand::CheckUpdate { handle: 0 }).await;
+            (id, r)
+        }
+    });
+    let mut out = Vec::new();
+    for (id, r) in futures_util::future::join_all(asks).await {
+        let check = match r {
+            Ok(Some(crate::control::ControlResponse::UpdateInfo { ok, current, latest, update_available, channel, repo, branch, message, .. })) => {
+                CheckInfo { at_ms: now_ms(), ok, current, latest, update_available, channel, repo, branch, message }
+            }
+            Ok(Some(crate::control::ControlResponse::CommandResult { message, .. })) => {
+                CheckInfo { at_ms: now_ms(), ok: false, current: String::new(), latest: None, update_available: false, channel: String::new(), repo: String::new(), branch: String::new(), message }
+            }
+            Ok(_) | Err(_) => CheckInfo {
+                at_ms: now_ms(),
+                ok: false,
+                current: String::new(),
+                latest: None,
+                update_available: false,
+                channel: String::new(),
+                repo: String::new(),
+                branch: String::new(),
+                message: "no answer from the station".into(),
+            },
+        };
+        let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
+        // Keep the running software: a failed check has no `current`.
+        let current = fleet.stations().into_iter().find(|s| s.id == id).map(|s| s.version).unwrap_or_default();
+        let check = CheckInfo { current: if check.current.is_empty() { current } else { check.current.clone() }, ..check };
+        fleet.set_check(&id, check.clone());
+        out.push(serde_json::json!({"id": id, "check": check}));
+    }
+    axum::Json(serde_json::json!({"results": out})).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct UpdateRequest {
+    /// Control logins; empty: every station whose check found a newer version.
+    #[serde(default)]
+    pub ids: Vec<String>,
+    pub mode: crate::fleet_update::Mode,
+    #[serde(default)]
+    pub during_call: bool,
+    #[serde(default = "default_interrupt")]
+    pub interrupt_min: u32,
+}
+
+fn default_interrupt() -> u32 {
+    10
+}
+
+/// `POST /api/fleet/update` (Fleet Control management): start an update run.
+pub async fn api_update(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<UpdateRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_fleet() {
+        return refuse();
+    }
+    if req.interrupt_min > crate::fleet_update::MAX_INTERRUPT_MIN {
+        return (axum::http::StatusCode::BAD_REQUEST, "Interrupt time: at most 120 min").into_response();
+    }
+    let names = crate::control::station_names(&state);
+    let mut fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
+    let ids: Vec<String> = if req.ids.is_empty() {
+        fleet.stations().into_iter().filter(|s| fleet.updatable(&s.id)).map(|s| s.id).collect()
+    } else {
+        req.ids.clone()
+    };
+    let options = crate::fleet_update::Options { mode: req.mode, during_call: req.during_call, interrupt_min: req.interrupt_min };
+    match fleet.start_job(&ids, options, a.user.as_deref(), now_ms(), &|k| names.get(k).cloned()) {
+        Ok(job) => {
+            drop(fleet);
+            state.monitor.emit("fleet_changed", serde_json::json!({"job": job}));
+            axum::Json(serde_json::json!({"ok": true, "job": job})).into_response()
+        }
+        Err(e) => (axum::http::StatusCode::CONFLICT, e).into_response(),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct CancelRequest {
+    /// One station; absent: the whole run ("Cancel all").
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// `POST /api/fleet/update/cancel` (Fleet Control management): no further
+/// starts (the whole run, or one station that has not started yet).
+pub async fn api_cancel(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<CancelRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_fleet() {
+        return refuse();
+    }
+    if state.fleet.lock().unwrap_or_else(|e| e.into_inner()).cancel(req.id.as_deref(), a.user.as_deref(), now_ms()) {
+        axum::Json(serde_json::json!({"ok": true})).into_response()
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, "Nothing to cancel").into_response()
+    }
+}
+
+/// `POST /api/fleet/settings` `{"repo": "...", "branch": "..."}` (admins):
+/// the server's "Updates repo".
+pub async fn api_settings(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<UpdateSettings>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.admin {
+        return (axum::http::StatusCode::FORBIDDEN, "Admins only").into_response();
+    }
+    let repo = req.repo.trim().to_owned();
+    let branch = req.branch.trim().to_owned();
+    if !repo.is_empty() && !(repo.starts_with("https://") || repo.starts_with("git@") || repo.starts_with("ssh://")) {
+        return (axum::http::StatusCode::BAD_REQUEST, "Repository: an https:// or ssh git URL").into_response();
+    }
+    if branch.chars().any(|c| c.is_whitespace() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\')) || branch.contains("..") {
+        return (axum::http::StatusCode::BAD_REQUEST, "Branch: not a valid git branch name").into_response();
+    }
+    state.fleet.lock().unwrap_or_else(|e| e.into_inner()).set_update_settings(UpdateSettings { repo, branch }, a.user.as_deref(), now_ms());
+    axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+/// Background driver of update runs: every 2 s advance the run and send the
+/// `StartUpdate` commands it asks for. Runs for the whole server lifetime, so
+/// a run goes on with no browser open.
+pub async fn run_updates(state: std::sync::Arc<crate::state::AppState>) {
+    let mut every = tokio::time::interval(std::time::Duration::from_secs(2));
+    loop {
+        every.tick().await;
+        let starts = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).tick_job(now_ms());
+        for s in starts {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let cmd = crate::control::ControlCommand::StartUpdate { handle: 0, during_call: s.during_call };
+                let outcome = match crate::control::send_command(&state, &s.id, cmd).await {
+                    Ok(Some(crate::control::ControlResponse::CommandResult { ok: true, .. })) => crate::fleet_update::StartOutcome::Started,
+                    Ok(Some(crate::control::ControlResponse::CommandResult { code, message, .. })) => match code.as_str() {
+                        "busy" => crate::fleet_update::StartOutcome::Started,
+                        "call_active" => crate::fleet_update::StartOutcome::CallActive,
+                        _ => crate::fleet_update::StartOutcome::Refused(code, message),
+                    },
+                    Ok(_) => crate::fleet_update::StartOutcome::Refused("unexpected".into(), "unexpected answer".into()),
+                    Err(_) => crate::fleet_update::StartOutcome::Unreachable,
+                };
+                state.fleet.lock().unwrap_or_else(|e| e.into_inner()).start_result(&s.id, outcome, now_ms());
+                state.monitor.emit("fleet_changed", serde_json::json!({"id": s.id}));
+            });
+        }
     }
 }
 
@@ -382,4 +812,66 @@ mod tests {
         assert!(g.stations().iter().all(|s| !s.online), "after a restart nobody is online yet");
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn repositories_compared_loosely() {
+        assert!(same_repo("https://github.com/Aitorrio/bost-flowstation", "https://github.com/aitorrio/bost-flowstation.git/"));
+        assert!(same_repo("https://user:token@github.com/a/b.git", "https://github.com/a/b"));
+        assert!(!same_repo("https://github.com/sebastianmadl/bost-flowstation", DEFAULT_UPDATE_REPO));
+        let empty = UpdateSettings::default();
+        assert_eq!(empty.effective(), (DEFAULT_UPDATE_REPO.to_string(), "main".to_string()));
+        let fork = UpdateSettings { repo: " https://github.com/sebastianmadl/bost-flowstation ".into(), branch: "handover".into() };
+        assert_eq!(fork.effective().1, "handover");
+    }
+
+    fn check(current: &str, newer: bool) -> CheckInfo {
+        CheckInfo { at_ms: 1, ok: true, current: current.into(), latest: Some("v2".into()), update_available: newer, channel: "installed".into(), repo: DEFAULT_UPDATE_REPO.into(), branch: "main".into(), message: String::new() }
+    }
+
+    #[test]
+    fn updatable_only_after_a_check_for_the_running_software() {
+        let mut f = Fleet::load(None, 0);
+        let mut h = hello(true, "v1");
+        h.capabilities.push(UPDATE_CAPABILITY.into());
+        f.hello("bs1", &h, 1, &no_names);
+        assert!(!f.updatable("bs1"), "no check yet");
+        f.set_check("bs1", check("v1", false));
+        assert!(!f.updatable("bs1"), "up to date");
+        f.set_check("bs1", check("v1", true));
+        assert!(f.updatable("bs1"));
+        f.set_online("bs1", false, 2);
+        assert!(!f.updatable("bs1"), "offline");
+        let mut h2 = hello(true, "v2");
+        h2.capabilities.push(UPDATE_CAPABILITY.into());
+        f.hello("bs1", &h2, 3, &no_names);
+        assert!(f.get("bs1").unwrap().check.is_none(), "a check for other software is dropped");
+        // Without update-v1 (older station) never.
+        f.hello("bs2", &hello(true, "v1"), 4, &no_names);
+        f.set_check("bs2", check("v1", true));
+        assert!(!f.updatable("bs2"));
+    }
+
+    #[test]
+    fn a_run_cannot_start_twice_and_the_job_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("fleet-job-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = Fleet::path_for(&dir.join("history.bin"));
+        let mut f = Fleet::load(Some(path.clone()), 0);
+        let mut h = hello(true, "v1");
+        h.capabilities.push(UPDATE_CAPABILITY.into());
+        f.hello("bs1", &h, 1, &no_names);
+        f.set_check("bs1", check("v1", true));
+        let o = crate::fleet_update::Options { mode: crate::fleet_update::Mode::Rolling, during_call: false, interrupt_min: 10 };
+        assert!(f.start_job(&["bs1".into()], o.clone(), Some("alice"), 2, &no_names).is_ok());
+        assert!(f.start_job(&["bs1".into()], o, Some("alice"), 3, &no_names).is_err());
+        let starts = f.tick_job(4);
+        assert_eq!(starts.len(), 1);
+        let g = Fleet::load(Some(path), 5);
+        let job = g.job().unwrap();
+        assert!(!job.is_finished());
+        assert_eq!(job.items[0].state, crate::fleet_update::ItemState::Pending, "the unanswered start is tried again after the restart");
+        assert!(g.log().iter().any(|e| e.text.starts_with("Update run started (rolling")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
 }

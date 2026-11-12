@@ -4,6 +4,24 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 2 (remote update).** On the Fleet Control page,
+  **Check for updates** lets every station (or the ticked ones) check its own
+  update source; the table shows "Newer: <version>" / "Up to date". **Update
+  all** (or **Update** for ticked stations, or one station) asks for
+  **Rolling** (one after another: the next starts when the previous one is
+  back with the new software, so the network is never fully off the air) or
+  **Parallel** (all at once), **Update during call**, and how long to wait
+  for a call to end (default 10 min). The run goes on on the server with the
+  browser closed and after a server restart. Each station shows its stage
+  (download, build %, installing, restarting) live. Limits: 45 min to the
+  restart, 5 min back after it; a failed station is marked ALARM (red, also
+  in the change log) and skipped, the run goes on. A station offline at its
+  turn moves to the end once, then it is skipped. **Cancel all** starts no
+  further station, **Cancel** takes one station out. Stations always update
+  from their own source; new **Updates repo** card (Server settings) sets the
+  reference repository and branch, and a station with another source gets
+  the hint "⚠ other repo/branch". Needs FlowStation with Fleet Control phase 2
+  (`update-v1`). See docs/Fleet-Control.md section 8.
 - **Fleet Control, phase 1 (foundation).** Basestations that switch on
   "Fleet Control" (FlowStation, Infrastructure page) can be managed from this
   server over the control channel. Offered automatically while `[control]` is

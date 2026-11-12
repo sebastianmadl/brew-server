@@ -8,9 +8,9 @@ existing Basestation control channel (WebSocket, subprotocol
 new port.
 
 This document is the protocol and behaviour reference for phase 1
-(foundation). Later phases add commands to the same scheme; each new command
-is announced as a capability first, so older stations and servers keep
-working.
+(foundation) and phase 2 (remote update, section 8). Later phases add
+commands to the same scheme; each new command is announced as a capability
+first, so older stations and servers keep working.
 
 ## 1. Principles
 
@@ -62,8 +62,9 @@ listed its capability.
 | Capability | Commands | Phase |
 | --- | --- | --- |
 | `fleet-v1` | `FleetPing` | 1 |
+| `update-v1` | `CheckUpdate`, `StartUpdate` (answers `UpdateInfo`, `CommandResult`; reports `UpdateProgress`) | 2 |
 
-Later phases add for example `update-v1`, `reboot-v1`, `config-v1`.
+Later phases add for example `reboot-v1`, `config-v1`.
 
 ## 3. Messages
 
@@ -118,8 +119,10 @@ The general answer to every Fleet Control command, correlated by `handle`.
 | `message` | string | short English text for the dashboard |
 
 Codes in phase 1: `ok`, `fleet_control_off` (the switch is off; the station
-refuses every Fleet Control command). Later phases add codes such as
-`invalid_value`, `call_active`, `busy`.
+refuses every Fleet Control command). Phase 2 adds `busy` (an update is
+already running), `call_active` (a call is in progress) and `unavailable`
+(the station cannot do it, e.g. no OTA without its dashboard). Later phases
+add codes such as `invalid_value`.
 
 ### 3.3 `FleetPing` (server → station)
 
@@ -186,8 +189,14 @@ itself) and text, and kept **90 days**:
 | `fleet_off` | a listed station switched Fleet Control off |
 | `version` | a listed station came back with other software |
 | `removed` | a user removed a station from the list |
+| `update` | update run started / cancelled, a station started, waits for a call, restarts, moved to the end of the queue (phase 2) |
+| `update_done` | a station is back with the new software |
+| `update_alarm` | a station failed (shown red): refused, build failed, 45 min build limit, not back 5 min after the restart, back with the old software |
+| `update_skip` | a station was not updated: up to date, offline twice, cancelled |
+| `update_end` | the run is over, with the counts |
+| `settings` | an admin changed "Updates repo" |
 
-Phases 2–7 add configuration changes, updates and restarts.
+Phases 3–7 add configuration changes and restarts.
 
 Stations and log are kept in `<[storage] path>.fleet` (JSON, rewritten through
 a temporary file) and survive restarts; without `[storage] enabled` they are
@@ -200,7 +209,7 @@ Dashboard users (Server settings → Users), next to the page ticks:
 | Right | Page id | Allows |
 | --- | --- | --- |
 | Fleet Control visibility | `fleet` | see the Fleet Manager and the change log |
-| Fleet Control management | `fleet_manage` | visibility plus every button (Ping, Remove; later update, restart, config) |
+| Fleet Control management | `fleet_manage` | visibility plus every button (Ping, Remove, Check for updates, Update, Cancel; later restart, config) |
 
 Admins have both. Viewer (not logged in) may get visibility, never
 management. Neither right is given to users taken over from the config.
@@ -212,11 +221,19 @@ management. Neither right is given to users taken over from the config.
 | `GET /api/fleet` | visibility | – | `{offered, protocol, can_manage, stations: [...], log: [...]}` |
 | `POST /api/fleet/ping` | management | `{"id": "<control login>"}` | `{ok, code, message, ms}`; 404 not connected, 504 no answer in 5 s |
 | `POST /api/fleet/remove` | management | `{"id": "<control login>"}` | `{ok: true}`; 404 not listed |
+| `POST /api/fleet/check` | management | `{"ids": [...]}` (empty: all) | `{results: [{id, check}]}` (section 8.3) |
+| `POST /api/fleet/update` | management | `{"ids": [...], "mode": "parallel"\|"rolling", "during_call": bool, "interrupt_min": n}` | `{ok, job}`; 409 a run is going or no station |
+| `POST /api/fleet/update/cancel` | management | `{}` (whole run) or `{"id": "<control login>"}` | `{ok: true}`; 404 nothing to cancel |
+| `POST /api/fleet/settings` | admin | `{"repo": "...", "branch": "..."}` | `{ok: true}`; 400 not a git URL / branch |
 
 A station in `stations`: `id`, `label`, `brew_login`, `version`, `mcc`, `mnc`,
-`protocol`, `capabilities`, `online`, `first_seen_ms`, `last_seen_ms`. A log
-entry: `id`, `at_ms`, `station`, `label`, `user` (null = the station), `kind`,
-`text`.
+`protocol`, `capabilities`, `online`, `first_seen_ms`, `last_seen_ms`, and
+from phase 2 `check` (last update check or null), `progress` (last
+`UpdateProgress` or null), `updatable`, `other_source`. A log entry: `id`,
+`at_ms`, `station`, `label`, `user` (null = the station or the server),
+`kind`, `text`. Phase 2 adds `is_admin`, `job` (the current or last run, or
+null), `update_settings`, `update_source` (in effect) and `limits` to
+`GET /api/fleet`.
 
 Code: `src/fleet.rs` (Fleet Manager, log, API), `src/control.rs` (messages),
 `src/fsnet.rs` (offer on the control channel), `src/server.rs` (offer on the
@@ -244,3 +261,120 @@ nothing breaks.
 - Key material (K, SCK, CCK) will never travel through the configuration
   commands; keys get their own phase (key management, server as
   authentication centre, EN 300 392-7 clause 4.1.1).
+
+## 8. Remote update (phase 2, `update-v1`)
+
+### 8.1 Principles
+
+- **The station keeps its own update source.** Each station updates from its
+  own OTA source (FlowStation `[dashboard] ota_channel`: by default the
+  repository and branch it was installed from, forks included). The server
+  only says "check" and "update"; it never chooses a repository or branch.
+  Moving a station to another source is a configuration change (phase 5, by
+  hand per station: "apply OTA settings from the server"), never automatic.
+- **Only after a check.** A station can be updated only when its last check
+  (`CheckUpdate`), made with the software it runs now, found a newer version.
+  When its turn comes it fetches the newest version again, so a rolling run
+  always installs what is newest at that moment.
+- **The station is off the air while it builds.** FlowStation's OTA frees the
+  SDR for the build (10–20 min on a Raspberry Pi), then installs and
+  restarts. This is why rolling runs exist.
+
+### 8.2 Messages
+
+Server → station (only to stations whose hello listed `update-v1`):
+
+```json
+{"CheckUpdate": {"handle": 9}}
+{"StartUpdate": {"handle": 10, "during_call": false}}
+```
+
+Station → server:
+
+```json
+{"UpdateInfo": {"handle": 9, "ok": true, "current": "v0.5.9-8d7a363", "latest": "v0.6.0-1a2b3c4", "update_available": true,
+  "channel": "installed", "repo": "https://github.com/sebastianmadl/bost-flowstation", "branch": "fleet-control", "message": "newer version available"}}
+{"CommandResult": {"handle": 10, "ok": true, "code": "ok", "message": "Update started"}}
+{"UpdateProgress": {"stage": "build", "percent": 42, "message": "   Compiling tetra-entities v0.1.0", "version": "v0.5.9-8d7a363", "elapsed_secs": 312}}
+```
+
+| Message | Fields |
+| --- | --- |
+| `CheckUpdate` | `handle`. The station checks its own source, fresh (no cache); it asks GitHub, so the answer can take some seconds (the server waits up to 60 s) |
+| `UpdateInfo` | `handle`, `ok` (the check reached the repository), `current`, `latest` (or null), `update_available`, `channel` (`installed` / `stable` / `beta` / `custom`), `repo` (never with credentials), `branch`, `message` |
+| `StartUpdate` | `handle`, `during_call` (default false: refuse with `call_active` while a call is in progress). Answer `CommandResult`: `ok`, `busy`, `call_active`, `unavailable`, `fleet_control_off` |
+| `UpdateProgress` | `stage`: `download`, `build`, `install`, `restart`, `up_to_date`, `failed`; `percent` 0–100 (estimated in `build`); `message` (last log line); `version` (running software, the old one until the restart); `elapsed_secs`. Sent on every change of stage or percentage, at least every 10 s while running, also for updates started on the station's own dashboard |
+
+The end of an update is the next `StationHello` after the restart: other
+`version` = updated.
+
+### 8.3 Check for updates
+
+**Check for updates** (Fleet Control page) sends `CheckUpdate` to every
+online station with `update-v1` (only the ticked ones, if any) and stores each
+answer with the station (`check`). The table shows "Newer: <version>", "Up to
+date" or "Check failed". A check is dropped when the station comes back with
+other software.
+
+**Updates repo** (Server settings, admins): repository URL and branch, free to
+choose (e.g. a fork with `handover`); empty = `https://github.com/Aitorrio/bost-flowstation`,
+`main`. It is a reference only: a station whose checked source differs (other
+repository, compared without case, `.git`, trailing slash or credentials, or
+another branch) gets the hint **⚠ other repo/branch** with both sources in the
+tooltip.
+
+### 8.4 Update run
+
+**Update all** (nothing ticked) or **Update (n)** (ticked stations), or
+**Update** on one station, opens a dialog:
+
+| Field | Meaning |
+| --- | --- |
+| Rolling (one after another) | the next station starts only when the previous one is back with the new software (or failed / skipped); the network is never fully off the air |
+| Parallel (all at once) | every station starts at once |
+| Update during call | start at once, a running call is cut |
+| Interrupt a call after (min) | without "Update during call": wait at most this long for a call to end (default 10, at most 120), then start anyway |
+
+One run at a time. The run lives on the server (`fleet_update.rs`, driven
+every 2 s by `fleet::run_updates`): it goes on with the browser closed and
+survives a server restart (saved in `<storage path>.fleet`; a start whose
+answer never came is sent again after the restart).
+
+Per station:
+
+| State | Next |
+| --- | --- |
+| up to date at the start (no newer version found) | skipped at once |
+| offline (or no answer) when its turn comes | moved to the end of the queue once; offline again: skipped |
+| `call_active` | tried again every 10 s; after the interrupt time with `during_call: true` |
+| started (`ok`, or `busy`: an update was already running there and is followed) | follows `UpdateProgress` |
+| no `restart` within **45 min** of the start (build limit) | ALARM, skipped |
+| `restart` | waits for the station; not back within **5 min**: ALARM, skipped |
+| back with other software | updated |
+| back with the same software after the restart | ALARM, skipped |
+| `up_to_date` | skipped |
+| `failed`, or any other refusal (`unavailable`, `fleet_control_off`) | ALARM, skipped |
+
+A failed station never stops the run: it is marked red in the table and in
+the change log and the next station starts.
+
+**Cancel all** (shown next to Update while a run goes) starts no further
+station; one that is updating finishes. **Cancel** on a station takes it out
+of the run while it has not started yet (queued or waiting for a call).
+
+The Fleet Control page shows the run (mode, counts, the queue with each
+station's state) and per station the stage with a progress bar, refreshed
+every 3 s while the run goes.
+
+### 8.5 Backwards compatibility
+
+| Server | Station | Result |
+| --- | --- | --- |
+| phase 1 | phase 2 | the server ignores `update-v1`; no update commands are sent; `UpdateProgress` frames are dropped as unknown (logged, nothing breaks) |
+| phase 2 | phase 1 | no `update-v1` in the hello: the station is never checked or updated (not counted in Update all) |
+| phase 2 | phase 2, no dashboard | no `update-v1`, same as above |
+
+Code: `src/fleet_update.rs` (run state, pure), `src/fleet.rs` (checks,
+settings, API, driver), `src/control.rs` (messages), `src/dashboard_ui.rs`
+(page, dialog, Server settings card). Station side: FlowStation
+`net_dashboard/ota_remote.rs`, `net_control/fleet.rs`, `Docs/fleet-control.md`.

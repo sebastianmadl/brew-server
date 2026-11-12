@@ -161,6 +161,10 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet", get(crate::fleet::api_list))
         .route("/api/fleet/remove", axum::routing::post(crate::fleet::api_remove))
         .route("/api/fleet/ping", axum::routing::post(crate::fleet::api_ping))
+        .route("/api/fleet/check", axum::routing::post(crate::fleet::api_check))
+        .route("/api/fleet/update", axum::routing::post(crate::fleet::api_update))
+        .route("/api/fleet/update/cancel", axum::routing::post(crate::fleet::api_cancel))
+        .route("/api/fleet/settings", axum::routing::post(crate::fleet::api_settings))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -288,7 +292,7 @@ fn need(path: &str) -> Need {
         "/sms-center" | "/api/sms-center" => &["sms"],
         "/ha" => &["ha"],
         "/api/fleet" => &["fleet"],
-        "/api/fleet/remove" | "/api/fleet/ping" => &["fleet_manage"],
+        "/api/fleet/remove" | "/api/fleet/ping" | "/api/fleet/check" | "/api/fleet/update" | "/api/fleet/update/cancel" => &["fleet_manage"],
         _ => return Need::Admin,
     })
 }
@@ -2627,6 +2631,10 @@ mod tests {
         assert_eq!(need("/api/fleet"), Need::Pages(&["fleet"]));
         assert_eq!(need("/api/fleet/remove"), Need::Pages(&["fleet_manage"]));
         assert_eq!(need("/api/fleet/ping"), Need::Pages(&["fleet_manage"]));
+        for p in ["/api/fleet/check", "/api/fleet/update", "/api/fleet/update/cancel"] {
+            assert_eq!(need(p), Need::Pages(&["fleet_manage"]), "{p}");
+        }
+        assert_eq!(need("/api/fleet/settings"), Need::Admin, "Updates repo is a server setting");
         let looker = crate::dash_users::Access { user: Some("eve".into()), admin: false, pages: ["fleet".to_string()].into(), auth: true };
         assert!(allowed(&looker, need("/api/fleet")) && !allowed(&looker, need("/api/fleet/remove")));
     }

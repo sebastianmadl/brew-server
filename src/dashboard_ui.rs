@@ -1033,24 +1033,108 @@ R.control=()=>{
 const v=id=>($(id)||{}).value||'';
 
 /* ---------- Fleet Control (docs/Fleet-Control.md) ---------- */
-const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w']};
+const FLEET_KIND={fleet_on:['On','a'],fleet_off:['Off','d'],version:['Software','b'],removed:['Removed','w'],update:['Update','b'],update_done:['Updated','a'],update_alarm:['Alarm','d'],update_skip:['Skipped','w'],update_end:['Update run','b'],settings:['Settings','i']};
+const FLEET_STAGE={download:'Download',build:'Build',install:'Installing',restart:'Restarting',up_to_date:'Up to date',failed:'Failed'};
+if(!UI.fsel)UI.fsel=new Set();
+const fleetJobOn=f=>!!(f&&f.job&&!f.job.finished_ms);
+const fleetItem=(f,id)=>f&&f.job?(f.job.items||[]).find(i=>i.id===id):null;
+// Where a station is in the update run (or its last progress), as a chip with a bar.
+function fleetUpd(f,x){
+  const it=fleetItem(f,x.id),live=fleetJobOn(f);
+  const bar=(p,cls)=>`<div style="height:4px;border-radius:2px;background:var(--bg4);margin-top:4px;min-width:90px"><div style="height:4px;border-radius:2px;width:${Math.max(0,Math.min(100,p))}%;background:var(${cls||'--accent'})"></div></div>`;
+  if(it){const s=it.state;
+    if(s.state==='pending')return `<span class="chip i">${live?'Queued':'Not started'}</span>`;
+    if(s.state==='starting')return '<span class="chip b">Starting…</span>';
+    if(s.state==='waiting_call')return `<span class="chip w" title="Tried again every 10 s">Call in progress · waiting</span>`;
+    if(s.state==='running')return `<span class="chip b">${esc(FLEET_STAGE[s.stage]||s.stage)} ${s.percent}%</span>${bar(s.percent)}${s.message?`<div class="mut m" style="font-size:11px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.message)}">${esc(s.message)}</div>`:''}`;
+    if(s.state==='restarting')return `<span class="chip b">Restarting · ${ago(s.since_ms)}</span>${bar(100)}`;
+    if(s.state==='done')return `<span class="chip a">Updated · ${esc(s.version)}</span>`;
+    if(s.state==='failed')return `<span class="chip d" style="white-space:normal" title="${esc(s.reason)}">ALARM · ${esc(s.reason)}</span>`;
+    if(s.state==='skipped')return `<span class="chip w" style="white-space:normal">Skipped · ${esc(s.reason)}</span>`;
+  }
+  const p=x.progress;
+  if(p&&Date.now()-p.at_ms<3600e3&&p.stage!=='up_to_date')return `<span class="chip ${p.stage==='failed'?'d':'b'}" title="Started on the station">${esc(FLEET_STAGE[p.stage]||p.stage)} ${p.stage==='failed'?'':p.percent+'%'}</span>`;
+  return '<span class="mut">—</span>';
+}
+// Software column: version, result of the last check, hint when the station has another OTA source.
+function fleetSw(f,x){
+  const c=x.check;let h=`<span class="m">${esc(x.version)}</span>`;
+  if(c){
+    if(!c.ok)h+=`<div><span class="chip i" title="${esc(c.message)}">Check failed · ${ago(c.at_ms)}</span></div>`;
+    else if(c.update_available)h+=`<div><span class="chip a" title="Checked ${esc(tmd(c.at_ms))}">Newer: ${esc(c.latest||'available')}</span></div>`;
+    else h+=`<div><span class="chip i" title="Checked ${esc(tmd(c.at_ms))}">Up to date</span></div>`;
+    if(x.other_source){const r=f.update_source;h+=`<div><span class="chip w" title="This station updates from ${esc(c.repo)} (${esc(c.branch)}, channel ${esc(c.channel)}). Updates repo on this server: ${esc(r.repo)} (${esc(r.branch)}). The station keeps its own source.">⚠ other repo/branch</span></div>`;}
+  }
+  return h;
+}
 R.fleet=()=>{
   const f=D.fleet;if(!f)return loading;
-  const st=f.stations||[];const log=f.log||[];const m=f.can_manage;
+  const st=f.stations||[];const log=f.log||[];const m=f.can_manage;const job=f.job;const live=fleetJobOn(f);
+  for(const id of [...UI.fsel])if(!st.some(x=>x.id===id))UI.fsel.delete(id);
+  const sel=[...UI.fsel];const upd=st.filter(x=>x.updatable);
+  const target=sel.length?st.filter(x=>UI.fsel.has(x.id)&&x.updatable):upd;
+  const canCheck=st.some(x=>x.online&&(x.capabilities||[]).includes('update-v1'));
   const q=(UI.filter.fleet||'').toLowerCase();
   const shown=log.filter(e=>!q||(e.label+' '+e.station+' '+e.text+' '+(e.user||'')).toLowerCase().includes(q));
-  return `<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}</div>
-   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page, Server features). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> takes a station off the list (it comes back with its next login while its switch is on). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
-   ${st.length?`<div class="tw"><table><thead><tr><th>Station</th><th>Status</th><th>Software</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');return `<tr>
+  const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
+     <button class="btn pri" ${target.length&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${target.length?'':'Check for updates first: only stations with a newer version can be updated'}">${sel.length?'Update ('+target.length+')':'Update all'}</button>
+     ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}`:'';
+  const jobCard=job?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
+    return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
+     <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b> · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
+     <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
+  return jobCard+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
+   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> takes a station off the list (it comes back with its next login while its switch is on).<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update</b> for the ticked stations) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
+   ${msgDiv('fl_top','padding:0 18px')}
+   ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
+     ${m?`<td><input type="checkbox" class="chk" aria-label="Tick ${esc(x.label)}" ${UI.fsel.has(x.id)?'checked':''} onclick="fleetSel('${esc(x.id)}',this.checked)"></td>`:''}
      <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
      <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}</td>
-     <td class="m">${esc(x.version)}</td><td class="m">${x.mcc}/${x.mnc}</td>
+     <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
-     ${m?`<td style="text-align:right;white-space:nowrap"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center"><button class="btn" ${x.online?'':'disabled'} onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button><button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button></div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+     ${m?`<td style="text-align:right;white-space:nowrap"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${x.updatable&&!live?`<button class="btn pri" onclick="fleetUpdateDlg('${esc(x.id)}')">Update</button>`:''}<button class="btn" ${x.online?'':'disabled'} onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button><button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button></div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span></div>
-   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];return `<tr><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">station</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
+   ${shown.length?`<div class="tw"><table><thead><tr><th>Time</th><th>Station</th><th>What</th><th>By</th></tr></thead><tbody>${shown.slice(0,300).map(e=>{const k=FLEET_KIND[e.kind]||[e.kind,'i'];const al=e.kind==='update_alarm';return `<tr${al?' style="color:var(--danger);font-weight:600"':''}><td class="m">${esc(tmd(e.at_ms))}</td><td>${esc(e.label)}</td><td><span class="chip ${k[1]}">${esc(k[0])}</span> ${esc(e.text)}</td><td>${e.user?esc(e.user):'<span class="mut">'+(e.station?'station':'server')+'</span>'}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">Nothing in the last 90 days.</div>'}</div>`;
 };
+function fleetSel(id,on){if(on)UI.fsel.add(id);else UI.fsel.delete(id);render(true);}
+function fleetSelAll(on){UI.fsel.clear();if(on)(D.fleet.stations||[]).forEach(x=>UI.fsel.add(x.id));render(true);}
+async function fleetReload(){try{D.fleet=await getJ('/api/fleet');}catch(e){}render(true);}
+async function fleetCheck(){
+  const ids=[...UI.fsel];setMsg('fl_top','mut','Checking for updates… (each station asks its own repository, up to a minute)');render(true);
+  try{const r=await postJ('/api/fleet/check',{ids});const res=r.results||[];const newer=res.filter(x=>x.check.update_available).length,bad=res.filter(x=>!x.check.ok).length;
+    setMsg('fl_top',bad?'err':'ok',`${res.length} checked: ${newer} with a newer version${bad?', '+bad+' failed':''}`);}catch(e){setMsg('fl_top','err',e.message);}
+  fleetReload();}
+// Update dialog: Parallel / Rolling, update during call, interrupt time. `one`: a single station.
+function fleetUpdateDlg(one){
+  const f=D.fleet;const st=f.stations||[];
+  const list=one?st.filter(x=>x.id===one):(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&x.updatable):st.filter(x=>x.updatable));
+  const skip=one?[]:(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&!x.updatable):[]);
+  if(!list.length)return;
+  const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fu-mode" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Update ${list.length===1?esc(list[0].label):list.length+' stations'}</h3></div><div class="sb">
+   ${list.length>1?`<div style="display:grid;gap:10px">${radio('rolling','Rolling (one after another)','The next station starts when the previous one is back with the new software. The network is never fully off the air.',true)}${radio('parallel','Parallel (all at once)','Every station builds at the same time: all of them are off the air for the build.',false)}</div>`:''}
+   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fu-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true');$('fu-int').disabled=this.getAttribute('aria-checked')==='true'"></button> Update during call <span class="mut" style="font-size:12px">(start at once, a running call is cut)</span></label>
+   <div><label class="l" for="fu-int">Interrupt a call after (minutes)</label><input class="f" id="fu-int" type="number" min="0" max="${f.limits.max_interrupt_min}" value="10" style="width:110px"><div class="mut" style="font-size:12px;margin-top:4px">While a call is in progress the start waits for it to end, at most this long, then the station updates anyway.</div></div>
+   <div class="mut" style="font-size:12.5px">Each station updates from its own source and fetches the newest version when its turn comes. It is <b>off the air while it builds</b> (10–20 min on a Raspberry Pi), then restarts. The run goes on on the server, also with the browser closed.${skip.length?`<br><br>Not updated (no newer version found): ${skip.map(x=>esc(x.label)).join(', ')}.`:''}</div>
+   <div class="mut" style="font-size:12px">${list.map(x=>esc(x.label)).join(' · ')}</div>
+   ${msgDiv('fu-msg','padding:0')}</div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="fleetStart(${one?`['${esc(one)}']`:'null'})">Start update</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function fleetStart(ids){
+  const st=D.fleet.stations||[];
+  const list=ids||(UI.fsel.size?st.filter(x=>UI.fsel.has(x.id)&&x.updatable).map(x=>x.id):[]);
+  const m=document.querySelector('input[name=fu-mode]:checked');
+  const body={ids:list,mode:m?m.value:'rolling',during_call:$('fu-call').getAttribute('aria-checked')==='true',interrupt_min:Math.max(0,parseInt(v('fu-int')||'10',10)||0)};
+  try{await postJ('/api/fleet/update',body);closeSheet();UI.fsel.clear();setMsg('fl_top','ok','Update run started');fleetReload();}catch(e){setMsg('fu-msg','err',e.message);}
+}
+async function fleetCancel(id){
+  if(!confirm(id?'Take this station out of the update run?':'Cancel the update run? No further station starts; a station that is updating finishes.'))return;
+  try{await postJ('/api/fleet/update/cancel',id?{id}:{});fleetReload();}catch(e){alert(e.message);}
+}
+// The Fleet Control page follows a running update every 3 s.
+setInterval(()=>{if(UI.page==='fleet'&&fleetJobOn(D.fleet)&&!$('scrim').classList.contains('on'))fleetReload();},3000);
 async function fleetPing(id,sid){setMsg('fl_'+sid,'mut','Sending…');
   try{const r=await postJ('/api/fleet/ping',{id});setMsg('fl_'+sid,r.ok?'ok':'err',(r.ok?'OK':r.code)+' · '+r.ms+' ms'+(r.ok?'':' · '+r.message));}catch(e){setMsg('fl_'+sid,'err',e.message);}}
 async function fleetRemove(id,label){
@@ -1859,8 +1943,23 @@ R.settings=()=>{
     <div class="tw"><table><thead><tr><th>Login</th><th>Name</th><th>Position</th><th></th></tr></thead><tbody>
     ${l.map(x=>`<tr><td class="m"><b>${esc(x.username)}</b></td><td>${esc(x.name)}</td><td class="m" style="font-size:12px">${(+x.lat).toFixed(4)}, ${(+x.lon).toFixed(4)}</td><td style="text-align:right"><button class="btn danger" onclick="btsLocDel('${esc(x.username)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="4" class="mut">No static station positions</td></tr>'}
     </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>
+   ${updatesRepoCard()}
    ${usersCard()}`;
 };
+// Server settings: the reference source for Fleet Control updates (hint only, stations keep their own).
+function updatesRepoCard(){
+  const f=D.fleet;if(!f||!f.update_settings)return '';
+  const s=f.update_settings,r=f.update_source;
+  return `<div class="card"><div class="ch"><h2>Updates repo</h2>${helpBtn('updrepo')}<span class="sp"></span><a data-go="fleet" href="#fleet">Fleet Control ›</a></div>${helpNote('updrepo','Repository and branch the Fleet Control page compares the stations with: a station that updates from another source gets the hint ⚠ other repo/branch. Empty: the product repository, branch main. The stations keep updating from their own source; this setting does not change them.')}
+   <div class="svc" style="display:grid;gap:10px;grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;align-items:end">
+    <div><label class="l" for="ur-repo">Repository</label><input class="f" id="ur-repo" value="${esc(s.repo)}" placeholder="${esc('https://github.com/Aitorrio/bost-flowstation')}" autocomplete="off" spellcheck="false" autocapitalize="off" style="width:100%"></div>
+    <div><label class="l" for="ur-branch">Branch</label><input class="f" id="ur-branch" value="${esc(s.branch)}" placeholder="main" autocomplete="off" spellcheck="false" autocapitalize="off" style="width:100%"></div>
+    <button class="btn pri" onclick="saveUpdatesRepo()">Save</button></div>
+   <div class="svc mut" style="font-size:12.5px">In effect: <span class="m">${esc(r.repo)}</span> (${esc(r.branch)})</div>${msgDiv('ur-msg','padding:0 18px 12px')}</div>`;
+}
+async function saveUpdatesRepo(){
+  try{await postJ('/api/fleet/settings',{repo:v('ur-repo').trim(),branch:v('ur-branch').trim()});D.fleet=await getJ('/api/fleet');setMsg('ur-msg','ok','Saved');render(true);}catch(e){setMsg('ur-msg','err',e.message);}
+}
 // Dashboard users (Server settings, admins): who logs in, who is admin, which pages each one sees.
 const pageName=id=>id==='fleet_manage'?'Fleet Control management':PG[id]?PG[id][1]:id;
 const pageChips=(list,all)=>all?'<span class="chip a">Every page · edits</span>':(list.length?list.map(p=>`<span class="chip">${esc(pageName(p))}</span>`).join(' '):'<span class="mut">no page</span>');

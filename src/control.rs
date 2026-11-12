@@ -43,6 +43,13 @@ pub enum ControlCommand {
     /// `CommandResult` (`ok`, or `fleet_control_off`). Only for stations that
     /// listed `fleet-v1` in their `StationHello`.
     FleetPing { #[serde(default)] handle: u32 },
+    /// Fleet Control (`update-v1`): the station runs its update check against
+    /// its own OTA source and answers with `UpdateInfo` (may take ~45 s).
+    CheckUpdate { #[serde(default)] handle: u32 },
+    /// Fleet Control (`update-v1`): start the station's OTA from its own
+    /// source; answered with `CommandResult` (`ok`, `busy`, `call_active`,
+    /// `unavailable`, `fleet_control_off`), then `UpdateProgress` reports.
+    StartUpdate { #[serde(default)] handle: u32, #[serde(default)] during_call: bool },
 }
 
 impl ControlCommand {
@@ -67,8 +74,18 @@ impl ControlCommand {
         match self {
             Self::SendSds { handle, .. } | Self::SendRawSdsType4 { handle, .. }
             | Self::CommandA { handle, .. } | Self::TestCmdB { handle, .. }
-            | Self::FleetPing { handle } => Some(*handle),
+            | Self::FleetPing { handle } | Self::CheckUpdate { handle }
+            | Self::StartUpdate { handle, .. } => Some(*handle),
             _ => None,
+        }
+    }
+
+    /// How long `send_command` waits for the answer.
+    fn answer_timeout(&self) -> Duration {
+        match self {
+            // The station asks GitHub (its own timeouts reach about 45 s).
+            Self::CheckUpdate { .. } => Duration::from_secs(60),
+            _ => Duration::from_secs(5),
         }
     }
 }
@@ -96,6 +113,37 @@ pub enum ControlResponse {
     },
     /// Fleet Control: the answer to every Fleet Control command.
     CommandResult { handle: u32, ok: bool, code: String, #[serde(default)] message: String },
+    /// Fleet Control (`update-v1`): the answer to `CheckUpdate`.
+    UpdateInfo {
+        handle: u32,
+        ok: bool,
+        #[serde(default)]
+        current: String,
+        #[serde(default)]
+        latest: Option<String>,
+        #[serde(default)]
+        update_available: bool,
+        #[serde(default)]
+        channel: String,
+        #[serde(default)]
+        repo: String,
+        #[serde(default)]
+        branch: String,
+        #[serde(default)]
+        message: String,
+    },
+    /// Fleet Control (`update-v1`): progress of an OTA run on the station.
+    UpdateProgress {
+        stage: String,
+        #[serde(default)]
+        percent: u8,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        version: String,
+        #[serde(default)]
+        elapsed_secs: u64,
+    },
 }
 
 struct ControlSession {
@@ -142,7 +190,8 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
     let assigned_handle = match &mut command {
         ControlCommand::SendSds { handle, .. } | ControlCommand::SendRawSdsType4 { handle, .. }
         | ControlCommand::CommandA { handle, .. } | ControlCommand::TestCmdB { handle, .. }
-        | ControlCommand::FleetPing { handle } => {
+        | ControlCommand::FleetPing { handle } | ControlCommand::CheckUpdate { handle }
+        | ControlCommand::StartUpdate { handle, .. } => {
             *handle = fresh_handle;
             Some(*handle)
         }
@@ -160,7 +209,11 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
             session.pending_ambience.insert(*issi, tx);
             Some(rx)
         }
-        _ if matches!(command, ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. } | ControlCommand::FleetPing { .. }) => {
+        _ if matches!(
+            command,
+            ControlCommand::SendSds { .. } | ControlCommand::CommandA { .. } | ControlCommand::FleetPing { .. }
+                | ControlCommand::CheckUpdate { .. } | ControlCommand::StartUpdate { .. }
+        ) => {
             let handle = assigned_handle.or_else(|| command.handle()).expect("assigned above");
             let (tx, rx) = oneshot::channel();
             session.pending_handle.insert(handle, tx);
@@ -169,6 +222,7 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
         _ => None,
     };
 
+    let wait = command.answer_timeout();
     let frame = serde_json::to_vec(&command.to_wire_json()).expect("control command always serializes");
     if session.tx.send(frame).is_err() {
         return Err(SendError::NotConnected);
@@ -176,7 +230,7 @@ pub async fn send_command(state: &Arc<AppState>, bts_id: &str, mut command: Cont
     drop(ctl);
 
     let Some(rx) = waiter else { return Ok(None) };
-    match tokio::time::timeout(Duration::from_secs(5), rx).await {
+    match tokio::time::timeout(wait, rx).await {
         Ok(Ok(response)) => Ok(Some(response)),
         Ok(Err(_)) | Err(_) => Err(SendError::Timeout),
     }
@@ -262,6 +316,12 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
         return;
     }
+    if let ControlResponse::UpdateProgress { stage, percent, message, version, .. } = &response {
+        let names = station_names(state);
+        state.fleet.lock().unwrap_or_else(|e| e.into_inner()).progress(id, stage, *percent, message, version, crate::fleet::now_ms(), &|k| names.get(k).cloned());
+        state.monitor.emit("fleet_changed", serde_json::json!({"id": id}));
+        return;
+    }
     let mut ctl = state.control.write().await;
     let Some(session) = ctl.sessions.get_mut(id) else { return };
     match &response {
@@ -272,10 +332,10 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             if let Some(tx) = session.pending_ambience.remove(issi) { let _ = tx.send(response); }
         }
         ControlResponse::CommandAResponse { handle, .. } | ControlResponse::SendSdsResponse { handle, .. }
-        | ControlResponse::CommandResult { handle, .. } => {
+        | ControlResponse::CommandResult { handle, .. } | ControlResponse::UpdateInfo { handle, .. } => {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
-        ControlResponse::StationHello { .. } => {}
+        ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } => {}
     }
 }
 
@@ -363,4 +423,111 @@ mod tests {
         let r = ask.await.unwrap().unwrap();
         assert!(matches!(r, Some(ControlResponse::CommandResult { ok: true, .. })));
     }
+
+    /// A FlowStation stand-in: answers update checks (newer version), starts,
+    /// reports progress, restarts and comes back with `v2`. Records when its
+    /// update ran so the test can check that rolling never overlaps.
+    async fn fake_station(state: Arc<AppState>, id: String, mut rx: mpsc::UnboundedReceiver<Vec<u8>>, log: Arc<std::sync::Mutex<Vec<(String, &'static str)>>>) {
+        let hello = |v: &str| serde_json::to_vec(&serde_json::json!({"StationHello": {"protocol": 1, "version": v, "brew_login": id, "mcc": 232, "mnc": 20, "fleet_control": true, "capabilities": ["fleet-v1", "update-v1"]}})).unwrap();
+        deliver_test_response(&state, &id, &hello("v1")).await;
+        while let Some(frame) = rx.recv().await {
+            let v: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+            if let Some(h) = v.get("CheckUpdate") {
+                let a = serde_json::json!({"UpdateInfo": {"handle": h["handle"], "ok": true, "current": "v1", "latest": "v2", "update_available": true, "channel": "installed", "repo": "https://github.com/sebastianmadl/bost-flowstation.git", "branch": "fleet-control", "message": "newer version available"}});
+                deliver_test_response(&state, &id, &serde_json::to_vec(&a).unwrap()).await;
+            } else if let Some(h) = v.get("StartUpdate") {
+                log.lock().unwrap().push((id.clone(), "start"));
+                let a = serde_json::json!({"CommandResult": {"handle": h["handle"], "ok": true, "code": "ok", "message": "Update started"}});
+                deliver_test_response(&state, &id, &serde_json::to_vec(&a).unwrap()).await;
+                let st = state.clone();
+                let id2 = id.clone();
+                let log2 = log.clone();
+                tokio::spawn(async move {
+                    for (stage, pct) in [("download", 5), ("build", 50), ("install", 92), ("restart", 100)] {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        let p = serde_json::json!({"UpdateProgress": {"stage": stage, "percent": pct, "message": "", "version": "v1", "elapsed_secs": 0}});
+                        deliver_test_response(&st, &id2, &serde_json::to_vec(&p).unwrap()).await;
+                    }
+                    st.fleet.lock().unwrap().set_online(&id2, false, crate::fleet::now_ms());
+                    tokio::time::sleep(Duration::from_secs(90)).await;
+                    log2.lock().unwrap().push((id2.clone(), "back"));
+                    let hello2 = serde_json::to_vec(&serde_json::json!({"StationHello": {"protocol": 1, "version": "v2", "brew_login": id2, "mcc": 232, "mnc": 20, "fleet_control": true, "capabilities": ["fleet-v1", "update-v1"]}})).unwrap();
+                    deliver_test_response(&st, &id2, &hello2).await;
+                });
+            }
+        }
+    }
+
+    async fn ten_station_run(mode: crate::fleet_update::Mode) -> (Arc<AppState>, Vec<(String, &'static str)>) {
+        let state = test_state();
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for i in 1..=10 {
+            let id = format!("10000{i:02}");
+            let rx = attach_test_session(&state, &id).await;
+            tokio::spawn(fake_station(state.clone(), id, rx, log.clone()));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(state.fleet.lock().unwrap().stations().len(), 10);
+        // Without a check nothing is updatable.
+        let first = state.fleet.lock().unwrap().stations()[0].id.clone();
+        assert!(!state.fleet.lock().unwrap().updatable(&first));
+        let r = crate::fleet::api_check(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(crate::fleet::IdsRequest::default())).await;
+        assert_eq!(r.status(), 200);
+        let ids: Vec<String> = state.fleet.lock().unwrap().stations().into_iter().map(|s| s.id).collect();
+        assert!(ids.iter().all(|id| state.fleet.lock().unwrap().updatable(id)), "every station found a newer version");
+        let req = crate::fleet::UpdateRequest { ids: vec![], mode, during_call: false, interrupt_min: 10 };
+        let r = crate::fleet::api_update(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(req)).await;
+        assert_eq!(r.status(), 200);
+        tokio::spawn(crate::fleet::run_updates(state.clone()));
+        for _ in 0..2000 {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            if state.fleet.lock().unwrap().job().is_some_and(|j| j.is_finished()) {
+                break;
+            }
+        }
+        let l = log.lock().unwrap().clone();
+        (state, l)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rolling_update_of_ten_stations_one_at_a_time() {
+        let (state, log) = ten_station_run(crate::fleet_update::Mode::Rolling).await;
+        let fleet = state.fleet.lock().unwrap();
+        let job = fleet.job().unwrap();
+        assert!(job.is_finished(), "the run ends");
+        assert!(job.items.iter().all(|i| matches!(i.state, crate::fleet_update::ItemState::Done { .. })), "{:?}", job.items);
+        // Rolling: start, back, start, back, ... never two at once.
+        assert_eq!(log.len(), 20);
+        for pair in log.chunks(2) {
+            assert_eq!((pair[0].1, pair[1].1), ("start", "back"));
+            assert_eq!(pair[0].0, pair[1].0, "the next station starts only after the previous is back");
+        }
+        assert!(fleet.stations().iter().all(|s| s.version == "v2"));
+        let texts: Vec<String> = fleet.log().iter().map(|e| e.text.clone()).collect();
+        assert!(texts.iter().any(|t| t == "Update run finished: 10 updated, 0 failed, 0 skipped"), "{texts:?}");
+        // The checks were for v1: after the update they are dropped, a new check is needed.
+        assert!(fleet.stations().iter().all(|s| s.check.is_none()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parallel_update_of_ten_stations_at_once() {
+        let (state, log) = ten_station_run(crate::fleet_update::Mode::Parallel).await;
+        let job = state.fleet.lock().unwrap().job().unwrap().clone();
+        assert!(job.is_finished());
+        assert!(job.items.iter().all(|i| matches!(i.state, crate::fleet_update::ItemState::Done { .. })));
+        assert!(log[..10].iter().all(|(_, what)| *what == "start"), "all ten start before any is back");
+    }
+
+    #[test]
+    fn update_wire_shapes_match_flowstation() {
+        // Same JSON as FlowStation's net_control::fleet tests.
+        assert_eq!(ControlCommand::CheckUpdate { handle: 9 }.to_wire_json(), serde_json::json!({"CheckUpdate": {"handle": 9}}));
+        assert_eq!(ControlCommand::StartUpdate { handle: 11, during_call: true }.to_wire_json(), serde_json::json!({"StartUpdate": {"handle": 11, "during_call": true}}));
+        let info: ControlResponse = serde_json::from_value(serde_json::json!({"UpdateInfo": {"handle": 9, "ok": true, "current": "v0.5.9-aaa", "latest": "v0.5.9-bbb", "update_available": true, "channel": "installed", "repo": "https://github.com/sebastianmadl/bost-flowstation", "branch": "fleet-control", "message": "newer version available"}})).unwrap();
+        assert!(matches!(info, ControlResponse::UpdateInfo { handle: 9, update_available: true, .. }));
+        let p: ControlResponse = serde_json::from_value(serde_json::json!({"UpdateProgress": {"stage": "build", "percent": 42, "message": "Compiling x", "version": "v0.5.9-aaa", "elapsed_secs": 120}})).unwrap();
+        assert!(matches!(p, ControlResponse::UpdateProgress { percent: 42, .. }));
+        assert_eq!(ControlCommand::CheckUpdate { handle: 0 }.answer_timeout(), Duration::from_secs(60));
+    }
+
 }
