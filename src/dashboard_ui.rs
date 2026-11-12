@@ -1200,7 +1200,7 @@ async function fcLoad(fresh){
     const was=fc.data&&fc.data.cfg.copy&&fc.data.cfg.copy.hash;
     fc.data=d;const copy=d.cfg.copy;
     // A new copy (first load, confirmed change, import): start editing from it.
-    if(fresh||!fc.v||(copy&&copy.hash!==was&&!fcDirty())){fc.orig=copy?copy.config:null;fc.v=fcClone(fc.orig);fc.nb.edit=null;}
+    if(fresh||!fc.v||(copy&&copy.hash!==was&&!fcDirty())){fc.orig=copy?copy.config:null;fcSortNets(fc.orig);fc.v=fcClone(fc.orig);fc.nb.edit=null;}
     if(fresh){fcHeartbeat(true);if(d.cfg.drift)fcDriftDlg();}
   }catch(e){fc.err=e.message;}
   if(UI.page==='fleetcfg')render(true);
@@ -1236,7 +1236,7 @@ function fcDiff(o,v){
     if(c.colour_code!==oc.colour_code){e.colour_code=c.colour_code;line(name+' colour code',oc.colour_code,c.colour_code);}
     const la=c.primary?c.location_area:(c.location_area_own?c.location_area:null),ola=oc.primary?oc.location_area:(oc.location_area_own?oc.location_area:null);
     if(la!==ola){e.location_area=la;line(name+' LA',ola??'as cell 0',la??'as cell 0');}
-    if(v.networks_explicit&&c.network!==oc.network){e.network=c.network;line(name+' network',oc.network,c.network);}
+    if(v.networks_explicit&&c.network!==oc.network&&!(oc.network==='default'&&c.network==='home'&&!o.networks_explicit)){e.network=c.network;line(name+' network',oc.network==='default'&&!o.networks_explicit?'home':oc.network,c.network);}
     const nb=c.own_list||c.primary?c.neighbours:null,onb=oc.own_list||oc.primary?oc.neighbours:null;
     if(!fcSame(nb,onb)){e.neighbours=nb;line(name+' neighbours',(onb||[]).length+' entries',nb==null?'station cells only':nb.length+' entries');}
     if(Object.keys(e).length>1)cells.push(e);}
@@ -1251,7 +1251,7 @@ function fcDiff(o,v){
   // Multi Network.
   if(v.multi_network_enabled!==o.multi_network_enabled){body.multi_network_enabled=v.multi_network_enabled;line('Multi Network',o.multi_network_enabled,v.multi_network_enabled);}
   if(v.multi_network_enabled){const nets=[];
-    for(const n of v.networks){const on=o.networks.find(x=>x.name===n.name);
+    for(const n of v.networks){if(n.converted)continue;const on=o.networks.find(x=>x.name===n.name);
       if(n.removed){if(on){nets.push({name:n.name,remove:true});lines.push(`Network ${n.name}: removed`);}continue;}
       if(!on||!fcSame(fcStrip(n),fcStrip(on))||(n.brew&&n.brew.password)){nets.push(fcNetBody(n));lines.push(on?`Network ${n.name}: changed`:`Network ${n.name}: added (${n.mcc}/${n.mnc})`);}}
     if(nets.length)body.networks=nets;}
@@ -1347,7 +1347,7 @@ R.fleetcfg=()=>{
     return `<tr${gone?' style="opacity:.45;text-decoration:line-through"':''}><td style="white-space:nowrap"><b>Cell ${cl.id}</b>${cl.primary?' ★':''}</td><td class="m">${esc(cl.global_id||'—')}</td><td class="m mut" style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${esc(cl.device||'')}">${esc(cl.device||'—')}</td>
      <td>${fcF(`cells.${i}.main_carrier`,'int',`inputmode="numeric" ${cl.carrier_fixed?`disabled title="${esc(cl.carrier_fixed)}"`:''}`,'84px')}</td><td>${fcF(`cells.${i}.colour_code`,'int','inputmode="numeric"','64px')}</td>
      <td>${cl.primary?fcF(`cells.${i}.location_area`,'int','inputmode="numeric"','78px'):fcF(`cells.${i}.location_area`,'intn',`inputmode="numeric" placeholder="${esc(prim.location_area)}"`,'78px')}</td>
-     <td>${v.networks_explicit?fcSel(`cells.${i}.network`,netOpts,'str','','170px'):`<span class="m">${v.mcc}/${v.mnc}</span>`}</td>
+     <td>${v.networks_explicit?fcSel(`cells.${i}.network`,netOpts,'str','data-redraw="1"','170px'):`<span class="m">${v.mcc}/${v.mnc}</span>`}</td>
      <td style="text-align:right">${cl.primary?'':gone?`<button class="btn" onclick="fcCellRemove(${cl.id},false)">Keep</button>`:`<button class="btn danger" onclick="fcCellRemove(${cl.id},true)">Remove</button>`}</td></tr>`;}).join('')
     +(v.cells_new||[]).map((cl,i)=>`<tr><td><b>New</b> <span class="chip w">added</span></td><td class="mut">—</td><td class="m" style="font-size:12px">${esc(cl.device)}</td><td class="m">${cl.main_carrier}</td><td class="m">${cl.colour_code??'—'}</td><td class="m">${cl.location_area??'—'}</td><td></td><td style="text-align:right"><button class="btn" onclick="fcCellNewDrop(${i})">Drop</button></td></tr>`).join('');
   const cells=fcCard('Cells and location areas',`<span class="cnt">${v.cells.length}</span><span class="sp"></span><button class="btn" ${dis} onclick="UI.fc.add=!UI.fc.add;render(true)">${ic('plus')}Add cell</button>`,
@@ -1358,9 +1358,9 @@ R.fleetcfg=()=>{
   const mnOn=!!v.multi_network_enabled;
   const nets=fcCard('Networks (Multi Network)',`<span class="sp"></span><span class="mut" style="font-size:12.5px">${mnOn?'On':'Off'}</span>${fcTog('multi_network_enabled','data-redraw="1"')}`,
     fcHelp('A cell broadcasts exactly one network (MCC / MNC, TS 100 392-2 table 18.17); pick it per cell above. Own server: the network\'s own Brew link; via: through another network\'s Brew server; local: inside this station.'+(mnOn?'':' Switching Multi Network off turns the networks back into the classic config.'))+
-    (v.networks_explicit?`<div class="tw"><table><thead><tr><th>Name</th><th>MCC</th><th>MNC</th><th>Reached</th><th>Brew server</th><th></th></tr></thead><tbody>${v.networks.map((x,i)=>`<tr${x.removed?' style="opacity:.45;text-decoration:line-through"':''}><td><b>${esc(x.name)}</b>${o.networks.some(y=>y.name===x.name)?'':' <span class="chip w">new</span>'}</td><td>${fcF(`networks.${i}.mcc`,'int','inputmode="numeric"','74px')}</td><td>${fcF(`networks.${i}.mnc`,'int','inputmode="numeric"','86px')}</td>
+    (v.networks_explicit||mnOn?`<div class="tw"><table><thead><tr><th>Name</th><th>MCC</th><th>MNC</th><th>Reached</th><th>Brew server</th><th></th></tr></thead><tbody>${v.networks.map((x,i)=>`<tr${x.removed?' style="opacity:.45;text-decoration:line-through"':''}><td><b>${esc(x.name)}</b>${o.networks.some(y=>y.name===x.name)||x.converted?'':' <span class="chip w">new</span>'}${!x.removed&&fcUnserved().includes(x.name)?' <span class="chip d" title="Every network needs a cell: bind one above or remove the network">no cell</span>':''}</td>${v.networks_explicit?`<td>${fcF(`networks.${i}.mcc`,'int','inputmode="numeric"','74px')}</td><td>${fcF(`networks.${i}.mnc`,'int','inputmode="numeric"','86px')}</td>`:`<td class="m">${x.mcc}</td><td class="m">${x.mnc}</td>`}
       <td>${x.mode==='core'?'<span class="chip a">own server</span>':x.mode==='via'?`<span class="chip b">via ${esc(x.via)}</span>`:'<span class="chip i">local</span>'}</td><td class="m">${x.mode==='core'&&x.brew?esc((x.brew.host||'')+':'+(x.brew.port||443)):'—'}</td>
-      <td style="text-align:right">${i===0?'':x.removed?`<button class="btn" onclick="fcNetRemove(${i},false)">Keep</button>`:`<button class="btn danger" onclick="fcNetRemove(${i},true)">Remove</button>`}</td></tr>`).join('')}</tbody></table></div>`:'')+
+      <td style="text-align:right">${x.name===fcPrimaryNet()||x.converted?'':x.removed?`<button class="btn" onclick="fcNetRemove(${i},false)">Keep</button>`:`<button class="btn danger" onclick="fcNetRemove(${i},true)">Remove</button>`}</td></tr>`).join('')}</tbody></table></div>`:'')+
     (mnOn?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:12px 18px">${fcFld('Name',`<input class="f" id="fc-nn-name" style="width:120px">`)}${fcFld('MCC',`<input class="f" id="fc-nn-mcc" inputmode="numeric" style="width:80px">`)}${fcFld('MNC',`<input class="f" id="fc-nn-mnc" inputmode="numeric" style="width:90px">`)}
       ${fcFld('Reached',`<select class="f" id="fc-nn-via" style="width:150px" onchange="$('fc-nn-own').style.display=this.value==='@core'?'flex':'none'">${v.networks.filter(x=>!x.removed&&x.mode==='core').map(x=>`<option value="${esc(x.name)}">via ${esc(x.name)}</option>`).join('')}<option value="@core">own server</option><option value="@local">local</option></select>`)}
       <span id="fc-nn-own" style="display:none;gap:8px;flex-wrap:wrap;align-items:flex-end">${fcFld('Brew server',`<input class="f" id="fc-nn-host" style="width:170px">`)}${fcFld('Port',`<input class="f" id="fc-nn-port" inputmode="numeric" value="443" style="width:80px">`)}${fcFld('Login',`<input class="f" id="fc-nn-user" inputmode="numeric" style="width:110px">`)}${fcFld('Password',`<input class="f" id="fc-nn-pass" type="password" autocomplete="new-password" style="width:120px">`)}</span>
@@ -1417,13 +1417,29 @@ function fcCellNewDrop(i){UI.fc.v.cells_new.splice(i,1);render(true);}
 function fcCellAdd(){const v=UI.fc.v;const num=id=>{const s=$(id).value.trim();return s===''?null:parseInt(s,10);};
   const dev=$('fc-nc-dev').value.trim(),car=num('fc-nc-car');if(!dev||car==null||!(car>=0&&car<4096)){setMsg('fc_top','err','New cell: SDR device and carrier (0-4095) are needed');render(true);return;}
   (v.cells_new=v.cells_new||[]).push({device:dev,main_carrier:car,colour_code:num('fc-nc-cc'),location_area:num('fc-nc-la')});UI.fc.add=false;render(true);}
-function fcNetRemove(i,on){UI.fc.v.networks[i].removed=on;render(true);}
+// Networks follow the station's own page: every network but the primary one can go; cells on a
+// removed network fall back to the primary network; a network nobody added any more after a
+// classic config was converted turns it back into the classic form.
+// The primary network first, then the others by name (as the station lists them).
+function fcSortNets(o){if(!o||!o.networks)return;const p=(o.cells.find(c=>c.primary)||o.cells[0]||{}).network;o.networks.sort((a,b)=>(a.name!==p)-(b.name!==p)||a.name.localeCompare(b.name));}
+function fcPrimaryNet(){const o=UI.fc.orig,p=o.cells.find(c=>c.primary)||o.cells[0];return p.network==='default'&&!o.networks_explicit?'home':p.network;}
+function fcUnserved(){const v=UI.fc.v;if(!v.networks_explicit)return [];const rm=v.cells_remove||[];const used=v.cells.filter(c=>!rm.includes(c.id)).map(c=>c.network);
+  if((v.cells_new||[]).length)used.push(fcPrimaryNet());return v.networks.filter(n=>!n.removed&&!used.includes(n.name)).map(n=>n.name);}
+function fcNetRemove(i,on){const v=UI.fc.v,n=v.networks[i];
+  if(on&&n.mode==='core'&&!confirm(`Remove network ${n.name}? Its own Brew login in the config is removed too.`))return;
+  const isNew=!UI.fc.orig.networks.some(x=>x.name===n.name);
+  if(on&&isNew)v.networks.splice(i,1);else n.removed=on;
+  if(on){const p=fcPrimaryNet();v.cells.forEach(c=>{if(c.network===n.name)c.network=p;});}
+  // Converted on this page and nothing added any more: back to the classic config.
+  if(!UI.fc.orig.networks_explicit&&!v.networks.some(x=>!x.converted)){v.networks_explicit=false;v.networks.forEach(x=>{if(x.converted){x.name='default';delete x.converted;}});v.cells.forEach(c=>{if(c.network==='home')c.network='default';});}
+  render(true);}
 function fcNetAdd(){const v=UI.fc.v;const name=$('fc-nn-name').value.trim(),mcc=parseInt($('fc-nn-mcc').value,10),mnc=parseInt($('fc-nn-mnc').value,10),via=$('fc-nn-via').value;
   if(!/^[A-Za-z0-9_-]+$/.test(name)||!isFinite(mcc)||!isFinite(mnc)){setMsg('fc_top','err','Network: name (letters, digits, _ -), MCC and MNC');render(true);return;}
   if(v.networks.some(x=>x.name===name)){setMsg('fc_top','err','There is a network '+name+' already');render(true);return;}
-  const n={name,mcc,mnc,mode:via==='@core'?'core':via==='@local'?'local':'via',via:via.startsWith('@')?null:via};
+  const n={name,mcc,mnc,mode:via==='@core'?'core':via==='@local'?'local':'via',via:via.startsWith('@')?null:(via==='default'?'home':via)};
   if(n.mode==='core'){n.brew={host:$('fc-nn-host').value.trim(),port:parseInt($('fc-nn-port').value,10)||443,tls:true,username:parseInt($('fc-nn-user').value,10),password:$('fc-nn-pass').value};}
-  if(!v.networks_explicit){v.networks_explicit=true;if(v.networks[0]&&o0name(v.networks[0]))v.networks[0].name='home';}
+  // A classic station's network becomes "home" when the first network is added (the station does the same).
+  if(!v.networks_explicit){v.networks_explicit=true;v.networks.forEach(x=>{if(o0name(x)){x.name='home';x.converted=true;}});v.cells.forEach(c=>{if(c.network==='default')c.network='home';});}
   v.networks.push(n);render(true);}
 const o0name=n=>n.name==='default';
 function fcLinkNew(k){UI.fc.v[k]={enabled:true,host:'',port:443,use_tls:true,username:'',password:'',password_set:false,...(k==='telemetry'?{site_name:'',latitude:null,longitude:null}:{})};render(true);}
@@ -1473,6 +1489,7 @@ function fcNbApply(){const fc=UI.fc,ed=fc.nb.edit,c=fcCellNow();const e=ed.e;
 // Apply / save as pending, with what changes.
 function fcApplyDlg(){
   const fc=UI.fc,d=fc.data;const {lines}=fcDiff(fc.orig,fc.v);if(!lines.length)return;
+  const un=fcUnserved();if(un.length){setMsg('fc_top','err',`Every network needs a cell: bind a cell to ${un.join(', ')} or remove it`);render(true);return;}
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${d.online?'Apply to':'Save for'} ${esc(d.label)}</h3></div><div class="sb">
    <div class="tw" style="border:1px solid var(--border);border-radius:8px;max-height:280px;overflow:auto"><table><tbody>${lines.map(l=>`<tr><td style="font-size:12.5px">${esc(l)}</td></tr>`).join('')}</tbody></table></div>
    ${d.online?`<label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fc-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Apply during a call <span class="mut" style="font-size:12px">(else refused while a call runs)</span></label>
@@ -2654,6 +2671,17 @@ mod tests {
         let page = &page[..page.find("function fleetCfgChip(").unwrap()];
         assert!(!page.contains("admin"), "no admin-only part on the config page");
         assert!(PAGE_HTML.contains("${f.is_admin?`<button class=\"btn danger\""), "Clear stays admins only");
+    }
+
+    #[test]
+    fn config_page_follows_the_station_on_networks() {
+        // As FlowStation's Infrastructure page: the classic network becomes "home" when the first
+        // network is added (the station creates it, the page does not send it), every network
+        // but the primary one can be removed, and a network without a cell is caught before Apply.
+        assert!(PAGE_HTML.contains("if(n.converted)continue;"));
+        assert!(PAGE_HTML.contains("x.name===fcPrimaryNet()||x.converted?'':"));
+        assert!(PAGE_HTML.contains("const un=fcUnserved();if(un.length)"));
+        assert!(PAGE_HTML.contains("via==='default'?'home':via"));
     }
 
     #[test]
