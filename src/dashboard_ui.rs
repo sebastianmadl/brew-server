@@ -1040,7 +1040,8 @@ const fleetJobOn=f=>!!(f&&f.job&&!f.job.finished_ms);
 const fleetItem=(f,id)=>f&&f.job?(f.job.items||[]).find(i=>i.id===id):null;
 // Where a station is in the update run (or its last progress), as a chip with a bar.
 function fleetUpd(f,x){
-  const it=fleetItem(f,x.id),live=fleetJobOn(f);
+  // Only while a run goes: afterwards the run card keeps the results and the column is free again.
+  const live=fleetJobOn(f),it=live?fleetItem(f,x.id):null;
   const bar=(p,cls)=>`<div style="height:4px;border-radius:2px;background:var(--bg4);margin-top:4px;min-width:90px"><div style="height:4px;border-radius:2px;width:${Math.max(0,Math.min(100,p))}%;background:var(${cls||'--accent'})"></div></div>`;
   if(it){const s=it.state;
     if(s.state==='pending')return `<span class="chip i">${live?'Queued':'Not started'}</span>`;
@@ -1053,7 +1054,7 @@ function fleetUpd(f,x){
     if(s.state==='skipped')return `<span class="chip w" style="white-space:normal">Skipped · ${esc(s.reason)}</span>`;
   }
   const p=x.progress;
-  if(p&&Date.now()-p.at_ms<3600e3&&p.stage!=='up_to_date')return `<span class="chip ${p.stage==='failed'?'d':'b'}" title="Started on the station">${esc(FLEET_STAGE[p.stage]||p.stage)} ${p.stage==='failed'?'':p.percent+'%'}</span>`;
+  if(p&&Date.now()-p.at_ms<3600e3&&!['up_to_date','restart'].includes(p.stage))return `<span class="chip ${p.stage==='failed'?'d':'b'}" title="Started on the station">${esc(FLEET_STAGE[p.stage]||p.stage)} ${p.stage==='failed'?'':p.percent+'%'}</span>`;
   return '<span class="mut">—</span>';
 }
 // Software column: version, result of the last check, hint when the station has another OTA source.

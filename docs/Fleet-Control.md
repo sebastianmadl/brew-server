@@ -379,8 +379,9 @@ station; one that is updating finishes. **Cancel** on a station takes it out
 of the run while it has not started yet (queued or waiting for a call).
 
 The Fleet Control page shows the run (mode, counts, the queue with each
-station's state) and per station the stage with a progress bar, refreshed
-every 3 s while the run goes.
+station's state) and, while the run goes, per station the stage with a
+progress bar, refreshed every 3 s. After the run the Update column is empty
+again; the run card keeps the results.
 
 ### 8.5 Backwards compatibility
 
