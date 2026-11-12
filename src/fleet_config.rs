@@ -554,6 +554,24 @@ pub fn raw_patches(old: &str, new: &str) -> Result<(Vec<serde_json::Value>, Vec<
     Ok((patches, lines))
 }
 
+/// Going back to the server copy: add `raw` patches that take the station's config file back to
+/// the copy, also for values the page does not show. Values hidden on both sides (***) are equal
+/// and left alone; a hidden value that would have to be written is refused.
+pub fn add_resolve_patches(changes: &mut serde_json::Value, summary: &mut Vec<String>, station: &str, copy: &str) -> Result<(), String> {
+    let (patches, lines) = raw_patches(station, copy).map_err(|e| format!("Cannot go back to the server copy: {e}"))?;
+    if patches.is_empty() {
+        return Ok(());
+    }
+    if let Some(o) = changes.as_object_mut() {
+        let raw = o.entry("raw").or_insert_with(|| serde_json::json!([]));
+        if let Some(a) = raw.as_array_mut() {
+            a.extend(patches);
+        }
+    }
+    summary.extend(lines.into_iter().map(|l| format!("Config file: {}", l.chars().take(180).collect::<String>())));
+    Ok(())
+}
+
 type RawDiff = (Vec<serde_json::Value>, Option<toml::Value>, Option<toml::Value>);
 
 fn diff_value(path: &mut Vec<serde_json::Value>, a: Option<&toml::Value>, b: Option<&toml::Value>, out: &mut Vec<RawDiff>) {
@@ -588,7 +606,7 @@ pub async fn api_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, J
     if !a.manages_fleet() {
         return refuse();
     }
-    if !req.changes.is_object() || (req.changes.as_object().is_some_and(|o| o.is_empty()) && req.raw_text.is_none()) {
+    if !req.changes.is_object() || (req.changes.as_object().is_some_and(|o| o.is_empty()) && req.raw_text.is_none() && !req.resolve) {
         return (StatusCode::BAD_REQUEST, "Nothing to change").into_response();
     }
     let mut summary: Vec<String> = req.summary.iter().take(60).map(|l| l.chars().take(200).collect()).collect();
@@ -608,6 +626,16 @@ pub async fn api_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, J
                     }
                     summary.extend(lines.into_iter().map(|l| format!("Config file: {}", l.chars().take(180).collect::<String>())));
                 }
+            }
+        }
+    }
+    if req.resolve {
+        // Back to the server copy: also every value the page does not show (the station's file
+        // against the copy, passwords and keys excluded).
+        let texts = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).get(&req.id).and_then(|s| Some((s.cfg.drift.as_ref()?.text.clone(), s.cfg.copy.as_ref()?.text.clone())));
+        if let Some((station, copy)) = texts {
+            if let Err(e) = add_resolve_patches(&mut changes, &mut summary, &station, &copy) {
+                return (StatusCode::CONFLICT, e).into_response();
             }
         }
     }
@@ -924,6 +952,23 @@ mod tests {
         assert!(raw_patches(old, &old.replace("host = \"h\"", "host = \"***\"")).is_err(), "*** never goes back");
         assert!(raw_patches(old, "not toml [").is_err());
         assert!(raw_patches(old, old).unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn going_back_to_the_server_copy_covers_settings_the_page_does_not_show() {
+        // Changed on the station only in a value the page has no field for: the page diff is
+        // empty, the file still goes back to the copy (passwords stay as they are).
+        let copy = "[phy_io]\nrx_gain = 30\n\n[brew]\nhost = \"h\"\npassword = \"***\"\n";
+        let station = copy.replace("rx_gain = 30", "rx_gain = 42");
+        let mut changes = serde_json::json!({});
+        let mut summary = Vec::new();
+        add_resolve_patches(&mut changes, &mut summary, &station, copy).unwrap();
+        assert_eq!(changes, serde_json::json!({"raw": [{"path": ["phy_io", "rx_gain"], "value": 30}]}));
+        assert_eq!(summary, vec!["Config file: phy_io.rx_gain: 42 → 30".to_owned()]);
+
+        let mut same = serde_json::json!({"migration": true});
+        add_resolve_patches(&mut same, &mut Vec::new(), copy, copy).unwrap();
+        assert_eq!(same, serde_json::json!({"migration": true}), "nothing added when the files agree");
     }
 
     #[test]

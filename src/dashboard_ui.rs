@@ -1441,7 +1441,7 @@ R.fleetcfg=()=>{
     wl=fcCard('ISSI whitelist','',fcHelp('Which radios may register here. auto: empty list = everyone, else only the list; open: everyone; enforce: only the list (empty = nobody).')+
       `<div style="padding:12px 18px">${fcGrid(fcFld('Mode',fcSel('access.whitelist_mode',[['auto','auto'],['open','open'],['enforce','enforce']],'str')),
         fcFld('ISSIs (comma or space separated)',`<input class="f${chgL?' chg':''}" value="${esc(a.issi_whitelist.join(', '))}" inputmode="numeric" spellcheck="false" onchange="fcWl(this)">`))}</div>`);}
-  return css+head+cards+fieldset(brew+cells+nets+resel+nb+hmd+wl+tel+cmd+ota)+raw;
+  return css+head+cards+fieldset(brew+cells+nb+resel+nets+hmd+wl+tel+cmd+ota)+raw;
 };
 // Networks of this server (Multi Network page), to fill in a new network.
 function fcServerNets(){const nets=D.nets&&D.nets.networks;if(!nets||!nets.length)return '';
@@ -1569,7 +1569,7 @@ function fcDriftDlg(){
    <div style="font-size:13px">The config on the station is not the one this server last applied or read (seen ${esc(tmd(c.drift.at_ms))}). Until you choose, nothing on this station can be changed from here.</div>
    <div class="tw" style="border:1px solid var(--border);border-radius:8px;max-height:240px;overflow:auto"><table><thead><tr><th>Station → server copy</th></tr></thead><tbody>${lines.map(l=>`<tr><td style="font-size:12.5px">${esc(l)}</td></tr>`).join('')||'<tr><td class="mut" style="font-size:12.5px">Only settings this page does not show differ (see the config file).</td></tr>'}</tbody></table></div>
    <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fcd" value="import" checked style="margin-top:3px;accent-color:var(--accent)"><span><b>Import base station config to server</b><span class="mut" style="display:block;font-size:12px">The station's config becomes the server copy. Nothing changes on the station.</span></span></label>
-   <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fcd" value="apply" ${d.online&&lines.length?'':'disabled'} style="margin-top:3px;accent-color:var(--accent)"><span><b>Apply server config to base station</b><span class="mut" style="display:block;font-size:12px">The station goes back to the server copy (the settings above; passwords stay as they are on the station): restart, ${d.confirm_secs} s to come back, else rollback.${d.online?'':' Only while the station is online.'}</span></span></label>
+   <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fcd" value="apply" ${d.online&&c.copy?'':'disabled'} style="margin-top:3px;accent-color:var(--accent)"><span><b>Apply server config to base station</b><span class="mut" style="display:block;font-size:12px">The station goes back to the server copy (the settings above and every other value of the config file; passwords and keys stay as they are on the station): restart, ${d.confirm_secs} s to come back, else rollback.${d.online?'':' Only while the station is online.'}</span></span></label>
    ${msgDiv('fcd-msg','padding:0')}</div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Later</button><button class="btn pri" onclick="fcDriftGo()">Continue</button></div>`;
   $('scrim').classList.add('on');
@@ -2735,6 +2735,16 @@ mod tests {
         assert!(PAGE_HTML.contains("'/api/fleet/config/raw_preview'"));
         assert!(PAGE_HTML.contains("path:['security','issi_whitelist']"));
         assert!(PAGE_HTML.contains("vh=v.home_mode_display,P=['cell_info','home_mode_display']"));
+    }
+
+    #[test]
+    fn config_page_order_and_resolve() {
+        // Sebastian 2026-11-12: Brew link, cells, neighbours, reselection, networks, Home Mode
+        // Display, whitelist, telemetry, control, update source.
+        assert!(PAGE_HTML.contains("fieldset(brew+cells+nb+resel+nets+hmd+wl+tel+cmd+ota)+raw"));
+        // "Apply server config" is open whenever the station is online with a copy, also when
+        // only settings the page does not show differ (the server sends those as raw patches).
+        assert!(PAGE_HTML.contains(r#"value="apply" ${d.online&&c.copy?'':'disabled'}"#));
     }
 
     #[test]

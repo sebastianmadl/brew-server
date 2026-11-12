@@ -4,6 +4,14 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet config page: order and "Apply server config".** Cards in the order
+  Brew link, cells, neighbour cells, cell reselection, networks, Home Mode
+  Display, ISSI whitelist, telemetry, control channel, update source. In the
+  difference dialog **Apply server config to base station** is now open
+  whenever the station is online, also when only settings the page does not
+  show differ: the server sends the station's file back to the copy value by
+  value (passwords and keys stay as they are on the station).
+
 - **Fleet Control, phases 4/5 (station config).** Fleet Control → **Edit**
   opens one page per station (back arrow) with its Infrastructure settings:
   Brew link, cells (carrier, colour code, LA, network, add / remove), Multi
