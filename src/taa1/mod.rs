@@ -9,11 +9,12 @@
 //!
 //! Byte strings are written most significant byte first.
 
-// The whole TAA1 set as in the reference: TA41 is for SCK delivery (Fleet Control phase 8b),
-// TA12 / TA22 run on the station and are here to test the sets.
+// The whole TAA1 set as in the reference: TA41 / TA51 seal SCKs for delivery (Fleet Control
+// phase 8b), TA12 / TA22 / TA52 run on the station and the radio and are here for the tests.
 #![allow(dead_code)]
 
 pub mod hurdle;
+pub mod otar;
 
 use hurdle::Hurdle;
 

@@ -1819,7 +1819,78 @@ function tpTog(p,extra){return `<button class="tog" role="switch" aria-checked="
 function tpOn(k,on){if(on)UI.tp.on.add(k);else UI.tp.on.delete(k);render(true);}
 // Fleet Control keys (keys-v1): the authentication centre of the fleet (EN 300 392-7 clause 4.1.1).
 PG.fleetkeys=['fleetkeys','Fleet Control keys','key','Infrastructure'];
-const FK_MODELS=['','MTP3550','MTP6550','MTP6650','MTP6750','MTP850 S','MTH800'];
+const fkModels=d=>['',...((d&&d.sck&&d.sck.profiles)||[]).map(p=>p.name)];
+// Cipher keys (SCK, security class 2), per network (MCC-MNC).
+function fkSckBody(d){
+  const sk=d.sck||{nets:{}};const names=Object.keys(sk.nets||{});
+  if(!names.length)return `<div class="card"><div class="empty">No network yet: a station in Fleet Control brings its network (MCC-MNC).</div></div>`;
+  const net=names.includes(UI.fk.net)?UI.fk.net:names[0];UI.fk.net=net;const n=sk.nets[net];const manage=D.fleet&&D.fleet.can_manage;
+  const key=e=>e?`<b class="m">SCK ${e.sckn}</b> <span class="mut">version</span> <b class="m">${e.vn}</b> <span class="mut">· check value</span> <span class="m">${esc(e.check)}</span><span class="sub">${esc(e.source)} · ${esc(tmd(e.set_ms))}${e.by?' · '+esc(e.by):''}</span>`:'<span class="mut">—</span>';
+  const cov=c=>c?`<span class="chip ${c[1]&&c[0]*100<sk.warn_pct*c[1]?'w':'a'}">${c[0]} of ${c[1]} radios</span>`:'';
+  const act=n.activation;const nextSckn=n.current?(n.current.sckn===1?2:1):1;const nextVn=n.current?((n.current.vn+1)%65536):1;
+  const own=(n.stations||[]).filter(s=>s.active&&!s.matches_current);
+  const netSel=names.length>1?`<select class="f" aria-label="Network" onchange="UI.fk.net=this.value;render(true)">${names.map(x=>`<option ${x===net?'selected':''}>${esc(x)}</option>`).join('')}</select>`:`<span class="chip">${esc(net)}</span>`;
+  let h=`<div class="card"><div class="ch"><h2>Cipher keys</h2>${netSel}${helpBtn('fksck')}<span class="sp"></span><button class="btn" onclick="fkSckSend()" title="Send the keys to every registered radio that has not confirmed them, without waiting">Send to radios now</button></div>
+   ${helpNote('fksck',`Static cipher keys (SCK) of a security class 2 network (EN 300 392-7 clause 4.2.4). Stations with <b>server keys</b> get the current and the next key over the control channel (TLS) and encrypt the air interface with the current one. Radios get both sealed under their own K (clause 4.5.2.2): the station only forwards them and every radio confirms each key. When enough radios hold the next key (warning below ${sk.warn_pct} %), <b>Activate</b> switches every station at the same time: each announces the change with D-CK CHANGE DEMAND and changes the key on that slot (clause 4.5.5.4); two minutes later the next key becomes the current one. The next key gets another number than the current one, because radios keep their keys by number. A radio whose model holds only one trunked mode key gets the current key only. Generated keys are shown once (for loading radios by cable); after that only the check value (first 8 bytes of SHA-256) is shown.`)}
+   <div class="tw"><table><tbody>
+   <tr><th style="width:110px">Current</th><td>${key(n.current)}</td><td>${cov(n.coverage_current)}</td></tr>
+   <tr><th>Next</th><td>${key(n.next)}</td><td>${cov(n.coverage_next)}</td></tr>
+   ${act?`<tr><th>Change</th><td colspan="2"><span class="chip w">planned</span> to SCK ${act.sckn} version ${act.vn} at <b>${esc(new Date(act.at_ms).toLocaleString())}</b>${act.by?' · '+esc(act.by):''} ${manage?'<button class="btn" onclick="fkSckCancel()">Cancel</button>':''}</td></tr>`:''}
+   </tbody></table></div>
+   <div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px">
+    ${n.current?`<button class="btn" ${act?'disabled':''} onclick="fkSckSet('next',${nextSckn},${nextVn},'')" title="Random next key with number ${nextSckn}, version ${nextVn}; shown once">Generate next key</button>`:''}
+    ${n.next&&!act?'<button class="btn danger" onclick="fkSckDelete()">Remove next key</button>':''}
+    ${n.next&&!act&&manage?`<button class="btn pri" onclick="fkSckActivate('next')">Activate next key…</button>`:''}
+    ${own.length&&n.current&&!act&&manage?`<button class="btn" onclick="fkSckActivate('current')" title="Stations still running their own config key or an older key">Use current key on ${own.length} station${own.length===1?'':'s'}…</button>`:''}
+   </div></div>
+   <div class="card"><div class="ch"><h2>Enter a key</h2></div><div style="padding:12px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div><label class="l" for="fks-role">Key</label><select class="f" id="fks-role"><option value="current">Current</option><option value="next">Next</option></select></div>
+    <div><label class="l" for="fks-n">Number (1–32)</label><input class="f" id="fks-n" inputmode="numeric" style="width:90px" value="${n.current?nextSckn:1}"></div>
+    <div><label class="l" for="fks-vn">Version (0–65535)</label><input class="f" id="fks-vn" inputmode="numeric" style="width:110px" value="${n.current?nextVn:0}"></div>
+    <div style="flex:1;min-width:260px"><label class="l" for="fks-k">SCK (20 hex digits; empty: generate)</label><input class="f m" id="fks-k" autocomplete="off" spellcheck="false" autocapitalize="off" oninput="fkSckPreview()" placeholder="0123 4567 89AB CDEF 0123"></div>
+    <button class="btn pri" onclick="fkSckSet(v('fks-role'),parseInt(v('fks-n'),10),parseInt(v('fks-vn'),10),v('fks-k'))">Save key</button></div>
+    <div class="svc mut" id="fks-prev" style="font-size:12.5px">To take over the key the stations run today, enter it as the current key with the same number and version: the stations then show the same check value.</div></div>`;
+  const st=n.stations||[];
+  h+=`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span></div>${st.length?`<div class="tw"><table><thead><tr><th>Station</th><th>Key in use</th><th>From</th><th></th></tr></thead><tbody>${st.map(s=>`<tr><td><b>${esc(fkStation(s.id))}</b></td>
+    <td>${s.active?`<span class="m">SCK ${s.active.sckn} v${s.active.vn} · ${esc(s.active.check)}</span>`:'<span class="mut">—</span>'}</td>
+    <td>${!s.sck?'<span class="chip i" title="Offline, local keys or software without sck-v1">not with server keys</span>':s.from_config?'<span class="chip">its own config</span>':'<span class="chip a">server</span>'}</td>
+    <td>${s.switch_at_ms?`<span class="chip w">change ${esc(new Date(s.switch_at_ms).toLocaleTimeString())}</span>`:s.active?(s.matches_current?'<span class="chip a">current key</span>':'<span class="chip w">not the current key</span>'):''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No station of this network.</div>'}</div>`;
+  const radios=Object.entries(n.radios||{});
+  h+=`<div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${radios.length}</span></div>${radios.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Holds</th><th>Missing</th><th>Model slots</th><th></th></tr></thead><tbody>${radios.map(([i,r])=>`<tr><td><b class="m">${esc(i)}</b></td>
+    <td>${(r.confirmed||[]).map(([a,b])=>`<span class="chip a">SCK ${a} v${b}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
+    <td>${(r.missing||[]).map(x=>`<span class="chip w">SCK ${x}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
+    <td class="m">${r.room==null?'<span class="mut" title="Model not set: no check">?</span>':r.room}${r.room===1&&n.next?' <span class="chip w" title="Holds one trunked mode key: gets the next key only when it becomes current">1 slot</span>':''}</td>
+    <td style="text-align:right"><button class="btn" onclick="fkSckSend(${esc(i)})">Send</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No radio with K seen in this network.</div>'}</div>`;
+  return h;}
+function fkSckPreview(){const e=$('fks-prev');if(!e)return;const n=String(v('fks-k')||'').replace(/[\s:\-]/g,'');
+  e.textContent=!n?'Empty: a random key is generated and shown once.':/^[0-9a-fA-F]{20}$/.test(n)?'20 hex digits: '+n.toUpperCase().match(/.{4}/g).join(' '):`${n.length} of 20 characters${/^[0-9a-fA-F]*$/.test(n)?'':' · only 0-9 and A-F'}`;}
+async function fkSckSet(role,sckn,vn,key){
+  if(!(sckn>=1&&sckn<=32))return setMsg('fk-msg','err','Number 1-32');if(!(vn>=0&&vn<=65535))return setMsg('fk-msg','err','Version 0-65535');
+  if(role==='current'&&!confirm('Replace the current key? Stations keep running their key until a change is activated; radios get the new key as soon as they are registered.'))return;
+  try{const r=await postJ('/api/fleet/keys/sck/set',{net:UI.fk.net,role,sckn,vn,key:key||''});
+    if(r.key_once)fkSckShowOnce(r,role,sckn,vn);else setMsg('fk-msg','ok',`${role==='next'?'Next':'Current'} key saved · check value ${r.check}`);
+    const kf=$('fks-k');if(kf)kf.value='';fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+function fkSckShowOnce(r,role,sckn,vn){
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">New ${role} key: SCK ${sckn} version ${vn}</h3></div><div class="sb">
+   <div class="svc" style="font-size:13px"><span class="chip w">Shown once</span> Note it down only if radios are loaded by cable (KVL); over the air the server delivers it itself.</div>
+   <div style="font-family:var(--mono);font-size:22px;letter-spacing:.06em;padding:14px 18px;user-select:all;word-break:break-all">${esc(r.key_once)}</div>
+   <div class="svc" style="font-size:13px">Check value: <b class="m">${esc(r.check)}</b></div>
+   <div style="display:flex;gap:8px;padding:0 18px 12px"><button class="btn" onclick="navigator.clipboard.writeText('${esc(r.key_once.replace(/ /g,''))}').then(()=>setMsg('fks-once-msg','ok','Copied'))">Copy</button></div>${msgDiv('fks-once-msg','padding:0 18px')}</div>
+   <div class="acts"><button class="btn pri" onclick="closeSheet()">Done</button></div>`;
+  $('scrim').classList.add('on');}
+async function fkSckDelete(){if(!confirm('Remove the next key? Radios that got it keep it, it is just never activated.'))return;
+  try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net});setMsg('fk-msg','ok','Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckSend(issi){try{await postJ('/api/fleet/keys/sck/send',issi?{net:UI.fk.net,issi:Number(issi)}:{net:UI.fk.net});setMsg('fk-msg','ok','Delivery started; results come in as the radios answer');setTimeout(fkLoad,4000);}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckCancel(){if(!confirm('Cancel the planned change? Stations that already switched keep the new key.'))return;
+  try{await postJ('/api/fleet/keys/sck/cancel',{net:UI.fk.net});setMsg('fk-msg','ok','Change cancelled');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckActivate(role){
+  const m=prompt(role==='next'?'Switch every station of this network to the next key in how many minutes? (0 = now)':'Switch the stations that do not run the current key in how many minutes? (0 = now)','5');
+  if(m==null)return;const mins=Number(m);if(!(mins>=0&&mins<=10080))return setMsg('fk-msg','err','0-10080 minutes');
+  const go=async force=>postJ('/api/fleet/keys/sck/activate',{net:UI.fk.net,role,in_secs:Math.round(mins*60),force});
+  try{const r=await go(false);setMsg('fk-msg','ok','Change planned for '+new Date(r.at_ms).toLocaleString());fkLoad();}
+  catch(e){if(/warning below/.test(e.message)&&confirm(e.message+'\n\nRadios without the key lose the encrypted service until they get it. Activate anyway?')){
+    try{const r=await go(true);setMsg('fk-msg','ok','Change planned for '+new Date(r.at_ms).toLocaleString());fkLoad();}catch(e2){setMsg('fk-msg','err',e2.message);}}
+    else setMsg('fk-msg','err',e.message);}}
 function fleetKeys(){UI.fk=UI.fk||{tab:'radios',q:'',data:null,err:null};show('fleetkeys');fkLoad();}
 async function fkLoad(){const k=UI.fk;if(!k)return;
   try{k.data=await getJ('/api/fleet/keys');k.err=null;}catch(e){k.err=e.message;}
@@ -1832,7 +1903,7 @@ R.fleetkeys=()=>{
   const k=UI.fk;if(!k)return loading;const d=k.data;
   const back=`<button class="btn ic" title="Back to Fleet Control" aria-label="Back to Fleet Control" onclick="show('fleet')">‹</button>`;
   if(!d)return k.err?`<div class="card"><div class="empty">${esc(k.err)} <button class="btn" onclick="show('fleet')">Back</button></div></div>`:loading;
-  const tabs=[['radios','Radios'],['add','Add / generate'],['import','Import'],['stations','Stations']];
+  const tabs=[['radios','Radios'],['add','Add / generate'],['import','Import'],['sck','Cipher keys (SCK)'],['stations','Stations']];
   const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">Keys</h2><span class="cnt">${d.subs.length}</span>${helpBtn('fkeys')}<span class="sp"></span>
     <div class="seg" role="group" aria-label="Keys view">${tabs.map(([t,l])=>`<button aria-pressed="${k.tab===t}" onclick="UI.fk.tab='${t}';render(true)">${l}</button>`).join('')}</div></div>
     ${helpNote('fkeys',`This server is the authentication centre of the fleet: it holds the authentication key K of every radio, stations never see K (EN 300 392-7 clause 4.1.1). A station switched to <b>server keys</b> gets one-time authentication data sets (RS, KS, KS') from here and keeps a stock of ${d.settings.stock} per radio for radios seen at it or a neighbour in the last ${d.settings.days} days, so it can still authenticate while this server is away. K is write-only: after saving only its <b>check value</b> (first 8 bytes of SHA-256(K)) is shown, to compare with your records. K cannot be read out of a radio and there is no over-the-air transfer for K, so keys come in by import (CSV or a FlowStation export), by typing or by <b>Generate</b> (shown once, for programming the radio with CPS / KVL). The keys file is encrypted (AES-256-GCM) with <code>[keys] master_key_file</code>. Every change goes into the change log, never a key. Right: <i>Fleet Control keys</i> (Server settings → Users).`)}
@@ -1843,7 +1914,7 @@ R.fleetkeys=()=>{
     body=`<div class="card"><div class="ch"><h2>Radios with K</h2><span class="cnt">${list.length}</span><span class="sp"></span><input class="f" placeholder="Search ISSI or model" aria-label="Search the radios" value="${esc(k.q||'')}" oninput="UI.fk.q=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the radios&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:200px"></div>
     ${list.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Check value</th><th>Model</th><th>Source</th><th>Last authentication</th><th>Stock per station</th><th></th></tr></thead><tbody>${list.map(s=>{const la=s.last_auth;const stock=Object.entries(s.stock||{});
       return `<tr><td><b class="m">${s.issi}</b></td><td class="m">${esc(s.kcv)}</td>
-      <td><select class="f" style="width:120px" aria-label="Model of ${s.issi}" onchange="fkModel(${s.issi},this.value)">${FK_MODELS.map(m=>`<option value="${esc(m)}" ${m===(s.model||'')?'selected':''}>${m||'—'}</option>`).join('')}${s.model&&!FK_MODELS.includes(s.model)?`<option selected>${esc(s.model)}</option>`:''}</select></td>
+      <td><select class="f" style="width:120px" aria-label="Model of ${s.issi}" onchange="fkModel(${s.issi},this.value)">${fkModels(d).map(m=>`<option value="${esc(m)}" ${m===(s.model||'')?'selected':''}>${m||'—'}</option>`).join('')}${s.model&&!fkModels(d).includes(s.model)?`<option selected>${esc(s.model)}</option>`:''}</select></td>
       <td><span class="chip">${esc(s.source)}</span><span class="sub">${esc(tmd(s.set_ms))}${s.by?' · '+esc(s.by):''}</span></td>
       <td>${la?`<span class="chip ${la.ok?'a':'d'}">${la.ok?(la.mutual?'ok · mutual':'ok'):'failed'}</span><span class="sub">${esc(fkStation(la.station))} · ${ago(la.at_ms)}</span>`:'<span class="mut">—</span>'}</td>
       <td style="font-size:12px">${stock.length?stock.map(([st,n])=>`<div>${esc(fkStation(st))}: <b class="m">${n}</b></div>`).join(''):'<span class="mut">—</span>'}</td>
@@ -1854,6 +1925,8 @@ R.fleetkeys=()=>{
       <div style="flex:1;min-width:300px"><label class="l" for="fk-k">K (32 hex digits; spaces, : and - are ignored)</label><input class="f m" id="fk-k" autocomplete="off" spellcheck="false" autocapitalize="off" oninput="fkPreview()" placeholder="0123 4567 89AB CDEF 0123 4567 89AB CDEF"></div>
       <button class="btn pri" onclick="fkSet()">Save K</button><button class="btn" onclick="fkGenerate(null,false)" title="Random K for this ISSI, shown once to program the radio (CPS / KVL)">Generate</button></div>
       <div class="svc mut" id="fk-prev" style="font-size:12.5px">Type or paste K.</div></div>`;
+  }else if(k.tab==='sck'){
+    body=fkSckBody(d);
   }else if(k.tab==='import'){
     body=`<div class="card"><div class="ch"><h2>CSV</h2></div><div style="padding:12px 18px">
       <div class="mut" style="font-size:12.5px;margin-bottom:6px">One radio per line: <code>ISSI;K</code> (also <code>,</code> or tab). A header line and lines starting with <code>#</code> are skipped. If one line is wrong nothing is imported and the line number is shown.</div>
@@ -1924,13 +1997,24 @@ async function fkSource(id,source,local){
 setInterval(()=>{if(UI.page==='fleetkeys'&&UI.fk&&!$('scrim').classList.contains('on'))fkLoad();},30000);
 // Key settings (Server settings, admins).
 function keysSettingsCard(){
-  const s=D.fkset;if(!s){getJ('/api/fleet/keys').then(r=>{D.fkset=r.settings;if(UI.page==='settings')render(true);}).catch(()=>{});return '';}
+  const s=D.fkset;if(!s){getJ('/api/fleet/keys').then(r=>{D.fkset=r.settings;D.fksck=r.sck;if(UI.page==='settings')render(true);}).catch(()=>{});return '';}
+  const sk=D.fksck||{warn_pct:90,profiles:[]};UI.fkProf=UI.fkProf||sk.profiles.map(p=>({...p}));
   return `<div class="card"><div class="ch"><h2>Fleet Control keys</h2>${helpBtn('fkset')}</div>
    ${helpNote('fkset','Stock of one-time authentication data sets (RS, KS, KS\') a station with server keys keeps per radio, for radios registered at it or a neighbour station within the given days. The stock lets a station authenticate while this server is away; every set is used once and topped up.')}
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
    <div><label class="l" for="fks-stock">Sets per radio and station (1–50)</label><input class="f" id="fks-stock" inputmode="numeric" value="${s.stock}" style="width:110px"></div>
    <div><label class="l" for="fks-days">Radios seen within days (1–365)</label><input class="f" id="fks-days" inputmode="numeric" value="${s.days}" style="width:110px"></div>
-   <button class="btn pri" onclick="saveKeysSettings()">Save</button></div>${msgDiv('fks-msg','padding:0 18px 12px')}</div>`;}
+   <button class="btn pri" onclick="saveKeysSettings()">Save</button></div>${msgDiv('fks-msg','padding:0 18px 12px')}
+   <div class="ch" style="border-top:1px solid var(--line)"><h2 style="font-size:14px">Cipher keys (SCK)</h2></div>
+   <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-warn">Warn before a key change below (% of radios holding the key)</label><input class="f" id="fks-warn" inputmode="numeric" value="${sk.warn_pct}" style="width:110px"></div></div>
+   <div class="svc mut" style="font-size:12.5px;display:block">Device profiles: how many keys a radio model holds. A model with one trunked mode SCK only gets the current key. MTP6000 series from the Motorola MTP6000 Series Security Specifications; the others from the device overview (not checked against manufacturer documents).</div>
+   <div class="tw"><table><thead><tr><th>Model</th><th>TM-SCK</th><th>DM-SCK</th><th>GCK</th><th>KAG</th><th></th></tr></thead><tbody>${UI.fkProf.map((p,i)=>`<tr>
+    <td><input class="f" style="width:130px" aria-label="Model name" value="${esc(p.name)}" oninput="UI.fkProf[${i}].name=this.value"></td>
+    ${['tm_sck','dm_sck','gck','kag'].map(f=>`<td><input class="f" inputmode="numeric" style="width:70px" aria-label="${f}" value="${p[f]}" oninput="UI.fkProf[${i}].${f}=parseInt(this.value,10)||0"></td>`).join('')}
+    <td><button class="btn ic" title="Remove" aria-label="Remove ${esc(p.name)}" onclick="UI.fkProf.splice(${i},1);render(true)">${ic('trash')}</button></td></tr>`).join('')}</tbody></table></div>
+   <div style="display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap"><button class="btn" onclick="UI.fkProf.push({name:'',tm_sck:2,dm_sck:0,gck:0,kag:0});render(true)">Add model</button><button class="btn" onclick="UI.fkProf=null;saveSckSettings(true)">Built-in list</button><button class="btn pri" onclick="saveSckSettings(false)">Save</button></div>${msgDiv('fksk-msg','padding:0 18px 12px')}</div>`;}
+async function saveSckSettings(builtin){const warn_pct=parseInt(v('fks-warn'),10);
+  try{await postJ('/api/fleet/keys/sck/settings',{warn_pct,profiles:builtin?[]:UI.fkProf});const r=await getJ('/api/fleet/keys');D.fksck=r.sck;UI.fkProf=null;setMsg('fksk-msg','ok','Saved');render(true);}catch(e){setMsg('fksk-msg','err',e.message);}}
 async function saveKeysSettings(){const stock=parseInt(v('fks-stock'),10),days=parseInt(v('fks-days'),10);
   try{await postJ('/api/fleet/keys/settings',{stock,days});D.fkset={stock,days};setMsg('fks-msg','ok','Saved');}catch(e){setMsg('fks-msg','err',e.message);}}
 R.fleettpl=()=>{

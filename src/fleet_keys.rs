@@ -48,7 +48,7 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
     (0..s.len()).step_by(2).map(|i| s.get(i..i + 2).and_then(|p| u8::from_str_radix(p, 16).ok())).collect()
 }
 
-fn unhex_n<const N: usize>(s: &str) -> Option<[u8; N]> {
+pub(crate) fn unhex_n<const N: usize>(s: &str) -> Option<[u8; N]> {
     unhex(s)?.try_into().ok()
 }
 
@@ -74,7 +74,7 @@ pub fn grouped(k: &[u8; 16]) -> String {
     h.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or("")).collect::<Vec<_>>().join(" ")
 }
 
-fn random<const N: usize>() -> [u8; N] {
+pub(crate) fn random<const N: usize>() -> [u8; N] {
     use aws_lc_rs::rand::SecureRandom;
     let mut b = [0u8; N];
     aws_lc_rs::rand::SystemRandom::new().fill(&mut b).expect("system random");
@@ -232,6 +232,9 @@ struct Data {
     settings: Settings,
     #[serde(default)]
     seen: BTreeMap<u32, Seen>,
+    /// Class 2 SCKs per network, device profiles (`fleet_sck`).
+    #[serde(default)]
+    sck: crate::fleet_sck::SckData,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -278,12 +281,14 @@ pub struct KeyStore {
     /// Sets each station holds per radio: as it last reported, plus what was
     /// sent since, minus what it used.
     stock: HashMap<String, BTreeMap<u32, u32>>,
+    /// What the stations report about their SCK, delivery attempts (`fleet_sck`).
+    pub(crate) sck_rt: crate::fleet_sck::SckRuntime,
 }
 
 impl KeyStore {
     /// Memory only (tests, storage off): keys work until the restart.
     pub fn memory() -> Self {
-        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new() }
+        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default() }
     }
 
     /// The store next to the history log; `None`: storage is off.
@@ -301,7 +306,7 @@ impl KeyStore {
         };
         let path = with(".fleet-keys");
         let master_path = master_file.map(Path::to_path_buf).unwrap_or_else(|| with(".fleet-master-key"));
-        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new() };
+        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default() };
         let master = match std::fs::read_to_string(&master_path) {
             Ok(text) => match unhex_n::<32>(text.trim()) {
                 Some(m) => Some(m),
@@ -341,14 +346,14 @@ impl KeyStore {
         self.problem.as_deref()
     }
 
-    fn ready(&self) -> Result<(), String> {
+    pub(crate) fn ready(&self) -> Result<(), String> {
         match &self.problem {
             Some(p) => Err(p.clone()),
             None => Ok(()),
         }
     }
 
-    fn save(&self) {
+    pub(crate) fn save(&self) {
         let (Some(path), Some(master)) = (&self.path, &self.master) else { return };
         let Ok(plain) = serde_json::to_vec(&self.data) else { return };
         let (nonce, data) = seal(master, &plain);
@@ -384,7 +389,7 @@ impl KeyStore {
         self.data.subs.keys().copied().collect()
     }
 
-    fn k_of(&self, issi: u32) -> Option<[u8; 16]> {
+    pub(crate) fn k_of(&self, issi: u32) -> Option<[u8; 16]> {
         self.data.subs.get(&issi).and_then(|s| unhex_n::<16>(&s.k))
     }
 
@@ -564,6 +569,24 @@ impl KeyStore {
             .collect()
     }
 
+    pub(crate) fn sck(&self) -> &crate::fleet_sck::SckData {
+        &self.data.sck
+    }
+
+    pub(crate) fn sck_mut(&mut self) -> &mut crate::fleet_sck::SckData {
+        &mut self.data.sck
+    }
+
+    /// Where the radio was registered last (Brew login) and when.
+    pub(crate) fn seen_of(&self, issi: u32) -> Option<(&str, u64)> {
+        self.data.seen.get(&issi).map(|s| (s.station.as_str(), s.at_ms))
+    }
+
+    /// The model (device profile name) of a radio.
+    pub(crate) fn model_of(&self, issi: u32) -> Option<&str> {
+        self.data.subs.get(&issi).map(|s| s.model.as_str()).filter(|m| !m.is_empty())
+    }
+
     pub fn list(&self) -> Vec<SubView> {
         self.data
             .subs
@@ -637,13 +660,13 @@ use crate::state::AppState;
 use std::sync::Arc;
 
 /// Is station `id` online, with `keys-v1` and its keys from the server?
-fn uses_server(state: &AppState, id: &str) -> Option<Option<String>> {
+pub(crate) fn uses_server(state: &AppState, id: &str) -> Option<Option<String>> {
     let fleet = state.fleet.lock().unwrap_or_else(|e| e.into_inner());
     let s = fleet.get(id)?;
     (s.online && s.capabilities.iter().any(|c| c == CAP_KEYS) && s.key_source.as_deref() == Some("server")).then(|| s.brew_login.clone())
 }
 
-fn send(state: &Arc<AppState>, id: &str, cmd: ControlCommand) {
+pub(crate) fn send(state: &Arc<AppState>, id: &str, cmd: ControlCommand) {
     let (state, id) = (state.clone(), id.to_owned());
     tokio::spawn(async move {
         let _ = send_command(&state, &id, cmd).await;
@@ -767,10 +790,11 @@ pub async fn tick(state: &Arc<AppState>) {
     };
     {
         let mut keys = state.fleet_keys.lock().unwrap_or_else(|e| e.into_inner());
-        for (issi, station) in registered {
-            keys.note_seen(issi, &station, now);
+        for (issi, station) in &registered {
+            keys.note_seen(*issi, station, now);
         }
     }
+    crate::fleet_sck::tick(state, &registered);
     let dir = crate::fleet_bulk::directory(&*state.inner.read().await);
     let ids: Vec<String> = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).stations().into_iter().map(|s| s.id).collect();
     for id in ids {
@@ -854,16 +878,16 @@ pub async fn api_source(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     }
 }
 
-fn forbidden() -> Response {
+pub(crate) fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, "This needs the right Fleet Control keys").into_response()
 }
 
-fn bad(e: impl Into<String>) -> Response {
+pub(crate) fn bad(e: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, e.into()).into_response()
 }
 
 /// A key management line in the Fleet Control change log (never key values).
-fn log(state: &AppState, user: Option<&str>, text: String) {
+pub(crate) fn log(state: &AppState, user: Option<&str>, text: String) {
     state.fleet.lock().unwrap_or_else(|e| e.into_inner()).log_station("", user, "keys", |_| text, crate::fleet::now_ms(), &|_| None);
     state.monitor.emit("fleet_changed", serde_json::json!({"keys": true}));
 }
@@ -894,12 +918,14 @@ pub async fn api_list(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
             })
         })
         .collect();
+    let nets = crate::fleet_sck::station_nets(&state);
     let keys = state.fleet_keys.lock().unwrap_or_else(|e| e.into_inner());
     Json(serde_json::json!({
         "problem": keys.problem(),
         "settings": keys.settings(),
         "subs": keys.list(),
         "stations": stations,
+        "sck": crate::fleet_sck::view(&keys, &nets, crate::fleet::now_ms()),
     }))
     .into_response()
 }

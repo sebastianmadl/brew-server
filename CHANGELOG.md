@@ -4,6 +4,15 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8b: static cipher keys (SCK) from the server.**
+  Per network the server holds the current and the next class 2 SCK. Stations
+  with `sck-v1` and server keys get them over the control channel; radios get
+  them sealed under their own K (TA41 / TA51, EN 300 392-7 clause 4.5.2.2) and
+  their answers come back, so the page shows how many radios hold the next key.
+  The change runs network wide at one chosen time (clause 4.5.5.4, D-CK CHANGE
+  DEMAND on every station, no restart), with a warning below 90 % coverage.
+  Device profiles (TM-SCK slots per model) in Server settings. Designed with
+  Patrick, OE1LHP. See `docs/Fleet-Control.md` section 13.8.
 - **Fleet Control, phase 8a: key management, the server as authentication
   centre.** The server holds K of every radio in an encrypted key store
   (AES-256-GCM, `[keys] master_key_file`) and sends stations with

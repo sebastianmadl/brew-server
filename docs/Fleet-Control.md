@@ -904,9 +904,9 @@ station restarts and confirms like every config change). It removes the
 station's `[[security.subscribers]]`; while the station holds keys of its own
 this needs `drop_local_keys`, so export and import them first. **Back to
 local keys** sets `key_source` back; the station deletes its stock at the next
-start and needs K in its own config again. OTAR of the SCK from the station is
-refused while it uses server keys (SCK delivery through the server is phase
-8b).
+start and needs K in its own config again. With server keys the SCK also comes
+from the server (section 13.8); going back writes the active one into the
+station's `[security.aie]`.
 
 ### 13.5 Dashboard and rights
 
@@ -927,7 +927,7 @@ goes into the Fleet Control change log, never a key value.
 | `POST /api/fleet/keys/generate` | keys | `{issi}` | random K, returned once: `{k, grouped, kcv}` (`Cache-Control: no-store`) |
 | `POST /api/fleet/keys/import` | keys | `{text}` or `{file, password}` | `{added, changed, unchanged, errors, kcvs}` |
 | `POST /api/fleet/keys/delete` | keys | `{issis}` | delete K |
-| `POST /api/fleet/keys/model` | keys | `{issi, model}` | device model (profiles: phase 8b) |
+| `POST /api/fleet/keys/model` | keys | `{issi, model}` | device model (profile, section 13.8) |
 | `POST /api/fleet/keys/source` | keys + management | `{id, source, drop_local_keys?, during_call?}` | switch a station |
 | `POST /api/fleet/keys/settings` | admin | `{stock, days}` | stock settings |
 
@@ -937,5 +937,63 @@ The key messages go only to stations that list `keys-v1` and report
 `key_source: "server"`; stations with local keys (shown as "local") and older
 stations work as before. A server older than phase 8 never sends them, and a
 station with `key_source = "server"` then authenticates only from its stock.
-Code: `src/fleet_keys.rs`, `src/taa1/` (TAA1 ported from FlowStation's
-`tetra-security`, same reference vectors).
+Code: `src/fleet_keys.rs`, `src/fleet_sck.rs`, `src/taa1/` (TAA1 ported from
+FlowStation's `tetra-security`, same reference vectors).
+
+### 13.8 Static cipher keys (phase 8b, `sck-v1`)
+
+For security class 2 the server also holds the static cipher keys (SCK,
+EN 300 392-7 clause 4.2.4.0), per network (`MCC-MNC`): the **current** key and,
+before a change, the **next** one, each with number (SCKN 1–32) and version
+(SCK-VN, A.8.75). They live in the same encrypted store as K and are shown only
+by check value (SHA-256(SCK)[:8]).
+
+- **Stations** with `sck-v1` and server keys get both keys in clear over the TLS
+  control channel (`SckKeys`, after every hello and every change), because they
+  encrypt the air interface with them. They report what they run with
+  (`SckState`: active key, whether it is still the one of their own config, keys
+  held, planned change).
+- **Radios** get the keys sealed under their own K (clause 4.5.2.2): the server
+  picks a random RSO, KSO = TA41(K, RSO), SSCK = TA51(SCK, SCK-VN, KSO, SCKN)
+  and sends `SckSealed` to the station where the radio is registered, which
+  forwards it in a D-OTAR SCK PROVIDE. The radio's U-OTAR SCK RESULT comes back
+  as `SckResult`, so the page shows per key how many radios hold it. Registered
+  radios that miss a key are sent it at most every 10 min; *Send now* skips the
+  wait. A radio's own U-OTAR SCK DEMAND arrives as `SckDemand` and is answered
+  at once (empty answer when the server has no K for it: the station rejects
+  with "key not available").
+- **Device profiles** (Server settings, admins) say how many trunked mode SCKs a
+  model holds (also DM-SCK, GCK, KAG for later phases). A radio whose model has
+  room for one only gets the current key. Built in: MTP3550, MTP6550, MTP6650,
+  MTP6750, MTP850 S and MTH800, all with 2 TM-SCK, 30 DM-SCK, 16 GCK, 10 KAG
+  (values from "Motorola MTP6000 Series Security Specifications"; the other
+  models hold the same); admins change them or add models. The next key must
+  have another number than the current one, because radios keep keys by number.
+- **The change** (`SckActivate`) runs network wide at one time (clause 4.5.5.4):
+  *Activate next…* asks for the lead time (default 5 min, at most 7 days). Below
+  the warning level (default 90 % of the radios with K seen at the network's
+  stations hold the key) the page warns and needs a second confirmation. Each station turns the
+  time into the start of the next multiframe (absolute IV, clause 4.5.5.6),
+  announces it with D-CK CHANGE DEMAND to its radios and switches on that slot,
+  without a restart. 2 min after the time the next key becomes the current one.
+  A station that was offline during the change is switched when it comes back.
+  *Use current key on N stations…* switches stations still running the key of
+  their own config to the server's current key. *Cancel* drops a planned change.
+
+Keys page → **Cipher keys (SCK)**: network, current and next key with
+coverage, *Generate next* (shown once, with copy button and file, for loading
+radios by cable), *Enter a key*, *Remove* (next only), the stations (key in use,
+source, planned change) and the radios (keys held, last result).
+
+| Route | Right | Body | Does |
+| --- | --- | --- | --- |
+| `POST /api/fleet/keys/sck/set` | keys | `{net, role: "current"/"next", sckn, vn?, key?}` | enter (20 hex) or generate (empty `key`, returned once) |
+| `POST /api/fleet/keys/sck/delete` | keys | `{net}` | remove the next key |
+| `POST /api/fleet/keys/sck/activate` | keys + management | `{net, role?, in_secs?, force?}` | plan the change (`role: "current"` for stations on their own key) |
+| `POST /api/fleet/keys/sck/cancel` | keys + management | `{net}` | drop a planned change |
+| `POST /api/fleet/keys/sck/send` | keys | `{net, issi?}` | deliver now |
+| `POST /api/fleet/keys/sck/settings` | admin | `{warn_pct, profiles?}` | warning level, device profiles (empty list: built-in) |
+
+`GET /api/fleet/keys` carries `sck: {nets, profiles, warn_pct, stations,
+radios}`. Messages go only to stations listing `sck-v1` with server keys;
+others are left alone.

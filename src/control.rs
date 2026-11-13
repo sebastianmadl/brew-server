@@ -116,6 +116,15 @@ pub enum ControlCommand {
     /// Fleet Control (`keys-v1`): authentication data sets (RS, KS, KS') for
     /// `issi`, added to the station's stock. Empty: the server has no K for it.
     AuthVectors { issi: u32, vectors: Vec<crate::fleet_keys::AuthVector> },
+    /// Fleet Control (`sck-v1`): the network's class 2 SCKs (current and,
+    /// before a change, next). The station answers with `SckState`.
+    SckKeys { keys: Vec<crate::fleet_sck::SckWire> },
+    /// Fleet Control (`sck-v1`): SCKs sealed for one radio (KSO = TA41(K, RSO),
+    /// SSCK = TA51), sent in D-OTAR SCK PROVIDE. Empty: the demand is rejected.
+    SckSealed { issi: u32, rso: String, keys: Vec<crate::fleet_sck::SealedSckWire> },
+    /// Fleet Control (`sck-v1`): make this SCK the one in use at server time
+    /// `at_ms` (Unix ms).
+    SckActivate { sckn: u8, vn: u16, at_ms: u64 },
 }
 
 impl ControlCommand {
@@ -123,7 +132,7 @@ impl ControlCommand {
     /// (`{"KickMs":{"issi":1}}`), matching Basestation's own derive-based
     /// JSON codec -- not the internal `#[serde(tag = "action")]` shape used
     /// for the dashboard's HTTP request body.
-    fn to_wire_json(&self) -> serde_json::Value {
+    pub(crate) fn to_wire_json(&self) -> serde_json::Value {
         let tagged = serde_json::to_value(self).expect("ControlCommand always serializes");
         let serde_json::Value::Object(mut map) = tagged else { return tagged };
         let Some(serde_json::Value::String(tag)) = map.remove("action") else { return serde_json::Value::Object(map) };
@@ -264,6 +273,31 @@ pub enum ControlResponse {
         mutual: bool,
         #[serde(default)]
         left: Option<u32>,
+    },
+    /// Fleet Control (`sck-v1`): the SCK the station runs with, the server
+    /// keys it holds and a planned change.
+    SckState {
+        #[serde(default)]
+        active: Option<crate::fleet_sck::SckRef>,
+        #[serde(default)]
+        from_config: bool,
+        #[serde(default)]
+        keys: Vec<crate::fleet_sck::SckRef>,
+        #[serde(default)]
+        switch_at_ms: Option<u64>,
+    },
+    /// Fleet Control (`sck-v1`): a radio asked for SCKs (numbers 1..=32; empty:
+    /// the network's keys).
+    SckDemand { issi: u32, #[serde(default)] sckns: Vec<u8> },
+    /// Fleet Control (`sck-v1`): the radio's answer per key, or a delivery
+    /// the station could not make.
+    SckResult {
+        issi: u32,
+        sckn: u8,
+        vn: u16,
+        ok: bool,
+        #[serde(default)]
+        detail: Option<String>,
     },
     /// Fleet Control (`update-v1`): progress of an OTA run on the station.
     UpdateProgress {
@@ -480,12 +514,18 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             crate::fleet_config::after_hello(state, id, config_hash.clone(), *config_pending);
         }
         crate::fleet_keys::after_hello(state, id);
+        crate::fleet_sck::after_hello(state, id);
         return;
     }
     match &response {
         ControlResponse::AuthStock { counts } => return crate::fleet_keys::on_stock(state, id, counts).await,
         ControlResponse::AuthVectorRequest { issi } => return crate::fleet_keys::on_request(state, id, *issi),
         ControlResponse::AuthReport { issi, ok, mutual, left, .. } => return crate::fleet_keys::on_report(state, id, *issi, *ok, *mutual, *left),
+        ControlResponse::SckState { active, from_config, keys, switch_at_ms } => {
+            return crate::fleet_sck::on_state(state, id, active.clone(), *from_config, keys.clone(), *switch_at_ms);
+        }
+        ControlResponse::SckDemand { issi, sckns } => return crate::fleet_sck::on_demand(state, id, *issi, sckns),
+        ControlResponse::SckResult { issi, sckn, vn, ok, detail } => return crate::fleet_sck::on_result(state, id, *issi, *sckn, *vn, *ok, detail.clone()),
         _ => {}
     }
     if let ControlResponse::FleetMetrics { cpu_pct, cpu_temp_c, cells, radios, calls, health, .. } = &response {
@@ -517,7 +557,8 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
         ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. }
-        | ControlResponse::AuthStock { .. } | ControlResponse::AuthVectorRequest { .. } | ControlResponse::AuthReport { .. } => {}
+        | ControlResponse::AuthStock { .. } | ControlResponse::AuthVectorRequest { .. } | ControlResponse::AuthReport { .. }
+        | ControlResponse::SckState { .. } | ControlResponse::SckDemand { .. } | ControlResponse::SckResult { .. } => {}
     }
 }
 
