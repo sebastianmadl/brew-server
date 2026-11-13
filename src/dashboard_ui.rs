@@ -1833,13 +1833,14 @@ function fkSckBody(d){
   let h=`<div class="card"><div class="ch"><h2>Cipher keys</h2>${netSel}${helpBtn('fksck')}<span class="sp"></span><button class="btn" onclick="fkSckSend()" title="Send the keys to every registered radio that has not confirmed them, without waiting">Send to radios now</button></div>
    ${helpNote('fksck',`Static cipher keys (SCK) of a security class 2 network (EN 300 392-7 clause 4.2.4). Stations with <b>server keys</b> get the current and the next key over the control channel (TLS) and encrypt the air interface with the current one. Radios get both sealed under their own K (clause 4.5.2.2): the station only forwards them and every radio confirms each key. When enough radios hold the next key (warning below ${sk.warn_pct} %), <b>Activate</b> switches every station at the same time: each announces the change with D-CK CHANGE DEMAND and changes the key on that slot (clause 4.5.5.4); two minutes later the next key becomes the current one. The next key gets another number than the current one, because radios keep their keys by number. A radio whose model holds only one trunked mode key gets the current key only. Generated keys are shown once (for loading radios by cable); after that only the check value (first 8 bytes of SHA-256) is shown.`)}
    <div class="tw"><table><tbody>
-   <tr><th style="width:110px">Current</th><td>${key(n.current)}</td><td>${cov(n.coverage_current)}</td></tr>
+   <tr><th style="width:110px">Current</th><td>${key(n.current)}${n.current&&!n.current_in_use?'<div class="mut" style="font-size:12px;margin-top:4px">No station runs this key yet, so nothing goes to the radios. Check that it is the key the stations use (same check value), then use it on the stations.</div>':''}</td><td>${cov(n.coverage_current)}</td></tr>
    <tr><th>Next</th><td>${key(n.next)}</td><td>${cov(n.coverage_next)}</td></tr>
    ${act?`<tr><th>Change</th><td colspan="2"><span class="chip w">planned</span> to SCK ${act.sckn} version ${act.vn} at <b>${esc(new Date(act.at_ms).toLocaleString())}</b>${act.by?' · '+esc(act.by):''} ${manage?'<button class="btn" onclick="fkSckCancel()">Cancel</button>':''}</td></tr>`:''}
    </tbody></table></div>
    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px">
     ${n.current?`<button class="btn" ${act?'disabled':''} onclick="fkSckSet('next',${nextSckn},${nextVn},'')" title="Random next key with number ${nextSckn}, version ${nextVn}; shown once">Generate next key</button>`:''}
-    ${n.next&&!act?'<button class="btn danger" onclick="fkSckDelete()">Remove next key</button>':''}
+    ${n.next&&!act?'<button class="btn danger" onclick="fkSckDelete(\'next\')">Remove next key</button>':''}
+    ${n.current&&!n.next&&!act&&!n.current_in_use?'<button class="btn danger" onclick="fkSckDelete(\'current\')" title="No station runs this key yet">Remove current key</button>':''}
     ${n.next&&!act&&manage?`<button class="btn pri" onclick="fkSckActivate('next')">Activate next key…</button>`:''}
     ${own.length&&n.current&&!act&&manage?`<button class="btn" onclick="fkSckActivate('current')" title="Stations still running their own config key or an older key">Use current key on ${own.length} station${own.length===1?'':'s'}…</button>`:''}
    </div></div>
@@ -1878,8 +1879,9 @@ function fkSckShowOnce(r,role,sckn,vn){
    <div style="display:flex;gap:8px;padding:0 18px 12px"><button class="btn" onclick="navigator.clipboard.writeText('${esc(r.key_once.replace(/ /g,''))}').then(()=>setMsg('fks-once-msg','ok','Copied'))">Copy</button></div>${msgDiv('fks-once-msg','padding:0 18px')}</div>
    <div class="acts"><button class="btn pri" onclick="closeSheet()">Done</button></div>`;
   $('scrim').classList.add('on');}
-async function fkSckDelete(){if(!confirm('Remove the next key? Radios that got it keep it, it is just never activated.'))return;
-  try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net});setMsg('fk-msg','ok','Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckDelete(role){const cur=role==='current';
+  if(!confirm(cur?'Remove the current key? No station runs it and no radio got it from the server.':'Remove the next key? Radios that got it keep it, it is just never activated.'))return;
+  try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net,role});setMsg('fk-msg','ok',cur?'Current key removed':'Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckSend(issi){try{await postJ('/api/fleet/keys/sck/send',issi?{net:UI.fk.net,issi:Number(issi)}:{net:UI.fk.net});setMsg('fk-msg','ok','Delivery started; results come in as the radios answer');setTimeout(fkLoad,4000);}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckCancel(){if(!confirm('Cancel the planned change? Stations that already switched keep the new key.'))return;
   try{await postJ('/api/fleet/keys/sck/cancel',{net:UI.fk.net});setMsg('fk-msg','ok','Change cancelled');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}

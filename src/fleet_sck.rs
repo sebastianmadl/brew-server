@@ -198,6 +198,8 @@ pub struct StationSck {
     pub keys: Vec<SckRef>,
     pub switch_at_ms: Option<u64>,
     pub at_ms: u64,
+    /// The station's network (MCC-MNC) when it reported.
+    pub net: String,
 }
 
 #[derive(Debug, Default)]
@@ -274,6 +276,28 @@ pub fn set_key(ks: &mut KeyStore, net: &str, next: bool, sckn: u8, vn: u16, key:
     Ok((entry.check, generated.then_some(key)))
 }
 
+/// Remove the current SCK of `net` while no station runs it and there is no next key.
+pub fn delete_current(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
+    ks.ready()?;
+    let in_use = current_in_use(ks, net);
+    let Some(n) = ks.sck_mut().nets.get_mut(net) else { return Ok(false) };
+    if n.current.is_none() {
+        return Ok(false);
+    }
+    if n.activation.is_some() {
+        return Err("a key change is planned; cancel it first".into());
+    }
+    if n.next.is_some() {
+        return Err("remove the next key first".into());
+    }
+    if in_use {
+        return Err("stations run this key; it can only be replaced by a key change".into());
+    }
+    ks.sck_mut().nets.remove(net);
+    ks.save();
+    Ok(true)
+}
+
 pub fn delete_next(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     ks.ready()?;
     let Some(n) = ks.sck_mut().nets.get_mut(net) else { return Ok(false) };
@@ -288,8 +312,20 @@ pub fn delete_next(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// True when a station of `net` reported that it runs the server's current key (from the server
+/// or, with the same value, from its own config).
+pub fn current_in_use(ks: &KeyStore, net: &str) -> bool {
+    let Some(cur) = ks.sck().nets.get(net).and_then(|n| n.current.as_ref()) else { return false };
+    ks.sck_rt.stations.values().any(|st| st.net == net && st.active.as_ref().is_some_and(|a| cur.same_as(a)))
+}
+
 /// The keys `issi` should hold: the current one, and the next one when its model has room.
+/// Nothing while no station runs the current key: a wrong current key would otherwise overwrite
+/// the key the radios use today (they keep keys by number).
 fn deliverable(ks: &KeyStore, net: &str, issi: u32) -> Vec<SckEntry> {
+    if !current_in_use(ks, net) {
+        return Vec::new();
+    }
     let Some(n) = ks.sck().nets.get(net) else { return Vec::new() };
     let room = ks.sck().profile(ks.model_of(issi)).map_or(u8::MAX, |p| p.tm_sck);
     let mut out: Vec<SckEntry> = n.current.iter().cloned().collect();
@@ -490,7 +526,7 @@ pub fn on_state(state: &Arc<AppState>, id: &str, active: Option<SckRef>, from_co
     let Some(s) = nets.get(id).filter(|s| s.sck) else { return };
     let catch_up = {
         let mut ks = keystore(state);
-        ks.sck_rt.stations.insert(id.to_owned(), StationSck { active: active.clone(), from_config, keys, switch_at_ms, at_ms: crate::fleet::now_ms() });
+        ks.sck_rt.stations.insert(id.to_owned(), StationSck { active: active.clone(), from_config, keys, switch_at_ms, at_ms: crate::fleet::now_ms(), net: s.net.clone() });
         let n = ks.sck().nets.get(&s.net);
         match (n.and_then(|n| n.current.as_ref()), &active) {
             (Some(cur), Some(a)) if !from_config && switch_at_ms.is_none() && n.is_some_and(|n| n.activation.is_none()) && !cur.same_as(a) => Some(cur.id()),
@@ -633,6 +669,7 @@ pub fn view(ks: &KeyStore, nets: &HashMap<String, StationNet>, now_ms: u64) -> s
                     "activation": n.activation,
                     "coverage_current": cov(&n.current),
                     "coverage_next": cov(&n.next),
+                    "current_in_use": current_in_use(ks, net),
                     "stations": stations,
                     "radios": radios,
                 }),
@@ -701,19 +738,24 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
 #[derive(Deserialize)]
 pub struct NetReq {
     net: String,
+    /// For `delete`: `next` (default) or `current`.
+    #[serde(default = "role_next")]
+    role: String,
 }
 
-/// `POST /api/fleet/keys/sck/delete`: drop the next SCK (no change planned).
+/// `POST /api/fleet/keys/sck/delete`: drop the next SCK (no change planned), or the current one
+/// while no station runs it.
 pub async fn api_delete(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(req): Json<NetReq>) -> Response {
     let a = crate::dashboard::access(&state, &headers);
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
     }
-    let res = delete_next(&mut keystore(&state), &req.net);
+    let current = req.role == "current";
+    let res = if current { delete_current(&mut keystore(&state), &req.net) } else { delete_next(&mut keystore(&state), &req.net) };
     match res {
         Ok(had) => {
             if had {
-                crate::fleet_keys::log(&state, a.user.as_deref(), format!("network {}: next SCK removed", req.net));
+                crate::fleet_keys::log(&state, a.user.as_deref(), format!("network {}: {} SCK removed", req.net, if current { "current" } else { "next" }));
                 push_net(&state, &req.net);
             }
             Json(serde_json::json!({"ok": true, "removed": had})).into_response()
@@ -875,6 +917,30 @@ mod tests {
 
     const K: [u8; 16] = [0x57; 16];
 
+    /// A station of `net` reports that it runs the current key with this value.
+    fn station_runs(ks: &mut KeyStore, net: &str, key: [u8; 10]) {
+        let cur = ks.sck().nets[net].current.clone().unwrap();
+        let active = Some(SckRef { sckn: cur.sckn, vn: cur.vn, check: check_value(&key) });
+        ks.sck_rt.stations.insert("bs1".into(), StationSck { active, from_config: true, keys: vec![], switch_at_ms: None, at_ms: 0, net: net.into() });
+    }
+
+    #[test]
+    fn nothing_goes_to_radios_until_a_station_runs_the_current_key_and_an_unused_one_can_go() {
+        let mut ks = store_with_radios(&[100]);
+        set_key(&mut ks, "232-1", false, 1, 0, Some([0x11; 10]), None, 0).unwrap();
+        // The station runs another value under the same number: the server's key is wrong.
+        station_runs(&mut ks, "232-1", [0x99; 10]);
+        assert!(missing(&ks, "232-1", 100).is_empty(), "a wrong current key must not reach the radios");
+        assert!(delete_current(&mut ks, "232-1").unwrap());
+        assert!(!ks.sck().nets.contains_key("232-1"));
+        set_key(&mut ks, "232-1", false, 1, 0, Some([0x99; 10]), None, 0).unwrap();
+        assert_eq!(missing(&ks, "232-1", 100).len(), 1, "the station runs it: radios may get it");
+        set_key(&mut ks, "232-1", true, 2, 1, None, None, 0).unwrap();
+        assert!(delete_current(&mut ks, "232-1").unwrap_err().contains("next key first"));
+        delete_next(&mut ks, "232-1").unwrap();
+        assert!(delete_current(&mut ks, "232-1").unwrap_err().contains("stations run"));
+    }
+
     fn store_with_radios(issis: &[u32]) -> KeyStore {
         let mut ks = KeyStore::memory();
         for &i in issis {
@@ -909,6 +975,7 @@ mod tests {
     fn sealed_keys_open_with_the_radios_k_only() {
         let mut ks = store_with_radios(&[100]);
         set_key(&mut ks, "232-1", false, 1, 5, Some([0x11; 10]), None, 0).unwrap();
+        station_runs(&mut ks, "232-1", [0x11; 10]);
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
         let keys = missing(&ks, "232-1", 100);
         assert_eq!(keys.iter().map(|e| e.id()).collect::<Vec<_>>(), vec![(1, 5), (2, 6)]);
@@ -927,6 +994,7 @@ mod tests {
     fn a_radio_with_one_slot_gets_only_the_current_key() {
         let mut ks = store_with_radios(&[100, 101]);
         set_key(&mut ks, "232-1", false, 1, 5, Some([0x11; 10]), None, 0).unwrap();
+        station_runs(&mut ks, "232-1", [0x11; 10]);
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
         ks.sck_mut().profiles = Some(vec![Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0 }]);
         ks.set_model(101, "one").unwrap();
@@ -964,6 +1032,7 @@ mod tests {
     fn a_failed_result_and_a_replaced_key_drop_the_confirmation() {
         let mut ks = store_with_radios(&[100]);
         set_key(&mut ks, "232-1", false, 1, 5, Some([0x11; 10]), None, 0).unwrap();
+        station_runs(&mut ks, "232-1", [0x11; 10]);
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
         note_result(&mut ks, "232-1", 100, 2, 6, true);
         note_result(&mut ks, "232-1", 100, 1, 5, true);

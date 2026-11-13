@@ -13,6 +13,11 @@ Unreleased:
   DEMAND on every station, no restart), with a warning below 90 % coverage.
   Device profiles (TM-SCK slots per model) in Server settings. Designed with
   Patrick, OE1LHP. See `docs/Fleet-Control.md` section 13.8.
+- **SCK: nothing to the radios before a station runs the current key, and an
+  unused current key can be removed.** A current key no station runs (wrong
+  value under the number the radios use) is no longer sent to radios, where it
+  would overwrite their key; the page says so. *Remove current key* drops it
+  while no station runs it and there is no next key.
 - **Fleet Control, phase 8a: key management, the server as authentication
   centre.** The server holds K of every radio in an encrypted key store
   (AES-256-GCM, `[keys] master_key_file`) and sends stations with

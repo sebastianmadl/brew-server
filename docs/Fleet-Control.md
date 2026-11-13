@@ -953,6 +953,11 @@ by check value (SHA-256(SCK)[:8]).
   encrypt the air interface with them. They report what they run with
   (`SckState`: active key, whether it is still the one of their own config, keys
   held, planned change).
+- **Nothing goes to the radios while no station runs the current key** (a
+  station reports the same number, version and check value, from the server or
+  from its own config). A wrong current key would otherwise overwrite the key
+  the radios use today, because they keep keys by number. Enter the key the
+  stations run as the current key (same check value), then switch them to it.
 - **Radios** get the keys sealed under their own K (clause 4.5.2.2): the server
   picks a random RSO, KSO = TA41(K, RSO), SSCK = TA51(SCK, SCK-VN, KSO, SCKN)
   and sends `SckSealed` to the station where the radio is registered, which
@@ -982,13 +987,14 @@ by check value (SHA-256(SCK)[:8]).
 
 Keys page → **Cipher keys (SCK)**: network, current and next key with
 coverage, *Generate next* (shown once, with copy button and file, for loading
-radios by cable), *Enter a key*, *Remove* (next only), the stations (key in use,
+radios by cable), *Enter a key*, *Remove* (the next key, or the current one while no station
+runs it and there is no next key), the stations (key in use,
 source, planned change) and the radios (keys held, last result).
 
 | Route | Right | Body | Does |
 | --- | --- | --- | --- |
 | `POST /api/fleet/keys/sck/set` | keys | `{net, role: "current"/"next", sckn, vn?, key?}` | enter (20 hex) or generate (empty `key`, returned once) |
-| `POST /api/fleet/keys/sck/delete` | keys | `{net}` | remove the next key |
+| `POST /api/fleet/keys/sck/delete` | keys | `{net, role?}` | remove the next key (`role: "current"`: the current one while no station runs it) |
 | `POST /api/fleet/keys/sck/activate` | keys + management | `{net, role?, in_secs?, force?}` | plan the change (`role: "current"` for stations on their own key) |
 | `POST /api/fleet/keys/sck/cancel` | keys + management | `{net}` | drop a planned change |
 | `POST /api/fleet/keys/sck/send` | keys | `{net, issi?}` | deliver now |
