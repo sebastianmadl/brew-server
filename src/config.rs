@@ -31,6 +31,9 @@ pub struct Config {
     pub control: ControlConfig,
     pub dashboard: DashboardConfig,
     pub storage: StorageConfig,
+    /// `[keys]`: Fleet Control key management (the server as authentication
+    /// centre). See `fleet_keys`.
+    pub keys: KeysConfig,
     pub sip: SipConfig,
     pub federation: FederationConfig,
     pub aprs: AprsConfig,
@@ -664,6 +667,18 @@ impl Default for SmsCenterConfig {
     }
 }
 
+/// `[keys]`: Fleet Control key management (phase 8). The key store
+/// `<storage path>.fleet-keys` is encrypted with the master key in
+/// `master_key_file` (32 random bytes as hex, created on first use with mode
+/// 600). Keep a copy of that file apart from the store: without it the keys
+/// cannot be read.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeysConfig {
+    /// Default: `<storage path>.fleet-master-key`.
+    pub master_key_file: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
@@ -1180,6 +1195,7 @@ impl Default for Config {
             control: ControlConfig::default(),
             dashboard: DashboardConfig::default(),
             storage: StorageConfig::default(),
+            keys: KeysConfig::default(),
             sip: SipConfig::default(),
             federation: FederationConfig::default(),
             aprs: AprsConfig::default(),

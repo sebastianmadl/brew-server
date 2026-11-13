@@ -4,6 +4,18 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8a: key management, the server as authentication
+  centre.** The server holds K of every radio in an encrypted key store
+  (AES-256-GCM, `[keys] master_key_file`) and sends stations with
+  `key_source = "server"` one-time authentication data sets (RS, KS, KS',
+  EN 300 392-7 clause 4.1.1) instead of K; each station keeps a stock per
+  radio (default 10 for radios seen there or next door in 30 days) so it can
+  authenticate while the server is away. New **Keys** page: K is write-only
+  and shown by its check value (SHA-256(K)[:8]); import from a FlowStation
+  export file or CSV, typed entry with clean-up, or generate (shown once for
+  CPS / KVL); switch stations between local and server keys. New right
+  *Fleet Control keys*, settings in Server settings. Designed with Patrick,
+  OE1LHP. See `docs/Fleet-Control.md` section 13.
 - **Fleet Control, phase 7: graphs, ping and alarms.** Stations with
   `metrics-v1` report CPU load, CPU and SDR temperatures, RF state, radios and
   calls every minute (older stations: temperatures from telemetry). Each

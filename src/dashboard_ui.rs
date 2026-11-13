@@ -488,7 +488,7 @@ const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 // Pages this login sees (Server settings -> Users): an admin all of them, any other login the ones
 // ticked for it, someone not logged in the Viewer pages. The server refuses the rest anyway.
 // The station config page (Fleet Control -> Edit) goes with the Fleet Control page.
-const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p)));
+const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetkeys'?'fleet_keys':p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p)));
 const canAny=(...ps)=>ps.some(can);
 // A read route this login may ask (whoami 'allowed'); asking others would only be refused.
 const mayGet=u=>D.who.admin||(D.who.allowed||[]).includes(u.split('?')[0]);
@@ -587,7 +587,7 @@ function show(p){
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
   if(UI.navKey!==navKey())buildNav();
   UI.page=p;document.body.classList.remove('sbopen');
-  const navP=p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p;
+  const navP=p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'||p==='fleetkeys'?'fleet':p;
   document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===navP));
   document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===navP));
   $('title').textContent=PG[p][1];
@@ -1105,7 +1105,7 @@ R.fleet=()=>{
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      ${(()=>{const p=fleetJobPercent(job);const bad=n('failed')>0;return `<div class="svc" style="display:flex;align-items:center;gap:10px" title="Whole run: every station counts the same; the build counts up to 90 %, the restart up to 95 %"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${bad?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>`;})()}
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
-  return fleetAlarmCard(f)+jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
+  return fleetAlarmCard(f)+jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${can('fleetkeys')?'<button class="btn" onclick="fleetKeys()" title="Authentication keys of the radios (server as authentication centre)">Keys</button>':''}${acts}</div>
    ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). <b>Graphs</b> shows a station's CPU load, temperatures and ping over time; the latest values are under its status. <b>Auto ping</b> pings every online station every 5 s while this page is open (shown at the station, not stored, not in the change log). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
    ${msgDiv('fl_top','padding:0 18px')}
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
@@ -1231,7 +1231,7 @@ function fcHeartbeat(on){
   beat();UI.fcBeat=setInterval(()=>{if(UI.page==='fleetcfg'&&UI.fc===fc)beat();},60000);
 }
 // Leaving the page (other page, closed tab) ends the edit session.
-{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';if(p==='fleetgraph'&&!UI.fg)p='fleet';return show0(p);};}
+{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';if(p==='fleetgraph'&&!UI.fg)p='fleet';if(p==='fleetkeys'&&!UI.fk){UI.fk={tab:'radios',q:'',data:null,err:null};fkLoad();}return show0(p);};}
 window.addEventListener('pagehide',()=>{if(UI.page==='fleetcfg'&&UI.fc)fcHeartbeat(false);});
 // Follow a running change every 3 s.
 setInterval(()=>{const fc=UI.fc;if(UI.page==='fleetcfg'&&fc&&fc.data&&(fc.data.cfg.apply||(!fc.data.cfg.copy&&fc.data.online))&&!$('scrim').classList.contains('on'))fcLoad(false);},3000);
@@ -1816,6 +1816,122 @@ function tpF(p,t,extra,w){return `<input class="f" data-p="${p}" data-t="${t||'s
 function tpSel(p,opts,t,extra){const v=tpGet(p);return `<select class="f" data-p="${p}" data-t="${t||'str'}" onchange="tpIn(this)" style="width:100%" ${extra||''}>${opts.map(([k,l])=>`<option value="${esc(k??'')}" ${String(k??'')===String(v??'')?'selected':''}>${esc(l)}</option>`).join('')}</select>`;}
 function tpTog(p,extra){return `<button class="tog" role="switch" aria-checked="${!!tpGet(p)}" data-p="${p}" data-t="bool" onclick="tpIn(this)" ${extra||''}></button>`;}
 function tpOn(k,on){if(on)UI.tp.on.add(k);else UI.tp.on.delete(k);render(true);}
+// Fleet Control keys (keys-v1): the authentication centre of the fleet (EN 300 392-7 clause 4.1.1).
+PG.fleetkeys=['fleetkeys','Fleet Control keys','key','Infrastructure'];
+const FK_MODELS=['','MTP3550','MTP6550','MTP6650','MTP6750','MTP850 S','MTH800'];
+function fleetKeys(){UI.fk=UI.fk||{tab:'radios',q:'',data:null,err:null};show('fleetkeys');fkLoad();}
+async function fkLoad(){const k=UI.fk;if(!k)return;
+  try{k.data=await getJ('/api/fleet/keys');k.err=null;}catch(e){k.err=e.message;}
+  if(UI.page==='fleetkeys')render(true);}
+// Typed K: spaces, colons, dashes and line breaks go; exactly 32 hex digits stay.
+const fkNorm=s=>String(s||'').replace(/[\s:\-]/g,'');
+const fkValid=s=>/^[0-9a-fA-F]{32}$/.test(fkNorm(s));
+function fkStation(id){const st=(UI.fk.data&&UI.fk.data.stations)||[];const s=st.find(x=>x.id===id||x.brew_login===id);return s?s.label:id;}
+R.fleetkeys=()=>{
+  const k=UI.fk;if(!k)return loading;const d=k.data;
+  const back=`<button class="btn ic" title="Back to Fleet Control" aria-label="Back to Fleet Control" onclick="show('fleet')">‹</button>`;
+  if(!d)return k.err?`<div class="card"><div class="empty">${esc(k.err)} <button class="btn" onclick="show('fleet')">Back</button></div></div>`:loading;
+  const tabs=[['radios','Radios'],['add','Add / generate'],['import','Import'],['stations','Stations']];
+  const head=`<div class="card"><div class="ch" style="gap:10px">${back}<h2 style="font-size:17px">Keys</h2><span class="cnt">${d.subs.length}</span>${helpBtn('fkeys')}<span class="sp"></span>
+    <div class="seg" role="group" aria-label="Keys view">${tabs.map(([t,l])=>`<button aria-pressed="${k.tab===t}" onclick="UI.fk.tab='${t}';render(true)">${l}</button>`).join('')}</div></div>
+    ${helpNote('fkeys',`This server is the authentication centre of the fleet: it holds the authentication key K of every radio, stations never see K (EN 300 392-7 clause 4.1.1). A station switched to <b>server keys</b> gets one-time authentication data sets (RS, KS, KS') from here and keeps a stock of ${d.settings.stock} per radio for radios seen at it or a neighbour in the last ${d.settings.days} days, so it can still authenticate while this server is away. K is write-only: after saving only its <b>check value</b> (first 8 bytes of SHA-256(K)) is shown, to compare with your records. K cannot be read out of a radio and there is no over-the-air transfer for K, so keys come in by import (CSV or a FlowStation export), by typing or by <b>Generate</b> (shown once, for programming the radio with CPS / KVL). The keys file is encrypted (AES-256-GCM) with <code>[keys] master_key_file</code>. Every change goes into the change log, never a key. Right: <i>Fleet Control keys</i> (Server settings → Users).`)}
+    ${d.problem?`<div class="svc"><span class="chip d">Key store</span> ${esc(d.problem)}</div>`:''}${msgDiv('fk-msg','padding:0 18px 12px')}</div>`;
+  let body='';
+  if(k.tab==='radios'){
+    const q=(k.q||'').trim();const list=d.subs.filter(s=>!q||String(s.issi).includes(q)||(s.model||'').toLowerCase().includes(q.toLowerCase()));
+    body=`<div class="card"><div class="ch"><h2>Radios with K</h2><span class="cnt">${list.length}</span><span class="sp"></span><input class="f" placeholder="Search ISSI or model" aria-label="Search the radios" value="${esc(k.q||'')}" oninput="UI.fk.q=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the radios&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:200px"></div>
+    ${list.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Check value</th><th>Model</th><th>Source</th><th>Last authentication</th><th>Stock per station</th><th></th></tr></thead><tbody>${list.map(s=>{const la=s.last_auth;const stock=Object.entries(s.stock||{});
+      return `<tr><td><b class="m">${s.issi}</b></td><td class="m">${esc(s.kcv)}</td>
+      <td><select class="f" style="width:120px" aria-label="Model of ${s.issi}" onchange="fkModel(${s.issi},this.value)">${FK_MODELS.map(m=>`<option value="${esc(m)}" ${m===(s.model||'')?'selected':''}>${m||'—'}</option>`).join('')}${s.model&&!FK_MODELS.includes(s.model)?`<option selected>${esc(s.model)}</option>`:''}</select></td>
+      <td><span class="chip">${esc(s.source)}</span><span class="sub">${esc(tmd(s.set_ms))}${s.by?' · '+esc(s.by):''}</span></td>
+      <td>${la?`<span class="chip ${la.ok?'a':'d'}">${la.ok?(la.mutual?'ok · mutual':'ok'):'failed'}</span><span class="sub">${esc(fkStation(la.station))} · ${ago(la.at_ms)}</span>`:'<span class="mut">—</span>'}</td>
+      <td style="font-size:12px">${stock.length?stock.map(([st,n])=>`<div>${esc(fkStation(st))}: <b class="m">${n}</b></div>`).join(''):'<span class="mut">—</span>'}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="fkGenerate(${s.issi},true)" title="New random K (shown once); the radio must be programmed with it">New K</button> <button class="btn danger" onclick="fkDelete(${s.issi})">${ic('trash')}Delete</button></td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No keys yet: import them, type them in or generate them.</div>'}</div>`;
+  }else if(k.tab==='add'){
+    body=`<div class="card"><div class="ch"><h2>One radio</h2></div><div style="padding:12px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div><label class="l" for="fk-issi">ISSI</label><input class="f" id="fk-issi" inputmode="numeric" style="width:130px" autocomplete="off"></div>
+      <div style="flex:1;min-width:300px"><label class="l" for="fk-k">K (32 hex digits; spaces, : and - are ignored)</label><input class="f m" id="fk-k" autocomplete="off" spellcheck="false" autocapitalize="off" oninput="fkPreview()" placeholder="0123 4567 89AB CDEF 0123 4567 89AB CDEF"></div>
+      <button class="btn pri" onclick="fkSet()">Save K</button><button class="btn" onclick="fkGenerate(null,false)" title="Random K for this ISSI, shown once to program the radio (CPS / KVL)">Generate</button></div>
+      <div class="svc mut" id="fk-prev" style="font-size:12.5px">Type or paste K.</div></div>`;
+  }else if(k.tab==='import'){
+    body=`<div class="card"><div class="ch"><h2>CSV</h2></div><div style="padding:12px 18px">
+      <div class="mut" style="font-size:12.5px;margin-bottom:6px">One radio per line: <code>ISSI;K</code> (also <code>,</code> or tab). A header line and lines starting with <code>#</code> are skipped. If one line is wrong nothing is imported and the line number is shown.</div>
+      <textarea class="f m" id="fk-csv" rows="8" style="width:100%" spellcheck="false" placeholder="2320972;0123456789ABCDEF0123456789ABCDEF"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><label class="btn">Open file…<input type="file" accept=".csv,.txt" style="display:none" onchange="fkFile(this,'fk-csv')"></label><button class="btn pri" onclick="fkImport(false)">Import CSV</button></div></div></div>
+     <div class="card"><div class="ch"><h2>FlowStation export</h2></div><div style="padding:12px 18px">
+      <div class="mut" style="font-size:12.5px;margin-bottom:6px">The encrypted file from a station's Security page (<i>Export keys</i>) and its password.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end"><label class="btn">Choose export file…<input type="file" accept=".json" style="display:none" onchange="fkFile(this,null)"></label><span class="mut m" id="fk-file-name" style="font-size:12px">${UI.fk.file?esc(UI.fk.fileName||'file loaded'):'no file'}</span>
+      <div><label class="l" for="fk-pw">Password</label><input class="f" id="fk-pw" type="password" autocomplete="off" style="width:220px"></div><button class="btn pri" onclick="fkImport(true)">Import file</button></div></div></div>
+     <div id="fk-report"></div>`;
+  }else{
+    const st=d.stations||[];const manage=D.fleet&&D.fleet.can_manage;
+    body=`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span></div>
+     <div class="svc mut" style="font-size:12.5px;display:block">Switching a station to <b>server keys</b> is a config change (the station restarts, about 20 s off the air). A station with keys of its own: export them on its Security page and import them here first; switching then removes them from the station. ${manage?'':'Switching needs the right Fleet Control management too.'}</div>
+     ${st.length?`<div class="tw"><table><thead><tr><th>Station</th><th>Status</th><th>Key source</th><th>Stock</th><th></th></tr></thead><tbody>${st.map(s=>{const total=d.subs.reduce((n,x)=>n+((x.stock||{})[s.id]||0),0);const srv=s.key_source==='server';
+       return `<tr><td><b>${esc(s.label)}</b>${s.label!==s.id?` <span class="mut m" style="font-size:12px">${esc(s.id)}</span>`:''}</td><td>${s.online?'<span class="st"><i></i>Online</span>':'<span class="st d"><i></i>Offline</span>'}</td>
+       <td>${!s.keys?'<span class="chip i" title="Software without keys-v1">not supported</span>':srv?'<span class="chip a">server</span>':`<span class="chip">local</span>${s.local_keys?`<span class="sub">${s.local_keys} keys in its config</span>`:''}`}</td>
+       <td class="m">${srv?total:'—'}</td>
+       <td style="text-align:right">${manage&&s.keys&&s.online?(srv?`<button class="btn" onclick="fkSource('${esc(s.id)}','local',0)">Back to local keys</button>`:`<button class="btn pri" onclick="fkSource('${esc(s.id)}','server',${s.local_keys||0})">Use server keys</button>`):''}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No station in Fleet Control.</div>'}</div>`;
+  }
+  return head+body;
+};
+function fkPreview(){const e=$('fk-prev');if(!e)return;const n=fkNorm(v('fk-k'));
+  e.textContent=!n?'Type or paste K.':fkValid(n)?'32 hex digits: '+n.toUpperCase().match(/.{4}/g).join(' '):`${n.length} of 32 characters${/^[0-9a-fA-F]*$/.test(n)?'':' · only 0-9 and A-F'}`;}
+async function fkSet(){const issi=parseInt(v('fk-issi'),10),kk=fkNorm(v('fk-k'));
+  if(!(issi>0))return setMsg('fk-msg','err','ISSI missing');if(!fkValid(kk))return setMsg('fk-msg','err','K needs exactly 32 hex digits');
+  try{const r=await postJ('/api/fleet/keys/set',{issi,k:kk});$('fk-k').value='';setMsg('fk-msg','ok',`K for ${issi} ${r.changed?'saved':'unchanged'} · check value ${r.kcv}`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkGenerate(issi,replace){
+  if(issi==null){issi=parseInt(v('fk-issi'),10);if(!(issi>0))return setMsg('fk-msg','err','ISSI missing');}
+  const has=(UI.fk.data.subs||[]).some(s=>s.issi===issi);
+  if((replace||has)&&!confirm(`Replace the K of ${issi}? The radio then needs the new K (CPS / KVL) before it can authenticate again.`))return;
+  try{const r=await postJ('/api/fleet/keys/generate',{issi});fkShowOnce(r);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+// A generated K is shown exactly once: copy it or save the file now.
+function fkShowOnce(r){
+  const file=`# K for ${r.issi}, check value ${r.kcv}\n${r.issi};${r.k}\n`;
+  UI.fkOnce=file;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">New K for ${r.issi}</h3></div><div class="sb">
+   <div class="svc" style="font-size:13px"><span class="chip w">Shown once</span> Program the radio with this K (CPS / KVL) now. The server never shows it again.</div>
+   <div style="font-family:var(--mono);font-size:22px;letter-spacing:.06em;padding:14px 18px;user-select:all;word-break:break-all" id="fk-once">${esc(r.grouped)}</div>
+   <div class="svc" style="font-size:13px">Check value: <b class="m">${esc(r.kcv)}</b></div>
+   <div style="display:flex;gap:8px;padding:0 18px 12px;flex-wrap:wrap"><button class="btn" onclick="navigator.clipboard.writeText('${esc(r.k)}').then(()=>setMsg('fk-once-msg','ok','Copied'))">Copy</button><button class="btn" onclick="fkOnceFile(${r.issi})">Save as file</button></div>${msgDiv('fk-once-msg','padding:0 18px')}</div>
+   <div class="acts"><button class="btn pri" onclick="UI.fkOnce=null;closeSheet()">Done</button></div>`;
+  $('scrim').classList.add('on');}
+function fkOnceFile(issi){if(!UI.fkOnce)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([UI.fkOnce],{type:'text/plain'}));a.download=`k-${issi}.csv`;document.body.appendChild(a);a.click();a.remove();UI.fkOnce=null;setMsg('fk-once-msg','ok','Saved (the file can only be saved once)');}
+async function fkDelete(issi){if(!confirm(`Delete the K of ${issi}? Stations drop its authentication data; the radio can no longer authenticate.`))return;
+  try{await postJ('/api/fleet/keys/delete',{issis:[issi]});setMsg('fk-msg','ok',`K of ${issi} deleted`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkModel(issi,model){try{await postJ('/api/fleet/keys/model',{issi,model});fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+function fkFile(inp,target){const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{if(target){$(target).value=r.result;}else{UI.fk.file=r.result;UI.fk.fileName=f.name;const e=$('fk-file-name');if(e)e.textContent=f.name;}};r.readAsText(f);inp.value='';}
+async function fkImport(file){
+  const body=file?{file:UI.fk.file||'',password:v('fk-pw')}:{text:v('fk-csv')};
+  if(file&&!UI.fk.file)return setMsg('fk-msg','err','Choose the export file first');
+  try{const r=await postJ('/api/fleet/keys/import',body);
+    const rep=$('fk-report');
+    if(r.errors&&r.errors.length){setMsg('fk-msg','err','Nothing imported: '+r.errors.length+' line(s) wrong');if(rep)rep.innerHTML=`<div class="card"><div class="ch"><h2>Errors</h2></div><div class="svc" style="display:block;font-size:12.5px">${r.errors.map(x=>`<div>${esc(x)}</div>`).join('')}</div></div>`;return;}
+    setMsg('fk-msg','ok',`Imported: ${r.added} new, ${r.changed} changed, ${r.unchanged} unchanged`);
+    if(rep)rep.innerHTML=`<div class="card"><div class="ch"><h2>Check values</h2><span class="cnt">${r.kcvs.length}</span></div><div class="mut svc" style="font-size:12.5px">Compare them with your records.</div><div class="tw"><table><thead><tr><th>ISSI</th><th>Check value</th></tr></thead><tbody>${r.kcvs.map(([i,c])=>`<tr><td class="m">${i}</td><td class="m">${esc(c)}</td></tr>`).join('')}</tbody></table></div></div>`;
+    if(file){UI.fk.file=null;UI.fk.fileName=null;$('fk-pw').value='';}else $('fk-csv').value='';
+    fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSource(id,source,local){
+  let drop=false;
+  if(source==='server'){
+    if(local&&!confirm(`This station holds ${local} keys of its own. Did you export them on the station and import them here? Switching removes them from the station.`))return;
+    drop=local>0;
+    if(!confirm('Switch this station to server keys? It restarts with the new config (about 20 s off the air).'))return;
+  }else if(!confirm('Switch this station back to local keys? It then needs K in its own config to authenticate radios; its stock of authentication data is deleted. It restarts (about 20 s).'))return;
+  try{await postJ('/api/fleet/keys/source',{id,source,drop_local_keys:drop});setMsg('fk-msg','ok','Config change sent; the station restarts');setTimeout(fkLoad,3000);}catch(e){setMsg('fk-msg','err',e.message);}}
+setInterval(()=>{if(UI.page==='fleetkeys'&&UI.fk&&!$('scrim').classList.contains('on'))fkLoad();},30000);
+// Key settings (Server settings, admins).
+function keysSettingsCard(){
+  const s=D.fkset;if(!s){getJ('/api/fleet/keys').then(r=>{D.fkset=r.settings;if(UI.page==='settings')render(true);}).catch(()=>{});return '';}
+  return `<div class="card"><div class="ch"><h2>Fleet Control keys</h2>${helpBtn('fkset')}</div>
+   ${helpNote('fkset','Stock of one-time authentication data sets (RS, KS, KS\') a station with server keys keeps per radio, for radios registered at it or a neighbour station within the given days. The stock lets a station authenticate while this server is away; every set is used once and topped up.')}
+   <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+   <div><label class="l" for="fks-stock">Sets per radio and station (1–50)</label><input class="f" id="fks-stock" inputmode="numeric" value="${s.stock}" style="width:110px"></div>
+   <div><label class="l" for="fks-days">Radios seen within days (1–365)</label><input class="f" id="fks-days" inputmode="numeric" value="${s.days}" style="width:110px"></div>
+   <button class="btn pri" onclick="saveKeysSettings()">Save</button></div>${msgDiv('fks-msg','padding:0 18px 12px')}</div>`;}
+async function saveKeysSettings(){const stock=parseInt(v('fks-stock'),10),days=parseInt(v('fks-days'),10);
+  try{await postJ('/api/fleet/keys/settings',{stock,days});D.fkset={stock,days};setMsg('fks-msg','ok','Saved');}catch(e){setMsg('fks-msg','err',e.message);}}
 R.fleettpl=()=>{
   const tp=UI.tp;if(!tp)return loading;const f=D.fleet||{};const m=f.can_manage;const v=tp.v;
   const back=`<button class="btn ic" title="Back" aria-label="Back" onclick="show('${tp.back==='fleetcfg'&&UI.fc?'fleetcfg':'fleet'}')">‹</button>`;
@@ -2724,6 +2840,7 @@ R.settings=()=>{
     ${l.map(x=>`<tr><td class="m"><b>${esc(x.username)}</b></td><td>${esc(x.name)}</td><td class="m" style="font-size:12px">${(+x.lat).toFixed(4)}, ${(+x.lon).toFixed(4)}</td><td style="text-align:right"><button class="btn danger" onclick="btsLocDel('${esc(x.username)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="4" class="mut">No static station positions</td></tr>'}
     </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>
    ${updatesRepoCard()}
+   ${keysSettingsCard()}
    ${fleetCfgSettingsCard()}
    ${fleetMonSettingsCard()}
    ${usersCard()}`;
@@ -2743,7 +2860,7 @@ async function saveUpdatesRepo(){
   try{await postJ('/api/fleet/settings',{repo:v('ur-repo').trim(),branch:v('ur-branch').trim()});D.fleet=await getJ('/api/fleet');setMsg('ur-msg','ok','Saved');render(true);}catch(e){setMsg('ur-msg','err',e.message);}
 }
 // Dashboard users (Server settings, admins): who logs in, who is admin, which pages each one sees.
-const pageName=id=>id==='fleet_manage'?'Fleet Control management':PG[id]?PG[id][1]:id;
+const pageName=id=>id==='fleet_manage'?'Fleet Control management':id==='fleet_keys'?'Fleet Control keys':PG[id]?PG[id][1]:id;
 const pageChips=(list,all)=>all?'<span class="chip a">Every page · edits</span>':(list.length?list.map(p=>`<span class="chip">${esc(pageName(p))}</span>`).join(' '):'<span class="mut">no page</span>');
 function usersCard(){
   const u=D.dusers;if(!u)return loading;
@@ -2762,7 +2879,7 @@ function editUser(i){
   const x=viewer?{name:'Viewer',admin:false,pages:u.viewer}:i>=0?u.users[i]:{name:'',admin:false,pages:u.viewer};
   const box=(id,label)=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" class="chk du-pg" value="${id}" ${x.admin||x.pages.includes(id)?'checked':''} ${x.admin?'disabled':''}> ${esc(label)}</label>`;
   // Fleet Control: visibility (the page) and management (includes visibility; not for Viewer).
-  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management'));
+  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management')+box('fleet_keys','Fleet Control keys'));
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${viewer?'Viewer (not logged in)':i>=0?'Edit user '+esc(x.name):'New user'}</h3></div><div class="sb">
    ${viewer?`<div class="mut" style="font-size:12.5px">What anyone sees without logging in${D.who.open?'':' once the dashboard is open (<code>[dashboard.ui] open = true</code>; it is closed now, so nobody sees anything without logging in)'}.</div>`:`
    <div><label class="l" for="du-name">User name</label><input class="f" id="du-name" value="${esc(x.name)}" ${i>=0?'disabled':''} placeholder="e.g. oe4sxm" autocomplete="off" spellcheck="false" autocapitalize="off"></div>

@@ -19,6 +19,7 @@ mod fedroute;
 mod fleet;
 mod fleet_bulk;
 mod fleet_config;
+mod fleet_keys;
 mod fleet_monitor;
 mod fleet_update;
 mod fsnet;
@@ -37,6 +38,7 @@ mod router;
 mod server;
 mod sip;
 mod sms_center;
+mod taa1;
 mod state;
 mod store;
 mod telemetry;
@@ -105,6 +107,7 @@ async fn services(
     tokio::spawn(emergency::run(state.clone()));
     // Fleet Control update runs go on in the background (no browser needed).
     tokio::spawn(fleet::run_updates(state.clone()));
+    tokio::spawn(fleet_keys::run(state.clone()));
     tokio::spawn(fleet_monitor::run_monitor(state.clone()));
 
     tokio::try_join!(

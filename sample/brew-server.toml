@@ -121,6 +121,13 @@ keep_days = 7
 max_calls = 2000
 max_sds = 2000
 
+# Fleet Control key management (authentication centre, docs/Fleet-Control.md
+# section 13). The keys file next to the history log is encrypted with this
+# master key; it is created (mode 600) on first use. Keep a copy somewhere
+# safe: without it the keys file cannot be read.
+# [keys]
+# master_key_file = "/etc/brew-server/fleet-master-key"
+
 # ---------------------------------------------------------------------------
 # SIP / VoIP subsystem. Off by default. When enabled it binds a UDP SIP
 # listener that terminates SIP extensions (user/pass registrations) and SIP

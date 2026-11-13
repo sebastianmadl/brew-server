@@ -187,6 +187,14 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/bulk/cancel", axum::routing::post(crate::fleet_bulk::api_bulk_cancel))
         .route("/api/fleet/neighbours", get(crate::fleet_bulk::api_neighbours))
         .route("/api/fleet/neighbours/check", get(crate::fleet_bulk::api_neighbour_check))
+        .route("/api/fleet/keys", get(crate::fleet_keys::api_list))
+        .route("/api/fleet/keys/set", axum::routing::post(crate::fleet_keys::api_set))
+        .route("/api/fleet/keys/generate", axum::routing::post(crate::fleet_keys::api_generate))
+        .route("/api/fleet/keys/import", axum::routing::post(crate::fleet_keys::api_import))
+        .route("/api/fleet/keys/delete", axum::routing::post(crate::fleet_keys::api_delete))
+        .route("/api/fleet/keys/model", axum::routing::post(crate::fleet_keys::api_model))
+        .route("/api/fleet/keys/settings", axum::routing::post(crate::fleet_keys::api_settings))
+        .route("/api/fleet/keys/source", axum::routing::post(crate::fleet_keys::api_source))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -318,6 +326,9 @@ fn need(path: &str) -> Need {
         | "/api/fleet/config" | "/api/fleet/config/apply" | "/api/fleet/config/discard" | "/api/fleet/config/import"
         | "/api/fleet/config/rollback" | "/api/fleet/config/raw_preview" | "/api/fleet/edit" | "/api/fleet/templates/save"
         | "/api/fleet/templates/delete" | "/api/fleet/bulk/preview" | "/api/fleet/bulk/start" | "/api/fleet/bulk/cancel" | "/api/fleet/alarms/ack" => &["fleet_manage"],
+        "/api/fleet/keys" | "/api/fleet/keys/set" | "/api/fleet/keys/generate" | "/api/fleet/keys/import" | "/api/fleet/keys/delete"
+        | "/api/fleet/keys/model" => &["fleet_keys"],
+        "/api/fleet/keys/source" => &["fleet_keys", "fleet_manage"],
         _ => return Need::Admin,
     })
 }

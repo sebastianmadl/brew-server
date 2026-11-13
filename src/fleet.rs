@@ -38,6 +38,10 @@ pub struct Hello {
     pub mnc: u16,
     pub fleet_control: bool,
     pub capabilities: Vec<String>,
+    /// `keys-v1`: `off`, `local`, `server`.
+    pub key_source: Option<String>,
+    /// `keys-v1`: number of K in the station's own config.
+    pub local_keys: Option<u32>,
 }
 
 /// One station in the Fleet Manager.
@@ -71,6 +75,12 @@ pub struct Station {
     /// Config copy, local changes, pending and running changes (`config-v1`), phases 4/5.
     #[serde(default)]
     pub cfg: crate::fleet_config::StationConfig,
+    /// `keys-v1`: where its authentication keys come from (`off`, `local`, `server`), phase 8.
+    #[serde(default)]
+    pub key_source: Option<String>,
+    /// `keys-v1`: number of K in its own config.
+    #[serde(default)]
+    pub local_keys: Option<u32>,
 }
 
 /// Maintenance flag of a station (the station's own copy runs out at the same time).
@@ -361,6 +371,8 @@ impl Fleet {
             maintenance: entry.as_ref().and_then(|s| s.maintenance.clone()),
             restart: None,
             cfg: entry.as_ref().map(|s| s.cfg.clone()).unwrap_or_default(),
+            key_source: h.key_source.clone(),
+            local_keys: h.local_keys,
         };
         if let Some(r) = entry.as_ref().and_then(|s| s.restart.as_ref()) {
             let secs = now_ms.saturating_sub(r.at_ms) / 1000;
@@ -1184,7 +1196,7 @@ mod tests {
     use super::*;
 
     fn hello(on: bool, version: &str) -> Hello {
-        Hello { protocol: 1, version: version.into(), brew_login: Some("1000001".into()), mcc: 232, mnc: 20, fleet_control: on, capabilities: if on { vec!["fleet-v1".into()] } else { vec![] } }
+        Hello { protocol: 1, version: version.into(), brew_login: Some("1000001".into()), mcc: 232, mnc: 20, fleet_control: on, capabilities: if on { vec!["fleet-v1".into()] } else { vec![] }, key_source: None, local_keys: None }
     }
     fn no_names(_: &str) -> Option<String> {
         None

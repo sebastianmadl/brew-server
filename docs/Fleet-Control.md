@@ -806,3 +806,136 @@ while the switch is on, so older servers never see it. A server older than
 phase 7 would drop it as an unknown response (warning in its log). A station
 without `metrics-v1` keeps working; its graphs come from telemetry, or stay
 empty. Code: `src/fleet_monitor.rs`.
+
+## 13. Key management: the server as authentication centre (phase 8a, `keys-v1`)
+
+The server holds the authentication key K of every radio and works as the
+authentication centre of the fleet (EN 300 392-7 clause 4.1.1). A station
+switched to server keys (`[security] key_source = "server"` on the station)
+never sees K: it gets authentication data sets (RS, KS, KS') and does the
+rest itself. Credits: the design was worked out with Patrick, OE1LHP.
+
+### 13.1 What goes where
+
+- K stays on the server, in `<storage>.fleet-keys`, sealed with AES-256-GCM
+  under the master key in `[keys] master_key_file` (default
+  `<storage>.fleet-master-key`, 64 hex digits, created on first use with mode
+  600). A missing master key next to an existing store is never replaced: the
+  page shows the problem and nothing is written. Key management needs
+  `[storage]` enabled.
+- A set is RS (80 bit, random per set), KS = TA11(K, RS) and
+  KS' = TA21(K, RS). The station sends RS with a fresh RAND1 of its own
+  (D-AUTHENTICATION DEMAND) and checks RES1 = TA12(KS, RAND1) itself; when the
+  radio challenges the network with RAND2 the station answers
+  RES2 = TA22(KS', RAND2). DCK = TB4(DCK1, DCK2) as before. Every set is used
+  once and then reported back.
+- Each station keeps a **stock** of sets per radio (default 10, 1–50) for the
+  radios registered at it or at a neighbour station (cells that list each
+  other as neighbours, in either direction) in the last 30 days (1–365). The
+  stock is in a file next to the station's config (`<config>.auth-sets`,
+  mode 600), so the station still authenticates after a restart while the
+  server is away. A radio without sets at the station: the station asks for
+  them and holds the registration up to 2 s; without an answer the radio is
+  treated like one without a key (`required`: rejected; `optional`:
+  registered unauthenticated). The fallback for a longer outage is phase 8d.
+- K is write-only: after saving only its **check value** is shown, the first
+  8 bytes of SHA-256(K) in hex (never a CRC), to compare with the records.
+
+### 13.2 Getting K onto the server
+
+K cannot be read out of a radio and EN 300 392-7 has no over-the-air transfer
+for K (A.8.58, Table A.85), so it comes in one of these ways:
+
+- **FlowStation export**: the station's Security page → *Export keys* writes
+  an encrypted file (`bost-keys-v1`: PBKDF2-HMAC-SHA256 with 600 000 rounds
+  and a random salt, AES-256-GCM; password at least 10 characters). Import it
+  on the Keys page with its password.
+- **CSV**: `ISSI;K` per line (also `,` or tab), a header line and `#` comment
+  lines are skipped. One wrong line: nothing is imported, the line number is
+  shown.
+- **One radio**: ISSI and K typed or pasted. Spaces, `:`, `-` and line breaks
+  are dropped; exactly 32 hex digits are needed; the page shows the cleaned
+  value in groups of four while typing.
+- **Generate**: a random K, shown **once** in groups of four with a copy
+  button, the check value and a one-time file download (`ISSI;K`), for
+  programming the radio with CPS / KVL.
+
+Every import shows the check value per ISSI. A changed K drops the radio's
+sets everywhere (`AuthSubscribers` with `drop`).
+
+### 13.3 Messages
+
+Server → station (only to listed stations with `keys-v1` whose hello says
+`key_source: "server"`):
+
+```json
+{"AuthSubscribers": {"issis": [2320972, 2320973], "drop": [2320973]}}
+{"AuthVectors": {"issi": 2320972, "vectors": [{"rs": "<20 hex>", "ks": "<32 hex>", "ks_p": "<32 hex>"}]}}
+```
+
+`AuthSubscribers`: the radios the server holds K for, after every hello and
+after every key change. The station drops the sets of radios not listed and of
+those in `drop` (K changed), and answers with `AuthStock`. `AuthVectors`: sets
+for one radio, at most 50 per message; an empty list means the server has no
+K for it.
+
+Station → server:
+
+```json
+{"AuthStock": {"counts": [{"issi": 2320972, "count": 10}]}}
+{"AuthVectorRequest": {"issi": 2320972}}
+{"AuthReport": {"issi": 2320972, "rs": "<20 hex>", "ok": true, "mutual": false, "left": 9}}
+```
+
+`AuthVectorRequest` at most every 5 s per radio. `AuthReport` after every
+authentication that used a set (`ok`: RES1 matched; `mutual`: the radio also
+challenged the network; `left`: sets left). The server tops the stock up after
+reports and every 15 s for the target radios; a failed authentication goes into
+the change log (`keys_auth_failed`).
+
+`StationHello` gains `key_source` (`local` / `server`) and `local_keys` (how
+many K the station's config holds, never the keys).
+
+### 13.4 Switching a station
+
+Keys page → *Stations* → **Use server keys** sends the config change
+`{"keys": {"source": "server", "drop_local_keys": true}}` (section 10, the
+station restarts and confirms like every config change). It removes the
+station's `[[security.subscribers]]`; while the station holds keys of its own
+this needs `drop_local_keys`, so export and import them first. **Back to
+local keys** sets `key_source` back; the station deletes its stock at the next
+start and needs K in its own config again. OTAR of the SCK from the station is
+refused while it uses server keys (SCK delivery through the server is phase
+8b).
+
+### 13.5 Dashboard and rights
+
+**Keys** on the Fleet Control page (right *Fleet Control keys*, which includes
+seeing the Fleet Control page; only admins grant it): *Radios* (ISSI, check
+value, model, where K came from, last authentication, stock per station, New
+K, Delete), *Add / generate*, *Import*, *Stations* (key source, stock,
+switching; switching also needs *Fleet Control management*). Server settings
+→ **Fleet Control keys** (admins): stock size and days. Every key operation
+goes into the Fleet Control change log, never a key value.
+
+### 13.6 HTTP API
+
+| Route | Right | Body | Does |
+| --- | --- | --- | --- |
+| `GET /api/fleet/keys` | keys | | `{problem, settings, subs: [{issi, kcv, source, by, set_ms, model, last_auth, seen, stock}], stations: [{id, label, brew_login, online, keys, key_source, local_keys}]}` |
+| `POST /api/fleet/keys/set` | keys | `{issi, k}` | write K; `{kcv, changed}` |
+| `POST /api/fleet/keys/generate` | keys | `{issi}` | random K, returned once: `{k, grouped, kcv}` (`Cache-Control: no-store`) |
+| `POST /api/fleet/keys/import` | keys | `{text}` or `{file, password}` | `{added, changed, unchanged, errors, kcvs}` |
+| `POST /api/fleet/keys/delete` | keys | `{issis}` | delete K |
+| `POST /api/fleet/keys/model` | keys | `{issi, model}` | device model (profiles: phase 8b) |
+| `POST /api/fleet/keys/source` | keys + management | `{id, source, drop_local_keys?, during_call?}` | switch a station |
+| `POST /api/fleet/keys/settings` | admin | `{stock, days}` | stock settings |
+
+### 13.7 Backwards compatibility
+
+The key messages go only to stations that list `keys-v1` and report
+`key_source: "server"`; stations with local keys (shown as "local") and older
+stations work as before. A server older than phase 8 never sends them, and a
+station with `key_source = "server"` then authenticates only from its stock.
+Code: `src/fleet_keys.rs`, `src/taa1/` (TAA1 ported from FlowStation's
+`tetra-security`, same reference vectors).

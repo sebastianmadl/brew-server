@@ -679,6 +679,10 @@ pub async fn api_apply(State(state): State<Arc<AppState>>, headers: HeaderMap, J
     if !a.manages_fleet() {
         return refuse();
     }
+    // The key source moves K between station and server: only with the right Fleet Control keys.
+    if req.changes.get("keys").is_some() && !a.manages_keys() {
+        return (StatusCode::FORBIDDEN, "Changing the key source needs the right Fleet Control keys").into_response();
+    }
     if !req.changes.is_object() || (req.changes.as_object().is_some_and(|o| o.is_empty()) && req.raw_text.is_none() && !req.resolve) {
         return (StatusCode::BAD_REQUEST, "Nothing to change").into_response();
     }

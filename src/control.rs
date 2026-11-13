@@ -109,6 +109,13 @@ pub enum ControlCommand {
     /// Fleet Control (`config-v1`): go back to the config before the last
     /// `SetConfig` at once (restart).
     RollbackConfig { #[serde(default)] handle: u32 },
+    /// Fleet Control (`keys-v1`, station with keys from the server): the
+    /// radios the server has K for. The station drops its sets of radios not
+    /// listed and of those in `drop` (K changed), and answers with `AuthStock`.
+    AuthSubscribers { issis: Vec<u32>, #[serde(default)] drop: Vec<u32> },
+    /// Fleet Control (`keys-v1`): authentication data sets (RS, KS, KS') for
+    /// `issi`, added to the station's stock. Empty: the server has no K for it.
+    AuthVectors { issi: u32, vectors: Vec<crate::fleet_keys::AuthVector> },
 }
 
 impl ControlCommand {
@@ -178,6 +185,13 @@ pub enum ControlResponse {
         /// `config-v1`: seconds left to confirm the last `SetConfig`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_pending: Option<u32>,
+        /// `keys-v1`: where the station's authentication keys come from:
+        /// `off` (no authentication), `local` (K in its config), `server`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_source: Option<String>,
+        /// `keys-v1`: number of K in the station's own config.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_keys: Option<u32>,
     },
     /// Fleet Control (`config-v1`): the answer to `GetConfig`.
     ConfigInfo {
@@ -233,6 +247,23 @@ pub enum ControlResponse {
         calls: u32,
         #[serde(default)]
         health: String,
+    },
+    /// Fleet Control (`keys-v1`): the station's stock of authentication data
+    /// sets per radio (answer to `AuthSubscribers`).
+    AuthStock { #[serde(default)] counts: Vec<crate::fleet_keys::IssiCount> },
+    /// Fleet Control (`keys-v1`): the station has no set for `issi`.
+    AuthVectorRequest { issi: u32 },
+    /// Fleet Control (`keys-v1`): the station used one set of `issi` (`left`
+    /// sets remain).
+    AuthReport {
+        issi: u32,
+        #[serde(default)]
+        rs: String,
+        ok: bool,
+        #[serde(default)]
+        mutual: bool,
+        #[serde(default)]
+        left: Option<u32>,
     },
     /// Fleet Control (`update-v1`): progress of an OTA run on the station.
     UpdateProgress {
@@ -423,10 +454,11 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
     };
 
-    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities, config_hash, config_pending } = &response {
+    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities, config_hash, config_pending, key_source, local_keys } = &response {
         let hello = crate::fleet::Hello {
             protocol: *protocol, version: version.clone(), brew_login: brew_login.clone(), mcc: *mcc, mnc: *mnc,
             fleet_control: *fleet_control, capabilities: capabilities.clone(),
+            key_source: key_source.clone(), local_keys: *local_keys,
         };
         let (changed, resend) = {
             let names = station_names(state);
@@ -447,7 +479,14 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         if *fleet_control {
             crate::fleet_config::after_hello(state, id, config_hash.clone(), *config_pending);
         }
+        crate::fleet_keys::after_hello(state, id);
         return;
+    }
+    match &response {
+        ControlResponse::AuthStock { counts } => return crate::fleet_keys::on_stock(state, id, counts).await,
+        ControlResponse::AuthVectorRequest { issi } => return crate::fleet_keys::on_request(state, id, *issi),
+        ControlResponse::AuthReport { issi, ok, mutual, left, .. } => return crate::fleet_keys::on_report(state, id, *issi, *ok, *mutual, *left),
+        _ => {}
     }
     if let ControlResponse::FleetMetrics { cpu_pct, cpu_temp_c, cells, radios, calls, health, .. } = &response {
         // Only from listed stations (the switch is on): the graphs belong to the Fleet Manager.
@@ -477,7 +516,8 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         | ControlResponse::ConfigInfo { handle, .. } => {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
-        ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. } => {}
+        ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. }
+        | ControlResponse::AuthStock { .. } | ControlResponse::AuthVectorRequest { .. } | ControlResponse::AuthReport { .. } => {}
     }
 }
 
