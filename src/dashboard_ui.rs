@@ -637,6 +637,7 @@ async function refreshSlow(){
   if(UI.page==='accounts')tasks.push(opt('/api/accounts',v=>D.acc=v));
   if(UI.page==='sipcfg'&&can('sipcfg'))loadPageData('sipcfg',false);
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
+  tasks.push(getJ('/api/network-names').then(v=>D.netNames=v).catch(()=>{}));
   tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
@@ -943,7 +944,7 @@ const nameOf=issi=>(D.issi||{})[String(issi)]||(D.cs||{})[String(issi)]||'';
 const gName=g=>(D.gssi||{})[String(g)]||'';
 // A group of another network shows as "network:GSSI" (inside the server it
 // is an alias above the 24 GSSI bits, see netlink.rs).
-const netOfSlot=s=>((D.nets&&D.nets.networks)||[]).find(n=>n.slot===s);
+const netOfSlot=s=>((D.nets&&D.nets.networks)||D.netNames||[]).find(n=>n.slot===s);
 const tgTxt=g=>{if(g>16777215){const n=netOfSlot(Math.floor(g/16777216));return `${esc(n?n.name:'net '+Math.floor(g/16777216))}:${g%16777216}`;}const n=gName(g);return n?`${g} · ${esc(n)}`:String(g);};
 // Compact form for the Overview: the group name alone when there is one (the GSSI stays in the tooltip).
 const tgShort=g=>{const n=g>16777215?'':gName(g);return n?`<span title="GSSI ${g}">${esc(n)}</span>`:tgTxt(g);};

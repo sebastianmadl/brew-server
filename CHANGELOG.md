@@ -4,6 +4,11 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Dashboard: network names without a login.** Radios' groups of another
+  network (Multi Network) showed as `net 2:91` on an open dashboard because
+  the names came only from the admin route `/api/networks`. The new public
+  route `GET /api/network-names` gives slot and name only (no hosts or
+  logins), so they read `<network>:91` for everyone.
 - **Fleet Control, phase 7: graphs, ping and alarms.** Stations with
   `metrics-v1` report CPU load, CPU and SDR temperatures, RF state, radios and
   calls every minute (older stations: temperatures from telemetry). Each

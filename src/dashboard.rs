@@ -134,6 +134,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/ui", get(crate::dashboard_ui::page))
         .route("/api/radios", get(crate::routing_api::radios))
         .route("/api/names", get(crate::accounts::names))
+        .route("/api/network-names", get(crate::routing_api::network_names_get))
         .route("/api/issi-names", get(crate::issi_names::list))
         .route("/api/gssi-names", get(crate::issi_names::list_gssi))
         .route("/api/group-access", get(crate::group_access::list))
@@ -289,7 +290,7 @@ enum Need {
 /// `dash_users::PAGES`). Routes not listed are for admins.
 fn need(path: &str) -> Need {
     const ANY: &[&str] = &[
-        "/", "/ui", "/api/whoami", "/api/live", "/api/names", "/api/issi-names", "/api/gssi-names", "/api/callsigns",
+        "/", "/ui", "/api/whoami", "/api/live", "/api/names", "/api/network-names", "/api/issi-names", "/api/gssi-names", "/api/callsigns",
         "/api/callsign-db", "/api/talkgroups", "/api/pools", "/api/emergencies", "/api/ha", "/api/password",
     ];
     if ANY.contains(&path) {
@@ -2653,6 +2654,8 @@ mod tests {
 
     #[test]
     fn fleet_routes_need_their_rights() {
+        assert_eq!(need("/api/network-names"), Need::Any, "network names show without a login");
+        assert_eq!(need("/api/networks"), Need::Admin, "hosts and logins stay for admins");
         assert_eq!(need("/api/fleet"), Need::Pages(&["fleet"]));
         assert_eq!(need("/api/fleet/remove"), Need::Pages(&["fleet_manage"]));
         assert_eq!(need("/api/fleet/ping"), Need::Pages(&["fleet_manage"]));
