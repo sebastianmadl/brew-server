@@ -937,7 +937,7 @@ The key messages go only to stations that list `keys-v1` and report
 `key_source: "server"`; stations with local keys (shown as "local") and older
 stations work as before. A server older than phase 8 never sends them, and a
 station with `key_source = "server"` then authenticates only from its stock.
-Code: `src/fleet_keys.rs`, `src/fleet_sck.rs`, `src/taa1/` (TAA1 ported from
+Code: `src/fleet_keys.rs`, `src/fleet_sck.rs`, `src/fleet_cck.rs`, `src/taa1/` (TAA1 ported from
 FlowStation's `tetra-security`, same reference vectors).
 
 ### 13.8 Static cipher keys (phase 8b, `sck-v1`)
@@ -983,7 +983,9 @@ by check value (SHA-256(SCK)[:8]).
   without a restart. 2 min after the time the next key becomes the current one.
   A station that was offline during the change is switched when it comes back.
   *Use current key on N stations…* switches stations still running the key of
-  their own config to the server's current key. *Cancel* drops a planned change.
+  their own config to the server's current key. *Cancel* drops a planned change
+  only while no station has announced it: EN 300 392-7 has no PDU that takes a
+  D-CK CHANGE DEMAND back.
 
 Keys page → **Cipher keys (SCK)**: network, current and next key with
 coverage, *Generate next* (shown once, with copy button and file, for loading
@@ -996,10 +998,54 @@ source, planned change) and the radios (keys held, last result).
 | `POST /api/fleet/keys/sck/set` | keys | `{net, role: "current"/"next", sckn, vn?, key?}` | enter (20 hex) or generate (empty `key`, returned once) |
 | `POST /api/fleet/keys/sck/delete` | keys | `{net, role?}` | remove the next key (`role: "current"`: the current one while no station runs it) |
 | `POST /api/fleet/keys/sck/activate` | keys + management | `{net, role?, in_secs?, force?}` | plan the change (`role: "current"` for stations on their own key) |
-| `POST /api/fleet/keys/sck/cancel` | keys + management | `{net}` | drop a planned change |
+| `POST /api/fleet/keys/sck/cancel` | keys + management | `{net}` | drop a planned change (refused once a station announced it) |
 | `POST /api/fleet/keys/sck/send` | keys | `{net, issi?}` | deliver now |
 | `POST /api/fleet/keys/sck/settings` | admin | `{warn_pct, profiles?}` | warning level, device profiles (empty list: built-in) |
 
 `GET /api/fleet/keys` carries `sck: {nets, profiles, warn_pct, stations,
 radios}`. Messages go only to stations listing `sck-v1` with server keys;
 others are left alone.
+
+### 13.9 Common cipher keys (phase 8c, `cck-v1`)
+
+For security class 3 the server holds the common cipher keys (CCK, EN 300 392-7
+clause 4.2.3) per network and **location area**, or one for **all** LAs (then
+with the same CCK-id in every LA; a network uses one way or the other): the
+current key and, before a change, the next one, each with its CCK-id (16 bit).
+Shown only by check value.
+
+- **Stations** with `cck-v1` and server keys get every CCK of their network
+  (`CckKeys`, after every hello and change, also empty) and use the ones of their
+  own LA. They answer with `CckState` (LA, key in use, whether it is still the one
+  of their own config), so the server knows which station is in which LA.
+- **Radios**: a CCK is sealed with the radio's DCK (TA31, clause 4.5.1.1), which
+  only the station holds, so the station hands the next CCK to its class 3
+  radios itself (D-OTAR CCK PROVIDE, key type "future") and reports every
+  answer (`CckResult`). The page shows how many radios seen in the LA hold it.
+- **The next CCK-id** differs from the current one in its last bit (default:
+  current + 1), because the radios find the CCK in use by that bit in every
+  encrypted downlink header (clause 6.5.1).
+- **The change** (`CckActivate`) runs for every cell of the LA at one time
+  (clause 4.5.5.2), with the same warning level as the SCK. Each station
+  announces it with D-CK CHANGE DEMAND. For the **overlap** (default 30 min,
+  0–1440, Server settings) a station still recognises radios that run the old
+  CCK on the uplink (by their ESI, as the uplink carries no key id, clause 6.5.2),
+  so they can ask for the new key. 2 min after the time the next key becomes the
+  current one; a station that missed the change is switched when it is back.
+  *Cancel* only works until a station announced the change.
+
+Keys page → **Common keys (CCK)**: network, a form for the current key of an LA
+(or `all`), one card per LA with current / next and coverage, *Generate next*,
+*Remove* (next, or current while no station runs it), *Activate next…*, *Use
+current key on N stations…*, the stations of the LA, and stations whose LA has
+no server CCK yet.
+
+| Route | Right | Body | Does |
+| --- | --- | --- | --- |
+| `POST /api/fleet/keys/cck/set` | keys | `{net, scope, role, cck_id?, key?}` | enter or generate (`scope`: LA or `all`; next without `cck_id`: current + 1) |
+| `POST /api/fleet/keys/cck/delete` | keys | `{net, scope, role?}` | remove the next key (`current`: while no station runs it) |
+| `POST /api/fleet/keys/cck/activate` | keys + management | `{net, scope, role?, in_secs?, force?}` | plan the change |
+| `POST /api/fleet/keys/cck/cancel` | keys + management | `{net, scope}` | drop a planned change no station announced yet |
+| `POST /api/fleet/keys/cck/settings` | admin | `{overlap_min}` | overlap |
+
+`GET /api/fleet/keys` carries `cck: {overlap_min, nets, unassigned}`.

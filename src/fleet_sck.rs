@@ -213,7 +213,7 @@ pub fn net_name(mcc: u16, mnc: u16) -> String {
     format!("{mcc}-{mnc}")
 }
 
-fn check_net(net: &str) -> Result<(), String> {
+pub(crate) fn check_net(net: &str) -> Result<(), String> {
     let ok = net.split_once('-').is_some_and(|(a, b)| a.parse::<u16>().is_ok_and(|m| m <= 999) && b.parse::<u16>().is_ok_and(|m| m <= 16383));
     if ok { Ok(()) } else { Err(format!("network {net:?}: use MCC-MNC, e.g. 232-1")) }
 }
@@ -413,8 +413,13 @@ pub fn activate(ks: &mut KeyStore, net: &str, next: bool, at_ms: u64, force: boo
     Ok(a)
 }
 
+/// Drop a planned change. Refused once a station planned it: it has told its radios, and EN
+/// 300 392-7 has no PDU that takes a D-CK CHANGE DEMAND back.
 pub fn cancel(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     ks.ready()?;
+    if ks.sck_rt.stations.values().any(|st| st.net == net && st.switch_at_ms.is_some()) {
+        return Err("stations already announced the change to the radios (D-CK CHANGE DEMAND); it cannot be taken back".into());
+    }
     let Some(n) = ks.sck_mut().nets.get_mut(net) else { return Ok(false) };
     let had = n.activation.take().is_some();
     if had {
@@ -1042,6 +1047,18 @@ mod tests {
         // Same number and version, another value: the radio must get it again.
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x33; 10]), None, 0).unwrap();
         assert_eq!(missing(&ks, "232-1", 100).len(), 2);
+    }
+
+    #[test]
+    fn a_change_a_station_already_announced_cannot_be_cancelled() {
+        let mut ks = store_with_radios(&[]);
+        set_key(&mut ks, "232-1", false, 1, 5, Some([0x11; 10]), None, 0).unwrap();
+        set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
+        activate(&mut ks, "232-1", true, 5000, true, &[], None).unwrap();
+        ks.sck_rt.stations.insert("bs1".into(), StationSck { active: None, from_config: true, keys: vec![], switch_at_ms: Some(5000), at_ms: 0, net: "232-1".into() });
+        assert!(cancel(&mut ks, "232-1").unwrap_err().contains("cannot be taken back"));
+        ks.sck_rt.stations.clear();
+        assert!(cancel(&mut ks, "232-1").unwrap(), "no station has it yet");
     }
 
     #[test]

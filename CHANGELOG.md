@@ -4,6 +4,19 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8c: common cipher keys (CCK) per location area.**
+  The server holds the class 3 CCKs per network and LA (or one for all LAs):
+  current and next. Stations with `cck-v1` and server keys get them and hand
+  the next key to their radios themselves (sealed with each radio's DCK,
+  EN 300 392-7 clause 4.5.1); the page shows how many radios hold it. The
+  change runs for the whole LA at one time (clause 4.5.5.2) with an overlap
+  (default 30 min) in which stations still recognise radios with the old CCK.
+  New tab **Common keys (CCK)**, overlap in Server settings. Designed with
+  Patrick, OE1LHP. See `docs/Fleet-Control.md` section 13.9.
+- **SCK / CCK: a change a station already announced can no longer be
+  cancelled.** Stations tell their radios at once (D-CK CHANGE DEMAND) and
+  EN 300 392-7 has no PDU that takes it back; before, the server dropped the
+  plan while the stations still switched.
 - **Fleet Control, phase 8b: static cipher keys (SCK) from the server.**
   Per network the server holds the current and the next class 2 SCK. Stations
   with `sck-v1` and server keys get them over the control channel; radios get

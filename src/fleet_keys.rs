@@ -235,6 +235,9 @@ struct Data {
     /// Class 2 SCKs per network, device profiles (`fleet_sck`).
     #[serde(default)]
     sck: crate::fleet_sck::SckData,
+    /// Class 3 CCKs per network and location area (`fleet_cck`).
+    #[serde(default)]
+    cck: crate::fleet_cck::CckData,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -283,12 +286,14 @@ pub struct KeyStore {
     stock: HashMap<String, BTreeMap<u32, u32>>,
     /// What the stations report about their SCK, delivery attempts (`fleet_sck`).
     pub(crate) sck_rt: crate::fleet_sck::SckRuntime,
+    /// What the stations report about their CCK (`fleet_cck`).
+    pub(crate) cck_rt: crate::fleet_cck::CckRuntime,
 }
 
 impl KeyStore {
     /// Memory only (tests, storage off): keys work until the restart.
     pub fn memory() -> Self {
-        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default() }
+        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default() }
     }
 
     /// The store next to the history log; `None`: storage is off.
@@ -306,7 +311,7 @@ impl KeyStore {
         };
         let path = with(".fleet-keys");
         let master_path = master_file.map(Path::to_path_buf).unwrap_or_else(|| with(".fleet-master-key"));
-        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default() };
+        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default() };
         let master = match std::fs::read_to_string(&master_path) {
             Ok(text) => match unhex_n::<32>(text.trim()) {
                 Some(m) => Some(m),
@@ -577,6 +582,14 @@ impl KeyStore {
         &mut self.data.sck
     }
 
+    pub(crate) fn cck(&self) -> &crate::fleet_cck::CckData {
+        &self.data.cck
+    }
+
+    pub(crate) fn cck_mut(&mut self) -> &mut crate::fleet_cck::CckData {
+        &mut self.data.cck
+    }
+
     /// Where the radio was registered last (Brew login) and when.
     pub(crate) fn seen_of(&self, issi: u32) -> Option<(&str, u64)> {
         self.data.seen.get(&issi).map(|s| (s.station.as_str(), s.at_ms))
@@ -795,6 +808,7 @@ pub async fn tick(state: &Arc<AppState>) {
         }
     }
     crate::fleet_sck::tick(state, &registered);
+    crate::fleet_cck::tick(state);
     let dir = crate::fleet_bulk::directory(&*state.inner.read().await);
     let ids: Vec<String> = state.fleet.lock().unwrap_or_else(|e| e.into_inner()).stations().into_iter().map(|s| s.id).collect();
     for id in ids {
@@ -919,6 +933,7 @@ pub async fn api_list(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
         })
         .collect();
     let nets = crate::fleet_sck::station_nets(&state);
+    let logins: HashMap<String, String> = nets.iter().filter_map(|(id, s)| s.brew_login.clone().map(|l| (id.clone(), l))).collect();
     let keys = state.fleet_keys.lock().unwrap_or_else(|e| e.into_inner());
     Json(serde_json::json!({
         "problem": keys.problem(),
@@ -926,6 +941,7 @@ pub async fn api_list(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
         "subs": keys.list(),
         "stations": stations,
         "sck": crate::fleet_sck::view(&keys, &nets, crate::fleet::now_ms()),
+        "cck": crate::fleet_cck::view(&keys, &logins),
     }))
     .into_response()
 }

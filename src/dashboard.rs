@@ -202,6 +202,11 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/keys/sck/cancel", axum::routing::post(crate::fleet_sck::api_cancel))
         .route("/api/fleet/keys/sck/send", axum::routing::post(crate::fleet_sck::api_send))
         .route("/api/fleet/keys/sck/settings", axum::routing::post(crate::fleet_sck::api_settings))
+        .route("/api/fleet/keys/cck/set", axum::routing::post(crate::fleet_cck::api_set))
+        .route("/api/fleet/keys/cck/delete", axum::routing::post(crate::fleet_cck::api_delete))
+        .route("/api/fleet/keys/cck/activate", axum::routing::post(crate::fleet_cck::api_activate))
+        .route("/api/fleet/keys/cck/cancel", axum::routing::post(crate::fleet_cck::api_cancel))
+        .route("/api/fleet/keys/cck/settings", axum::routing::post(crate::fleet_cck::api_settings))
         .route("/sip", get(sip_page))
         .route("/sip-config", get(sip_config_page))
         .route("/api/sip", get(sip_snapshot))
@@ -334,8 +339,8 @@ fn need(path: &str) -> Need {
         | "/api/fleet/config/rollback" | "/api/fleet/config/raw_preview" | "/api/fleet/edit" | "/api/fleet/templates/save"
         | "/api/fleet/templates/delete" | "/api/fleet/bulk/preview" | "/api/fleet/bulk/start" | "/api/fleet/bulk/cancel" | "/api/fleet/alarms/ack" => &["fleet_manage"],
         "/api/fleet/keys" | "/api/fleet/keys/set" | "/api/fleet/keys/generate" | "/api/fleet/keys/import" | "/api/fleet/keys/delete"
-        | "/api/fleet/keys/model" | "/api/fleet/keys/sck/set" | "/api/fleet/keys/sck/delete" | "/api/fleet/keys/sck/send" => &["fleet_keys"],
-        "/api/fleet/keys/source" | "/api/fleet/keys/sck/activate" | "/api/fleet/keys/sck/cancel" => &["fleet_keys", "fleet_manage"],
+        | "/api/fleet/keys/model" | "/api/fleet/keys/sck/set" | "/api/fleet/keys/sck/delete" | "/api/fleet/keys/sck/send" | "/api/fleet/keys/cck/set" | "/api/fleet/keys/cck/delete" => &["fleet_keys"],
+        "/api/fleet/keys/source" | "/api/fleet/keys/sck/activate" | "/api/fleet/keys/sck/cancel" | "/api/fleet/keys/cck/activate" | "/api/fleet/keys/cck/cancel" => &["fleet_keys", "fleet_manage"],
         _ => return Need::Admin,
     })
 }
