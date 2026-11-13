@@ -17,7 +17,8 @@ Unreleased:
   **Acknowledge**, a 90-day history and a badge in the sidebar. Server settings
   → **Fleet Control graphs and alarms**: sample interval, keep time, ping
   interval, optional lines, and per alarm on/off, ALARM or warning, limit and
-  minutes. See `docs/Fleet-Control.md` section 12.
+  minutes. The CPU load warning stays off while a station updates (the build
+  takes the CPU) and for 5 min after. See `docs/Fleet-Control.md` section 12.
 - **Fleet Control, phase 6: templates, bulk changes, neighbour suggestions.**
   Templates hold the settings stations share (Brew server, networks, cell
   reselection, RXLEV_ACCESS_MIN, migration, presence check, Home Mode Display,

@@ -365,6 +365,24 @@ pub struct StationInfo {
     pub label: String,
     pub online: bool,
     pub last_seen_ms: u64,
+    /// An OTA update runs (or just finished): no CPU load alarm, the build takes the CPU.
+    pub updating: bool,
+}
+
+/// A running OTA step (download, build, install) counts this long after its last report.
+const UPDATE_RUNNING_MS: u64 = 30 * 60_000;
+/// After the update ended (restart, failed, up to date) the CPU load alarm waits this long.
+const UPDATE_GRACE_MS: u64 = 5 * 60_000;
+
+/// True while an OTA update of the station runs, from its last `UpdateProgress`
+/// (also for updates started on the station's own dashboard), and a few minutes after.
+pub fn update_running(progress: Option<&crate::fleet::ProgressInfo>, now_ms: u64) -> bool {
+    let Some(p) = progress else { return false };
+    let age = now_ms.saturating_sub(p.at_ms);
+    match p.stage.as_str() {
+        "restart" | "failed" | "up_to_date" => age < UPDATE_GRACE_MS,
+        _ => age < UPDATE_RUNNING_MS,
+    }
 }
 
 /// Live state of a station (not kept over a restart).
@@ -545,7 +563,7 @@ impl FleetMonitor {
                 let rule = self.data.settings.rules.events.clone();
                 for e in new_log.iter().filter(|e| e.id > seen && e.kind.ends_with("_alarm")) {
                     if rule.enabled {
-                        let st = StationInfo { id: e.station.clone(), label: e.label.clone(), online: true, last_seen_ms: now_ms };
+                        let st = StationInfo { id: e.station.clone(), label: e.label.clone(), online: true, last_seen_ms: now_ms, updating: false };
                         let text = e.text.trim_start_matches("ALARM ").to_owned();
                         // Every change log ALARM is its own alarm (two failed updates are two).
                         self.data.next_id += 1;
@@ -635,8 +653,13 @@ impl FleetMonitor {
                 let thr = rules.sdr_temp.threshold;
                 changed |= self.condition(st, "sdr_temp", Some(cell), t >= thr, t < thr - 2.0, || format!("Basestation {}: SDR temperature of cell {cell} {t:.1} °C (limit {thr:.0} °C)", st.label), "SDR temperature normal", now_ms);
             }
-            // CPU load (5 % hysteresis).
-            if let Some(c) = s.cpu_pct {
+            // CPU load (5 % hysteresis); not during an update (the build takes the CPU),
+            // and the minutes count again from its end.
+            if st.updating {
+                if let Some(l) = self.live.get_mut(&st.id) {
+                    l.since.remove(&("cpu_load", None));
+                }
+            } else if let Some(c) = s.cpu_pct {
                 let thr = rules.cpu_load.threshold;
                 let mins = rules.cpu_load.minutes;
                 changed |= self.condition(st, "cpu_load", None, c >= thr, c < thr - 5.0, || format!("Basestation {}: CPU load {c:.0} % for {mins} min (limit {thr:.0} %)", st.label), "CPU load normal", now_ms);
@@ -815,7 +838,7 @@ pub async fn run_monitor(state: std::sync::Arc<crate::state::AppState>) {
             let infos: Vec<StationInfo> = fleet
                 .stations()
                 .into_iter()
-                .map(|s| StationInfo { label: crate::fleet::label(&|k| names.get(k).cloned(), &s.id, s.brew_login.as_deref()), id: s.id, online: s.online, last_seen_ms: s.last_seen_ms })
+                .map(|s| StationInfo { label: crate::fleet::label(&|k| names.get(k).cloned(), &s.id, s.brew_login.as_deref()), updating: update_running(s.progress.as_ref(), now), id: s.id, online: s.online, last_seen_ms: s.last_seen_ms })
                 .collect();
             let ids: Vec<(String, Option<String>, bool, bool)> = fleet
                 .stations()
@@ -983,7 +1006,7 @@ mod tests {
     const MIN: u64 = 60_000;
 
     fn st(id: &str, online: bool, last_seen_ms: u64) -> StationInfo {
-        StationInfo { id: id.into(), label: id.to_uppercase(), online, last_seen_ms }
+        StationInfo { id: id.into(), label: id.to_uppercase(), online, last_seen_ms, updating: false }
     }
     fn sample(cpu: f32, ct: f32, sdr: f32) -> Sample {
         Sample { cpu_pct: Some(cpu), cpu_temp_c: Some(ct), sdr: [(0u8, sdr)].into(), radios: Some(2), calls: Some(0), health: Some("ok".into()), ..Default::default() }
@@ -1117,6 +1140,37 @@ mod tests {
         m.record("bs1", sample(10.0, 40.0, 40.0), 10 * MIN);
         m.evaluate(&on, &[], 10 * MIN);
         assert!(m.active().is_empty());
+    }
+
+    #[test]
+    fn no_cpu_load_alarm_during_an_update() {
+        let prog = |stage: &str, at_ms: u64| crate::fleet::ProgressInfo { at_ms, stage: stage.into(), percent: 50, message: String::new() };
+        assert!(!update_running(None, MIN));
+        assert!(update_running(Some(&prog("build", 0)), 29 * MIN));
+        assert!(!update_running(Some(&prog("build", 0)), 31 * MIN), "a stuck run stops counting");
+        assert!(update_running(Some(&prog("restart", 0)), 4 * MIN));
+        assert!(!update_running(Some(&prog("restart", 0)), 5 * MIN));
+        assert!(!update_running(Some(&prog("up_to_date", 0)), 6 * MIN));
+
+        let mut m = FleetMonitor::load(None, 0);
+        let mut upd = st("bs1", true, 0);
+        upd.updating = true;
+        // 20 min build at 99 % CPU: no warning.
+        for i in 1..=20 {
+            m.record("bs1", sample(99.0, 60.0, 40.0), i * MIN);
+            m.evaluate(std::slice::from_ref(&upd), &[], i * MIN);
+        }
+        assert!(m.active().is_empty());
+        // After the update the 5 minutes count from new.
+        let on = [st("bs1", true, 0)];
+        for i in 21..=24 {
+            m.record("bs1", sample(99.0, 60.0, 40.0), i * MIN);
+            m.evaluate(&on, &[], i * MIN);
+        }
+        assert!(m.active().is_empty(), "only 3 min since the update ended");
+        m.record("bs1", sample(99.0, 60.0, 40.0), 26 * MIN);
+        m.evaluate(&on, &[], 26 * MIN);
+        assert_eq!(kinds(&m), vec!["bs1:cpu_load"]);
     }
 
     #[test]

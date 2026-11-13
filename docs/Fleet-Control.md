@@ -764,7 +764,7 @@ ping (unanswered pings as red marks), and the optional lines, for 1 h, 6 h,
 | SDR error | a cell's `rf` is `error`, or `health` is `critical`, for *minutes* | ALARM, 0 | all cells ok and health not critical |
 | CPU temperature | ≥ *limit* for *minutes* | ALARM, 80 °C, 0 | below limit − 2 °C |
 | SDR temperature | any cell ≥ *limit* for *minutes* (one alarm per cell) | ALARM, 70 °C, 0 | below limit − 2 °C |
-| CPU load | ≥ *limit* for *minutes* | warning, 90 %, 5 min | below limit − 5 % |
+| CPU load | ≥ *limit* for *minutes*; not while an OTA update runs (its last `UpdateProgress` is a running step not older than 30 min, or `restart` / `failed` / `up_to_date` not older than 5 min: the build takes the CPU), the minutes count from its end | warning, 90 %, 5 min | below limit − 5 % |
 | Missed pings | *limit* server pings in a row unanswered while connected | warning, 3 | a ping is answered |
 | Change log ALARMs | an `update_alarm`, `restart_alarm` or `config_alarm` entry | ALARM | acknowledged |
 
