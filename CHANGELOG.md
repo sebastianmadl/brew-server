@@ -4,6 +4,12 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8e: class 3 radios moving between stations.**
+  Stations with `dck-v1` and server keys report the DCK of each class 3 radio
+  that authenticates there; the server keeps it in memory only and passes it to
+  the stations of the same location area and next door (EN 300 392-7 clause
+  6.6.1.1), so a radio that moves is understood at once. A changed K drops the
+  radio's DCK everywhere. See `docs/Fleet-Control.md` 13.10.
 - **Fleet Control, phase 8c: common cipher keys (CCK) per location area.**
   The server holds the class 3 CCKs per network and LA (or one for all LAs):
   current and next. Stations with `cck-v1` and server keys get them and hand

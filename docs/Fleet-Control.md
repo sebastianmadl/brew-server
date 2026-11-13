@@ -1049,3 +1049,35 @@ no server CCK yet.
 | `POST /api/fleet/keys/cck/settings` | admin | `{overlap_min}` | overlap |
 
 `GET /api/fleet/keys` carries `cck: {overlap_min, nets, unassigned}`.
+
+### 13.10 Class 3 radios moving between stations (phase 8e, `dck-v1`)
+
+A class 3 radio encrypts what it sends with its DCK, the result of its last
+authentication (EN 300 392-7 clause 4.2.1). "Within an LA of security class 3
+all cells shall have knowledge of the DCK in use for each ITSI operating in that
+LA" (clause 6.6.1.1), and on an announced reselection "the SwMI shall ensure that
+the new serving cell ... has DCK of the roaming ITSI" (clause 4.5.1.3). How the
+SwMI does that inside itself is not specified.
+
+```json
+{"DckReport": {"key": {"issi": 2320972, "dck": "<20 hex>"}}}               // station
+{"DckKeys": {"keys": [{"issi": 2320972, "dck": "<20 hex>"}], "drop": []}}  // server
+```
+
+- A station with `dck-v1` and server keys reports each new DCK. The server keeps
+  the latest per radio **in memory only** (a DCK lives for one authentication
+  session; it is never written to disk or shown) and passes it to the other
+  stations of the network that **share a location area** with the reporting
+  station or are its **neighbours** (the cell list, both directions; the same
+  relation as for the stock of authentication data sets).
+- After a hello a station gets the DCKs it should hold (an empty list too: it
+  then knows the server forwards DCKs).
+- When a radio's K changes or is removed, every station drops its DCK (`drop`).
+- The station uses a forwarded DCK until the radio authenticates there; that new
+  DCK is reported in turn. With these, a class 3 station with server keys offers
+  roaming between stations (`handover-v1`, `ms-moved`, `call-restore`).
+- The CCK of a neighbour LA needs nothing new: `CckKeys` already carries every
+  LA of the network, so a station can answer a radio that asks for the CCK of
+  the LA it is about to move to (clause 4.5.1.3 case 2).
+
+`GET /api/fleet/keys` carries `dck: {radios}` (how many DCKs the server holds).

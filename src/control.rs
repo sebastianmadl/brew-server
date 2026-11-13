@@ -132,6 +132,10 @@ pub enum ControlCommand {
     /// `la` (`None`: every LA) at server time `at_ms`; old CCK still recognised
     /// on the uplink for `overlap_s` seconds.
     CckActivate { la: Option<u16>, cck_id: u16, at_ms: u64, overlap_s: u32 },
+    /// Fleet Control (`dck-v1`): DCKs of class 3 radios that authenticated at
+    /// another station of the same location area or next door (EN 300 392-7
+    /// clause 6.6.1.1); `drop`: radios whose DCK is void.
+    DckKeys { keys: Vec<crate::fleet_dck::DckWire>, drop: Vec<u32> },
 }
 
 impl ControlCommand {
@@ -327,6 +331,9 @@ pub enum ControlResponse {
         #[serde(default)]
         detail: Option<String>,
     },
+    /// Fleet Control (`dck-v1`): a class 3 radio authenticated at the station;
+    /// its new DCK.
+    DckReport { key: crate::fleet_dck::DckWire },
     /// Fleet Control (`update-v1`): progress of an OTA run on the station.
     UpdateProgress {
         stage: String,
@@ -544,6 +551,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         crate::fleet_keys::after_hello(state, id);
         crate::fleet_sck::after_hello(state, id);
         crate::fleet_cck::after_hello(state, id);
+        crate::fleet_dck::after_hello(state, id);
         return;
     }
     match &response {
@@ -559,6 +567,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
             return crate::fleet_cck::on_state(state, id, *la, active.clone(), *from_config, keys.clone(), *switch_at_ms);
         }
         ControlResponse::CckResult { issi, cck_id, ok, detail } => return crate::fleet_cck::on_result(state, id, *issi, *cck_id, *ok, detail.clone()),
+        ControlResponse::DckReport { key } => return crate::fleet_dck::on_report(state, id, key.clone()).await,
         _ => {}
     }
     if let ControlResponse::FleetMetrics { cpu_pct, cpu_temp_c, cells, radios, calls, health, .. } = &response {
@@ -592,7 +601,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. }
         | ControlResponse::AuthStock { .. } | ControlResponse::AuthVectorRequest { .. } | ControlResponse::AuthReport { .. }
         | ControlResponse::SckState { .. } | ControlResponse::SckDemand { .. } | ControlResponse::SckResult { .. }
-        | ControlResponse::CckState { .. } | ControlResponse::CckResult { .. } => {}
+        | ControlResponse::CckState { .. } | ControlResponse::CckResult { .. } | ControlResponse::DckReport { .. } => {}
     }
 }
 
@@ -663,6 +672,10 @@ mod tests {
         assert!(matches!(st, ControlResponse::CckState { la: 2, from_config: true, active: Some(_), switch_at_ms: None, .. }));
         let r: ControlResponse = serde_json::from_value(serde_json::json!({"CckResult": {"issi": 5, "cck_id": 43, "ok": true}})).unwrap();
         assert!(matches!(r, ControlResponse::CckResult { issi: 5, cck_id: 43, ok: true, detail: None }));
+        let dck = ControlCommand::DckKeys { keys: vec![crate::fleet_dck::DckWire { issi: 7, dck: "AB".repeat(10) }], drop: vec![9] }.to_wire_json();
+        assert_eq!(dck, serde_json::json!({"DckKeys": {"keys": [{"issi": 7, "dck": "AB".repeat(10)}], "drop": [9]}}));
+        let r: ControlResponse = serde_json::from_value(serde_json::json!({"DckReport": {"key": {"issi": 7, "dck": "AB".repeat(10)}}})).unwrap();
+        assert!(matches!(r, ControlResponse::DckReport { key } if key.issi == 7));
     }
 
     #[tokio::test]
