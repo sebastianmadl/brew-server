@@ -9,8 +9,9 @@ new port.
 
 This document is the protocol and behaviour reference for phase 1
 (foundation), phase 2 (remote update, section 8), phase 3 (maintenance and
-restart, section 9) and phases 4/5 (reading and changing the config,
-section 10). Later phases add
+restart, section 9), phases 4/5 (reading and changing the config,
+section 10), phase 6 (templates, bulk changes, neighbour suggestions,
+section 11) and phase 7 (graphs, ping and alarms, section 12). Later phases add
 commands to the same scheme; each new command is announced as a capability
 first, so older stations and servers keep working.
 
@@ -703,3 +704,105 @@ cancels bulk changes. The confirmation window is an admin setting.
 
 `GET /api/fleet` also gives `templates`, `bulk` (the last run) and
 `confirm_secs`.
+
+## 12. Graphs, ping and alarms (phase 7, `metrics-v1`)
+
+### 12.1 Metrics from the station
+
+A station with `metrics-v1` sends, without being asked, 5 s after the connect
+(or after its switch went on) and then every 60 s:
+
+```json
+{"FleetMetrics": {"interval_secs": 60, "cpu_pct": 17.4, "cpu_temp_c": 52.1,
+  "cells": [{"cell": 0, "rf": "online", "sdr_temp_c": 44.3},
+            {"cell": 1, "rf": "error", "sdr_temp_c": null, "detail": "SoapySDR: no device found"}],
+  "radios": 3, "calls": 1, "health": "ok"}}
+```
+
+`cpu_pct`: CPU load, mean since the previous report (%). `cpu_temp_c`: CPU
+temperature (°C) or null. Per cell: `rf` `online` / `off` / `error` /
+`starting`, `detail` (error text), `sdr_temp_c` (°C) or null. `radios`:
+registered radios, `calls`: calls in progress, `health`: stack health `ok` /
+`degraded` / `critical`. No answer. The server takes it only from listed
+stations (switch on).
+
+A station without `metrics-v1` (older FlowStation) is sampled once a minute
+from its telemetry, if it has a telemetry login (matched by control login or
+Brew login): CPU temperature (the temperature sensor whose name has `cpu`,
+`soc`, `core`, `package` or `k10temp`, else the first one), SDR temperatures,
+registered radios, calls, health. Its CPU load stays empty.
+
+### 12.2 Graphs
+
+The server folds the reports into one point per **sample interval** (Server
+settings, 1–60 min, default 1): CPU load as the mean, temperatures and counts
+as the highest value. Points are kept for **Keep graphs** (1–720 h, default
+24 h), then overwritten (ring buffer); at most 10 080 points per station, so
+more than 7 days need a longer interval. While a station sends nothing
+(unreachable, switched off) no point is written: its graph shows a gap there
+(the page breaks a line where two points are more than 1.5 intervals apart).
+
+**Ping**: every **ping interval** (Server settings, 0–60 min, default 5, 0 =
+off) the server sends `FleetPing` (section 3.3) to every online station with
+`fleet-v1` and stores the round trip (server ↔ station, ms) or "no answer"
+(5 s). **Auto ping** on the Fleet Control page (management) asks
+`POST /api/fleet/ping` for every online station every 5 s while the page is
+open; these are shown at the station only, not stored and not logged.
+
+Optional lines (Server settings): registered radios, calls in progress.
+
+The graph page (**Graphs** at a station, visibility) shows CPU load with the
+alarm limit, CPU and SDR temperatures (one line per cell) with their limits,
+ping (unanswered pings as red marks), and the optional lines, for 1 h, 6 h,
+24 h, 3 d, 7 d or the whole keep time; it reloads every 30 s.
+
+### 12.3 Alarms
+
+| Rule | Condition | Default | Ends when |
+| --- | --- | --- | --- |
+| Station unreachable | control channel down for *minutes* (counted from the server start at the earliest) | ALARM, 2 min | back online |
+| SDR error | a cell's `rf` is `error`, or `health` is `critical`, for *minutes* | ALARM, 0 | all cells ok and health not critical |
+| CPU temperature | ≥ *limit* for *minutes* | ALARM, 80 °C, 0 | below limit − 2 °C |
+| SDR temperature | any cell ≥ *limit* for *minutes* (one alarm per cell) | ALARM, 70 °C, 0 | below limit − 2 °C |
+| CPU load | ≥ *limit* for *minutes* | warning, 90 %, 5 min | below limit − 5 % |
+| Missed pings | *limit* server pings in a row unanswered while connected | warning, 3 | a ping is answered |
+| Change log ALARMs | an `update_alarm`, `restart_alarm` or `config_alarm` entry | ALARM | acknowledged |
+
+Every rule can be switched off, set to ALARM (red) or warning (yellow), and
+given its limit and minutes in Server settings → **Fleet Control graphs and
+alarms** (admins). Switching a rule off finishes its active alarms ("rule
+switched off by …"). Metric rules are only checked with a report not older
+than 3 min. A station that leaves Fleet Control finishes its alarms and drops
+its graph. On the very first start the change log ALARMs already in the log
+are not raised.
+
+An alarm is active until it ends; **Acknowledge** (management, one or all)
+marks it with the user and time; a change log ALARM ends by being
+acknowledged. Finished alarms are kept 90 days as history. The Fleet Control
+page shows the active alarms (ALARM first, newest first) and the last 200
+finished ones; the sidebar badge counts the unacknowledged ones (red with an
+ALARM).
+
+Files next to the history log: `<storage>.fleet-alarms` (settings, alarms;
+written on every change) and `<storage>.fleet-metrics` (graphs; written every
+5 min, so a restart loses at most 5 min of points).
+
+### 12.4 HTTP API
+
+| Route | Right | Body / query | Does |
+| --- | --- | --- | --- |
+| `GET /api/fleet/graph?id=&hours=` | visibility | | points `{t, c, ct, s: {cell: °C}, r, k}` and pings `{t, ms}` from `hours` back (default: whole keep time), settings, limits, active alarms of the station |
+| `POST /api/fleet/alarms/ack` | management | `{id}` or `{}` (all) | acknowledge |
+| `POST /api/fleet/monitor/settings` | admin | `{sample_min, keep_hours, ping_min, show_radios, show_calls, rules: {offline, sdr_error, cpu_temp, sdr_temp, cpu_load, ping, events: {enabled, severity: "alarm"\|"warning", threshold, minutes}}}` | settings; 400 with the reason when a value is out of range |
+
+`GET /api/fleet` also gives `alarms: {active, history, settings, latest}`
+(`latest`: last report per station with `cpu_pct`, `cpu_temp_c`, `sdr`,
+`radios`, `calls`, `ping_ms`).
+
+### 12.5 Backwards compatibility
+
+`FleetMetrics` goes only to a server that offered `fleet-control` and only
+while the switch is on, so older servers never see it. A server older than
+phase 7 would drop it as an unknown response (warning in its log). A station
+without `metrics-v1` keeps working; its graphs come from telemetry, or stay
+empty. Code: `src/fleet_monitor.rs`.

@@ -339,6 +339,8 @@ pub struct AppState {
     pub control: RwLock<ControlState>,
     /// Fleet Control: stations managed from here, change log (`fleet.rs`).
     pub fleet: std::sync::Mutex<crate::fleet::Fleet>,
+    /// Fleet Control graphs and alarms (`fleet_monitor.rs`).
+    pub fleet_monitor: std::sync::Mutex<crate::fleet_monitor::FleetMonitor>,
     /// SIP subsystem runtime handles, populated when the SIP listener starts.
     /// `None` until then (and when SIP is disabled) so the dashboard can render
     /// an appropriate "disabled" state without panicking.
@@ -647,6 +649,8 @@ impl AppState {
         let config_hash = crate::ha::config_hash(&config);
         // Fleet Control file next to the history log (memory only in tests and without storage).
         let fleet_path = (config.storage.enabled && !cfg!(test)).then(|| crate::fleet::Fleet::path_for(&config.storage.path));
+        // Graphs and alarms next to it.
+        let fleet_monitor = crate::fleet_monitor::FleetMonitor::load((config.storage.enabled && !cfg!(test)).then_some(config.storage.path.as_path()), crate::fleet::now_ms());
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
             Self {
@@ -657,6 +661,7 @@ impl AppState {
                 telemetry: RwLock::new(telemetry),
                 control: RwLock::new(ControlState::default()),
                 fleet: std::sync::Mutex::new(crate::fleet::Fleet::load(fleet_path, crate::fleet::now_ms())),
+                fleet_monitor: std::sync::Mutex::new(fleet_monitor),
                 sip: RwLock::new(None),
                 aprs_tx,
                 sms_center,

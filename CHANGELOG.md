@@ -4,6 +4,20 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 7: graphs, ping and alarms.** Stations with
+  `metrics-v1` report CPU load, CPU and SDR temperatures, RF state, radios and
+  calls every minute (older stations: temperatures from telemetry). Each
+  station gets a **Graphs** page (CPU load, temperatures, ping, optionally
+  radios and calls) with a gap while it was unreachable; one point per
+  sample interval, kept 24 h by default and then overwritten. The server pings
+  every online station every 5 min for the ping graph; **Auto ping** on the
+  Fleet Control page pings every 5 s while the page is open (not stored). An
+  **Alarms** list on the Fleet Control page (unreachable, SDR error, CPU / SDR
+  temperature, CPU load, missed pings, and the ALARMs of the change log) with
+  **Acknowledge**, a 90-day history and a badge in the sidebar. Server settings
+  → **Fleet Control graphs and alarms**: sample interval, keep time, ping
+  interval, optional lines, and per alarm on/off, ALARM or warning, limit and
+  minutes. See `docs/Fleet-Control.md` section 12.
 - **Fleet Control, phase 6: templates, bulk changes, neighbour suggestions.**
   Templates hold the settings stations share (Brew server, networks, cell
   reselection, RXLEV_ACCESS_MIN, migration, presence check, Home Mode Display,

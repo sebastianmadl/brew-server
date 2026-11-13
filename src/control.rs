@@ -217,6 +217,23 @@ pub enum ControlResponse {
         #[serde(default)]
         message: String,
     },
+    /// Fleet Control (`metrics-v1`): load and temperatures, every minute.
+    FleetMetrics {
+        #[serde(default)]
+        interval_secs: u32,
+        #[serde(default)]
+        cpu_pct: Option<f32>,
+        #[serde(default)]
+        cpu_temp_c: Option<f32>,
+        #[serde(default)]
+        cells: Vec<CellMetrics>,
+        #[serde(default)]
+        radios: u32,
+        #[serde(default)]
+        calls: u32,
+        #[serde(default)]
+        health: String,
+    },
     /// Fleet Control (`update-v1`): progress of an OTA run on the station.
     UpdateProgress {
         stage: String,
@@ -229,6 +246,19 @@ pub enum ControlResponse {
         #[serde(default)]
         elapsed_secs: u64,
     },
+}
+
+/// One cell in `FleetMetrics`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CellMetrics {
+    pub cell: u8,
+    /// `online`, `off`, `error`, `starting`.
+    #[serde(default)]
+    pub rf: String,
+    #[serde(default)]
+    pub sdr_temp_c: Option<f32>,
+    #[serde(default)]
+    pub detail: String,
 }
 
 struct ControlSession {
@@ -379,6 +409,7 @@ async fn session(state: Arc<AppState>, socket: WebSocket, identity: Option<Strin
     writer.abort();
     state.control.write().await.sessions.remove(&id);
     state.fleet.lock().unwrap_or_else(|e| e.into_inner()).set_online(&id, false, crate::fleet::now_ms());
+    state.fleet_monitor.lock().unwrap_or_else(|e| e.into_inner()).disconnected(&id);
     state.monitor.emit("control_disconnected", serde_json::json!({"id": id}));
     info!(bts = %id, "Basestation control disconnected");
 }
@@ -418,6 +449,14 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
         return;
     }
+    if let ControlResponse::FleetMetrics { cpu_pct, cpu_temp_c, cells, radios, calls, health, .. } = &response {
+        // Only from listed stations (the switch is on): the graphs belong to the Fleet Manager.
+        if state.fleet.lock().unwrap_or_else(|e| e.into_inner()).get(id).is_some() {
+            let sample = crate::fleet_monitor::sample_from_report(*cpu_pct, *cpu_temp_c, cells, *radios, *calls, health);
+            state.fleet_monitor.lock().unwrap_or_else(|e| e.into_inner()).record(id, sample, crate::fleet::now_ms());
+        }
+        return;
+    }
     if let ControlResponse::UpdateProgress { stage, percent, message, version, .. } = &response {
         let names = station_names(state);
         state.fleet.lock().unwrap_or_else(|e| e.into_inner()).progress(id, stage, *percent, message, version, crate::fleet::now_ms(), &|k| names.get(k).cloned());
@@ -438,7 +477,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         | ControlResponse::ConfigInfo { handle, .. } => {
             if let Some(tx) = session.pending_handle.remove(handle) { let _ = tx.send(response); }
         }
-        ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } => {}
+        ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. } => {}
     }
 }
 
@@ -510,6 +549,36 @@ mod tests {
         let fleet = state.fleet.lock().unwrap();
         assert!(fleet.stations().is_empty());
         assert_eq!(fleet.log()[0].text, "Basestation 1000001 switched off Fleet Control");
+    }
+
+    /// `metrics-v1`: 10 listed stations with 25 radios report; the graphs get
+    /// the values, a station that is not listed (switch off) is ignored.
+    #[tokio::test]
+    async fn fleet_metrics_from_ten_stations_fill_the_graphs() {
+        let state = test_state();
+        for i in 1..=10 {
+            let id = format!("bs{i}");
+            let _rx = attach_test_session(&state, &id).await;
+            let hello = serde_json::json!({"StationHello": {"protocol": 1, "version": "v1", "brew_login": id, "mcc": 232, "mnc": 20, "fleet_control": true, "capabilities": ["fleet-v1", "metrics-v1"]}});
+            deliver_test_response(&state, &id, &serde_json::to_vec(&hello).unwrap()).await;
+            let radios = 25 / 10 + u32::from(i <= 25 % 10);
+            let m = serde_json::json!({"FleetMetrics": {"interval_secs": 60, "cpu_pct": 10.0 + i as f32, "cpu_temp_c": 50.0, "cells": [{"cell": 0, "rf": "online", "sdr_temp_c": 40.0 + i as f32}], "radios": radios, "calls": 1, "health": "ok"}});
+            deliver_test_response(&state, &id, &serde_json::to_vec(&m).unwrap()).await;
+        }
+        let _rx = attach_test_session(&state, "stranger").await;
+        let m = br#"{"FleetMetrics":{"interval_secs":60,"cpu_pct":99.0,"cpu_temp_c":99.0,"cells":[],"radios":1,"calls":0,"health":"ok"}}"#;
+        deliver_test_response(&state, "stranger", m).await;
+        let mon = state.fleet_monitor.lock().unwrap();
+        let mut total = 0;
+        for i in 1..=10 {
+            let (pts, _) = mon.graph(&format!("bs{i}"), 0);
+            assert_eq!(pts.len(), 1);
+            assert_eq!(pts[0].c, Some(10.0 + i as f32));
+            assert_eq!(pts[0].s[&0], 40.0 + i as f32);
+            total += pts[0].r.unwrap();
+        }
+        assert_eq!(total, 25);
+        assert!(mon.graph("stranger", 0).0.is_empty(), "not in Fleet Control: no graph");
     }
 
     #[tokio::test]

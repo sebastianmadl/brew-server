@@ -97,7 +97,13 @@ nav{padding:8px 8px 12px;overflow:auto;flex:1}
 .nv.on svg{color:var(--accent)}
 .badge{margin-left:auto;font:700 10.5px var(--mono);padding:1px 7px;border-radius:99px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 .badge.w{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.badge.d{background:color-mix(in srgb,var(--danger) 18%,transparent);color:var(--danger)}
 .badge:empty{display:none}
+.fgleg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;padding-top:0}.fgleg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}.fgleg i.lim{height:0;border-top:2px dashed var(--danger);border-radius:0;vertical-align:3px}
+.fgw{padding:4px 18px 16px 48px}.fgc{position:relative;height:180px;border-left:1px solid var(--border);border-bottom:1px solid var(--border)}.fgc svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.fgy{position:absolute;right:calc(100% + 6px);transform:translateY(-50%);font:11px var(--mono);color:var(--text3);white-space:nowrap}
+.fgxs{position:relative;height:18px}.fgx{position:absolute;top:4px;transform:translateX(-50%);font:11px var(--mono);color:var(--text3);white-space:nowrap}.fgx:first-child{transform:none}.fgx:last-child{transform:translateX(-100%)}
+@media (max-width:640px){.fgw{padding:4px 12px 14px 40px}.fgc{height:150px}.fgx:nth-child(even){display:none}}
 .lock{margin-left:auto;color:var(--text3);display:none} .lock svg{width:13px;height:13px}
 body.ro .lock{display:inline-flex}
 .sbfoot{border-top:1px solid var(--sidebar-border);padding:10px 14px 12px;font:11px var(--sans);color:var(--text3);line-height:1.6}
@@ -482,7 +488,7 @@ const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
 // Pages this login sees (Server settings -> Users): an admin all of them, any other login the ones
 // ticked for it, someone not logged in the Viewer pages. The server refuses the rest anyway.
 // The station config page (Fleet Control -> Edit) goes with the Fleet Control page.
-const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'||p==='fleettpl'?'fleet':p)));
+const can=p=>!!PG[p]&&(D.who.admin||(!PG[p][5]&&(D.who.pages||[]).includes(p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p)));
 const canAny=(...ps)=>ps.some(can);
 // A read route this login may ask (whoami 'allowed'); asking others would only be refused.
 const mayGet=u=>D.who.admin||(D.who.allowed||[]).includes(u.split('?')[0]);
@@ -581,7 +587,7 @@ function show(p){
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
   if(UI.navKey!==navKey())buildNav();
   UI.page=p;document.body.classList.remove('sbopen');
-  const navP=p==='fleetcfg'||p==='fleettpl'?'fleet':p;
+  const navP=p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p;
   document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===navP));
   document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===navP));
   $('title').textContent=PG[p][1];
@@ -698,6 +704,7 @@ function chrome(){
   if(st)badge('b-calls',st.active_calls.filter(x=>!legIds().has(x.uuid)).length||'');
   badge('b-radios',(c&&c.mobile_stations.length)||'');
   badge('b-routing',D.pools.filter(p=>p.enabled).length||'');
+  fleetAlarmBadge();
 }
 
 /* ---------- pools ---------- */
@@ -1091,19 +1098,20 @@ R.fleet=()=>{
   const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
      <button class="btn pri" ${canUpd&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${canUpd?'':'Check for updates first: only stations with a newer version can be updated (or that can take a live update)'}">${sel.length?'Update ('+Math.max(target.length,liveT.length)+')':'Update all'}</button>
      ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}
+     <label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600" title="Ping every online station every 5 s while this page is open (not stored)"><button class="tog" role="switch" aria-checked="${!!UI.apingOn}" aria-label="Auto ping" ${st.some(x=>x.online)?'':'disabled'} onclick="fleetAutoPing(!UI.apingOn)"></button>Auto ping</label>
      <button class="btn" ${st.some(fleetCfgCap)&&!bulkOn(f)?'':'disabled'} onclick="fleetChangeCfg()" title="Apply a template or settings to every station (ticked ones only, if any)">${sel.length?'Change config ('+st.filter(x=>UI.fsel.has(x.id)&&fleetCfgCap(x)).length+')':'Change config…'}</button>`:'';
   const jobCard=job&&!fleetJobHidden(job,live)?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      ${(()=>{const p=fleetJobPercent(job);const bad=n('failed')>0;return `<div class="svc" style="display:flex;align-items:center;gap:10px" title="Whole run: every station counts the same; the build counts up to 90 %, the restart up to 95 %"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${bad?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>`;})()}
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
-  return jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
-   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
+  return fleetAlarmCard(f)+jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
+   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). <b>Graphs</b> shows a station's CPU load, temperatures and ping over time; the latest values are under its status. <b>Auto ping</b> pings every online station every 5 s while this page is open (shown at the station, not stored, not in the change log). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
    ${msgDiv('fl_top','padding:0 18px')}
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
      ${m?`<td><input type="checkbox" class="chk" aria-label="Tick ${esc(x.label)}" ${UI.fsel.has(x.id)?'checked':''} onclick="fleetSel('${esc(x.id)}',this.checked)"></td>`:''}
-     <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
-     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
+     <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}<div><button class="btn" style="margin-top:4px;padding:3px 9px;font-size:12px" onclick="fleetGraph('${esc(x.id)}')" title="CPU load, temperatures and ping over time">Graphs</button></div></td>
+     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}${fleetLatest(f,x)}</td>
      <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
      ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
@@ -1223,7 +1231,7 @@ function fcHeartbeat(on){
   beat();UI.fcBeat=setInterval(()=>{if(UI.page==='fleetcfg'&&UI.fc===fc)beat();},60000);
 }
 // Leaving the page (other page, closed tab) ends the edit session.
-{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';return show0(p);};}
+{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';if(p==='fleetgraph'&&!UI.fg)p='fleet';return show0(p);};}
 window.addEventListener('pagehide',()=>{if(UI.page==='fleetcfg'&&UI.fc)fcHeartbeat(false);});
 // Follow a running change every 3 s.
 setInterval(()=>{const fc=UI.fc;if(UI.page==='fleetcfg'&&fc&&fc.data&&(fc.data.cfg.apply||(!fc.data.cfg.copy&&fc.data.online))&&!$('scrim').classList.contains('on'))fcLoad(false);},3000);
@@ -1672,6 +1680,114 @@ function connGroups(list){const m=new Map();
 // A template holds settings several stations share; it is applied once (nothing stays bound to it).
 // A bulk change applies a template, settings for one run or the missing reciprocal neighbours to
 // many stations, parallel or rolling like an update run.
+/* ---------- Fleet Control phase 7: alarms, graphs, auto ping ---------- */
+const FA_KIND={offline:'Unreachable',sdr_error:'SDR error',cpu_temp:'CPU temperature',sdr_temp:'SDR temperature',cpu_load:'CPU load',ping:'Ping',update_alarm:'Update',restart_alarm:'Restart',config_alarm:'Config'};
+const faOpen=a=>a.acked_ms==null;
+const faSev=a=>a.severity==='alarm'?'<span class="chip d">ALARM</span>':'<span class="chip w">Warning</span>';
+// Sidebar badge: unacknowledged active alarms (red with an ALARM, else yellow).
+function fleetAlarmBadge(){const e=$('b-fleet');if(!e)return;const act=(D.fleet&&D.fleet.alarms&&D.fleet.alarms.active)||[];
+  const open=act.filter(faOpen);const red=open.some(a=>a.severity==='alarm');
+  e.textContent=open.length||'';e.classList.toggle('d',red);e.classList.toggle('w',open.length>0&&!red);e.title=open.length?open.length+' unacknowledged alarm'+(open.length===1?'':'s'):'';}
+function fleetAlarmCard(f){const al=f.alarms;if(!al)return '';const act=al.active||[];const hist=al.history||[];const m=f.can_manage;const open=act.filter(faOpen).length;
+  const row=a=>`<tr${a.severity==='alarm'&&faOpen(a)?' style="color:var(--danger);font-weight:600"':''}><td>${faSev(a)}</td><td class="m">${esc(tmd(a.raised_ms))}<div class="mut" style="font-weight:400;font-size:11.5px">${ago(a.raised_ms)}</div></td><td>${esc(a.label)}</td><td><span class="chip">${esc(FA_KIND[a.kind]||a.kind)}</span> ${esc(a.text)}</td><td style="font-size:12.5px;font-weight:400">${a.acked_by?`<span class="mut">Acknowledged by ${esc(a.acked_by)} · ${esc(tmd(a.acked_ms))}</span>`:'<span class="chip w">new</span>'}</td>${m?`<td style="text-align:right">${faOpen(a)?`<button class="btn" onclick="fleetAck(${a.id})">Acknowledge</button>`:''}</td>`:''}</tr>`;
+  const hrow=a=>`<tr><td>${faSev(a)}</td><td class="m">${esc(tmd(a.raised_ms))}</td><td>${esc(a.label)}</td><td><span class="chip">${esc(FA_KIND[a.kind]||a.kind)}</span> ${esc(a.text)}</td><td style="font-size:12.5px"><span class="m">${esc(tmd(a.cleared_ms))}</span><div class="mut">${esc(a.clear_text||'')}${a.acked_by&&!(a.clear_text||'').startsWith('acknowledged')?' · acknowledged by '+esc(a.acked_by):''}</div></td></tr>`;
+  return `<div class="card"><div class="ch"><h2>Alarms</h2><span class="cnt">${act.length}</span>${helpBtn('falarm')}<span class="sp"></span>${m&&open?`<button class="btn" onclick="fleetAck(null)">Acknowledge all (${open})</button>`:''}<button class="btn" aria-expanded="${!!UI.faHist}" onclick="UI.faHist=!UI.faHist;render(true)">History (${hist.length})</button></div>
+   ${helpNote('falarm',`Alarms of the stations in Fleet Control. A condition alarm (unreachable, SDR error, temperature, CPU load, missed pings) stays here until its cause is gone; an ALARM from the change log (update, restart, config) stays until someone acknowledges it. <b>Acknowledge</b> (Fleet Control management) marks an alarm with your name; finished alarms go to the history, kept 90 days. Which alarms there are, their limits and whether they count as ALARM or warning: Server settings → <i>Fleet Control graphs and alarms</i> (admins). <b>Graphs</b> at a station shows its CPU load, temperatures and ping (and radios / calls, if switched on there) over the kept time; while a station is unreachable its graph has a gap.`)}
+   ${msgDiv('fa-msg','padding:0 18px')}
+   ${act.length?`<div class="tw fllog"><table><thead><tr><th>Level</th><th>Since</th><th>Station</th><th>Alarm</th><th>State</th>${m?'<th></th>':''}</tr></thead><tbody>${act.map(row).join('')}</tbody></table></div>`:'<div class="empty">No active alarms.</div>'}
+   ${UI.faHist?(hist.length?`<div class="tw fllog" style="border-top:1px solid var(--border)"><table><thead><tr><th>Level</th><th>Raised</th><th>Station</th><th>Alarm</th><th>Finished</th></tr></thead><tbody>${hist.map(hrow).join('')}</tbody></table></div>`:'<div class="empty" style="border-top:1px solid var(--border)">No finished alarms in the last 90 days.</div>'):''}</div>`;}
+async function fleetAck(id){try{const r=await postJ('/api/fleet/alarms/ack',id==null?{}:{id});D.fleet=await getJ('/api/fleet');setMsg('fa-msg','ok',r.acknowledged+' acknowledged');fleetAlarmBadge();render(true);}catch(e){setMsg('fa-msg','err',e.message);}}
+// Latest values under the station's status (and the auto ping).
+function fleetLatest(f,x){const l=f.alarms&&f.alarms.latest&&f.alarms.latest[x.id];const a=UI.aping&&UI.aping[x.id];const p=[];
+  if(l&&x.online){if(l.cpu_pct!=null)p.push(`CPU ${Math.round(l.cpu_pct)} %`);if(l.cpu_temp_c!=null)p.push(`${l.cpu_temp_c.toFixed(0)} °C`);
+    const s=Object.entries(l.sdr||{});if(s.length)p.push('SDR '+s.map(([c,t])=>(s.length>1?c+': ':'')+(+t).toFixed(0)+' °C').join(', '));if(l.ping_ms!=null)p.push(`ping ${l.ping_ms} ms`);}
+  let h=p.length?`<div class="mut" style="font-size:12px;margin-top:3px" title="Last report ${esc(tmd(l.at_ms))}">${p.join(' · ')}</div>`:'';
+  if(a&&UI.apingOn&&x.online)h+=`<div style="font-size:12px;margin-top:2px"><span class="chip ${a.ok?'a':'d'}" title="Auto ping ${esc(tm(a.at))}">${a.ok?'⟳ '+a.ms+' ms':'⟳ no answer'}</span></div>`;
+  return h;}
+// Auto ping: every 5 s every online station, while the Fleet Control page is open (not stored).
+function fleetAutoPing(on){UI.apingOn=on;UI.aping={};clearInterval(UI.apingT);
+  if(on){const run=()=>{if(UI.page!=='fleet'){fleetAutoPing(false);return;}
+    for(const x of (D.fleet.stations||[]).filter(x=>x.online))postJ('/api/fleet/ping',{id:x.id}).then(r=>{UI.aping[x.id]={ok:r.ok,ms:r.ms,at:Date.now()};}).catch(()=>{UI.aping[x.id]={ok:false,at:Date.now()};}).finally(()=>{if(UI.page==='fleet'&&UI.apingOn&&!$('scrim').classList.contains('on'))render(true);});};
+    run();UI.apingT=setInterval(run,5000);}
+  render(true);}
+// The graph page of one station.
+PG.fleetgraph=['fleetgraph','Fleet Control','fleet','Infrastructure'];
+function fleetGraph(id){UI.fg={id,hours:null,data:null,err:null,hover:{},series:{}};show('fleetgraph');fgLoad();}
+async function fgLoad(){const g=UI.fg;if(!g)return;
+  try{const d=await getJ('/api/fleet/graph?id='+encodeURIComponent(g.id)+'&hours='+(g.hours||Math.min(24,(g.data&&g.data.keep_hours)||24)));if(UI.fg!==g)return;g.data=d;g.err=null;}catch(e){g.err=e.message;}
+  if(UI.page==='fleetgraph')render(true);}
+setInterval(()=>{if(UI.page==='fleetgraph'&&UI.fg&&!$('scrim').classList.contains('on'))fgLoad();},30000);
+function fgRange(h){UI.fg.hours=h;fgLoad();}
+const FG_SDR=['#8e5bd6','#e07b00','#00a3a3','#c2185b','#6d8b00','#5c6bc0','#a1887f','#26a69a'];
+// One chart: lines break where points are further apart than `gap` ms or a value is missing.
+function fgChart(key,title,unit,series,o){const d=UI.fg.data;const lims=(o.limits||(o.limit!=null?[{v:o.limit,name:'Alarm limit'}]:[])).filter(l=>l.v!=null);o.limit=lims.length?Math.max(...lims.map(l=>l.v)):null;const from=d.from_ms,to=d.now_ms;const span=Math.max(1,to-from);
+  const vals=series.flatMap(s=>s.pts.filter(p=>p[1]!=null).map(p=>p[1]));
+  let lo=o.min!=null?o.min:Math.min(...vals,...lims.map(l=>l.v)),hi=o.max!=null?o.max:Math.max(...vals,o.limit??-Infinity);
+  if(!vals.length){lo=o.min??0;hi=o.max??1;}
+  if(o.min==null)lo=Math.floor((lo-3)/5)*5;if(o.max==null)hi=Math.ceil((hi+3)/5)*5;if(o.int)hi=Math.max(hi,Math.ceil(Math.max(1,...vals)*1.2));if(hi<=lo)hi=lo+1;
+  const X=t=>((t-from)/span*1000).toFixed(1),Y=v=>(200-(v-lo)/(hi-lo)*200).toFixed(1);
+  const path=(pts,gap)=>{let s='',prev=null;for(const [t,v] of pts){if(v==null){prev=null;continue;}s+=(prev==null||t-prev>gap?'M':'L')+X(t)+' '+Y(v)+' ';prev=t;}return s;};
+  // Colours as style (CSS variables do not work in SVG presentation attributes).
+  const lines=series.map(s=>`<path d="${path(s.pts,s.gap)}" fill="none" style="stroke:${s.color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`+s.pts.filter((p,i,a)=>p[1]!=null&&(i===0||a[i-1][1]==null||p[0]-a[i-1][0]>s.gap)&&(i===a.length-1||a[i+1][1]==null||a[i+1][0]-p[0]>s.gap)).map(p=>`<line x1="${X(p[0])}" x2="${X(p[0])}" y1="${Y(p[1])}" y2="${Y(p[1])}" style="stroke:${s.color}" stroke-width="5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`).join('')).join('');
+  const lim=lims.filter(l=>l.v>=lo&&l.v<=hi).map(l=>`<line x1="0" x2="1000" y1="${Y(l.v)}" y2="${Y(l.v)}" style="stroke:${l.color||'var(--danger)'}" stroke-dasharray="6 5" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+  const miss=(o.miss||[]).map(t=>`<line x1="${X(t)}" x2="${X(t)}" y1="200" y2="170" style="stroke:var(--danger)" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+  const grid=[0,.25,.5,.75,1].map(f=>`<line x1="0" x2="1000" y1="${200*f}" y2="${200*f}" style="stroke:var(--border)" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+  const ylab=[1,.5,0].map(f=>`<span class="fgy" style="top:${(1-f)*100}%">${+(lo+(hi-lo)*f).toFixed(hi-lo<5?1:0)}</span>`).join('');
+  const ticks=6,xl=Array.from({length:ticks+1},(_,i)=>from+span*i/ticks).map((t,i)=>`<span class="fgx" style="left:${i/ticks*100}%">${span>36e5*30?new Date(t).toLocaleDateString([], {day:'2-digit',month:'2-digit'})+' ':''}${new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>`).join('');
+  const last=s=>{const p=[...s.pts].reverse().find(p=>p[1]!=null);return p?`${+p[1].toFixed(o.int?0:1)} ${unit}`:'—';};
+  UI.fg.series[key]={series,unit,int:!!o.int};
+  return `<div class="card"><div class="ch"><h2>${title}</h2><span class="sp"></span><span class="mut m" style="font-size:12px" id="fgr-${key}">${fgRead(key)}</span></div>
+   <div class="svc fgleg">${series.map(s=>`<span><i style="background:${s.color}"></i>${esc(s.name)} <b class="m">${last(s)}</b></span>`).join('')}${lims.map(l=>`<span><i class="lim" style="border-top-color:${l.color||'var(--danger)'}"></i>${esc(l.name)} ${l.v} ${unit}</span>`).join('')}${o.miss&&o.miss.length?`<span><i style="background:var(--danger);width:3px"></i>${o.miss.length} without answer</span>`:''}</div>
+   <div class="fgw"><div class="fgc" onmousemove="fgHover('${key}',event,this)" onmouseleave="fgHover('${key}',null,this)"><svg viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-label="${esc(title)}">${grid}${lim}${lines}${miss}</svg>${ylab}</div><div class="fgxs">${xl}</div></div>
+   ${vals.length||(o.miss&&o.miss.length)?'':'<div class="empty" style="padding-top:0">No values in this time.</div>'}</div>`;}
+// Readout of the values nearest to the pointer.
+function fgRead(key){const g=UI.fg;const hv=g.hover[key];const c=g.series[key];if(!hv||!c)return '';
+  const v=c.series.map(s=>{let best=null;for(const p of s.pts)if(p[1]!=null&&(best==null||Math.abs(p[0]-hv.t)<Math.abs(best[0]-hv.t)))best=p;return best&&Math.abs(best[0]-hv.t)<=s.gap?esc(s.name)+' '+(+best[1].toFixed(c.int?0:1))+(c.unit?' '+c.unit:''):null;}).filter(Boolean);
+  return esc(tmd(hv.t))+': '+(v.join(' · ')||'no data');}
+function fgHover(key,ev,el){const g=UI.fg;if(!g||!g.data)return;if(!ev)delete g.hover[key];else{const r=el.getBoundingClientRect();const f=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));g.hover[key]={t:g.data.from_ms+(g.data.now_ms-g.data.from_ms)*f};}
+  const e=$('fgr-'+key);if(e)e.innerHTML=fgRead(key);}
+R.fleetgraph=()=>{const g=UI.fg;if(!g)return loading;const d=g.data;
+  const back=`<button class="btn ic" title="Back to Fleet Control" aria-label="Back to Fleet Control" onclick="show('fleet')">‹</button>`;
+  if(!d)return g.err?`<div class="card"><div class="empty">${esc(g.err)} <button class="btn" onclick="show('fleet')">Back</button></div></div>`:loading;
+  const step=d.sample_ms*1.5+5000,pgap=Math.max(d.ping_ms,60000)*1.5+5000;const P=d.points||[];
+  const cells=[...new Set(P.flatMap(p=>Object.keys(p.s||{})))].sort((a,b)=>a-b);
+  const hours=g.hours||Math.min(24,d.keep_hours);
+  const ranges=[1,6,24,72,168,d.keep_hours].filter((h,i,a)=>h<=d.keep_hours&&a.indexOf(h)===i);
+  const lbl=h=>h===d.keep_hours&&h>24?`All (${h>=48?Math.round(h/24)+' d':h+' h'})`:h>=48?Math.round(h/24)+' d':h+' h';
+  const head=`<div class="card"><div class="ch">${back}<h2>Graphs · ${esc(d.label)}</h2>${d.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(d.last_seen_ms)}</span>`}<span class="sp"></span><div style="display:flex;gap:6px;flex-wrap:wrap" role="group" aria-label="Time range">${ranges.map(h=>`<button class="btn${h===hours?' pri':''}" aria-pressed="${h===hours}" onclick="fgRange(${h})">${lbl(h)}</button>`).join('')}</div></div>
+   <div class="svc mut" style="font-size:12.5px">One point every ${d.sample_ms/60000} min (CPU load: mean, temperatures and counts: highest), kept ${d.keep_hours} h, then overwritten. A gap means the station sent nothing (unreachable or switched off). ${d.metrics?'':'<b>This station has no <code>metrics-v1</code></b> (older FlowStation): temperatures, radios and calls come from its telemetry, the CPU load is missing until it is updated.'} Settings: Server settings → Fleet Control graphs and alarms.</div>
+   ${(d.alarms||[]).length?`<div class="svc">${d.alarms.map(a=>`<div>${faSev(a)} ${esc(a.text)} <span class="mut" style="font-size:12px">· ${ago(a.raised_ms)}</span></div>`).join('')}</div>`:''}</div>`;
+  let h=head;
+  h+=fgChart('cpu','CPU load','%',[{name:'CPU',color:'var(--accent2)',pts:P.map(p=>[p.t,p.c??null]),gap:step}],{min:0,max:100,limit:d.cpu_load_limit});
+  const temps=[{name:'CPU',color:'var(--accent)',pts:P.map(p=>[p.t,p.ct??null]),gap:step}].concat(cells.map((c,i)=>({name:cells.length>1?'SDR cell '+c:'SDR',color:FG_SDR[i%FG_SDR.length],pts:P.map(p=>[p.t,(p.s||{})[c]??null]),gap:step})));
+  h+=fgChart('temp','Temperatures','°C',temps,{limits:[{v:d.cpu_temp_limit,name:'CPU limit'},{v:d.sdr_temp_limit,name:'SDR limit',color:'var(--warn)'}]});
+  const pings=d.pings||[];
+  h+=fgChart('ping',`Ping${d.ping_ms?' (server → station every '+d.ping_ms/60000+' min)':' (off in Server settings)'}`,'ms',[{name:'Round trip',color:'var(--warn)',pts:pings.map(p=>[p.t,p.ms??null]),gap:pgap}],{min:0,int:true,miss:pings.filter(p=>p.ms==null).map(p=>p.t)});
+  if(d.show_radios)h+=fgChart('radios','Registered radios','',[{name:'Radios',color:'var(--accent)',pts:P.map(p=>[p.t,p.r??null]),gap:step}],{min:0,int:true});
+  if(d.show_calls)h+=fgChart('calls','Calls in progress','',[{name:'Calls',color:'var(--accent2)',pts:P.map(p=>[p.t,p.k??null]),gap:step}],{min:0,int:true});
+  return h;};
+// Server settings: graphs, ping and the alarm rules (admins).
+const FM_RULES=[['offline','Station unreachable',null,'Minutes offline'],['sdr_error','SDR error or stack health critical',null,'Minutes'],['cpu_temp','CPU temperature','°C','Minutes'],['sdr_temp','SDR temperature (any cell)','°C','Minutes'],['cpu_load','CPU load','%','Minutes'],['ping','Missed pings','pings in a row',null],['events','ALARMs from the change log (update, restart, config)',null,null]];
+function fleetMonSettingsCard(){const f=D.fleet;const s=f&&f.alarms&&f.alarms.settings;if(!s)return '';const r=s.rules;
+  const num=(id,val,min,max,step,w)=>`<input class="f" id="${id}" type="number" min="${min}" max="${max}" step="${step||1}" value="${val}" style="width:${w||90}px">`;
+  const sw=(id,on,label)=>`<label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600"><button class="tog" role="switch" id="${id}" aria-checked="${!!on}" aria-label="${esc(label)}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button>${label}</label>`;
+  return `<div class="card"><div class="ch"><h2>Fleet Control graphs and alarms</h2>${helpBtn('fmon')}<span class="sp"></span><a data-go="fleet" href="#fleet">Fleet Control ›</a></div>${helpNote('fmon','Stations with <code>metrics-v1</code> send their CPU load, CPU and SDR temperatures, radios and calls every minute; older stations are sampled from their telemetry (no CPU load). <b>Sample interval</b>: one graph point per this many minutes. <b>Keep</b>: graphs are kept this long, then the oldest points are overwritten (at most 10 080 points per station, so more than 7 days need a longer sample interval). <b>Ping interval</b>: the server pings every online station this often for the ping graph (0 = off). <b>Alarms</b>: each rule can be switched off, counted as ALARM (red) or warning (yellow), and given its limit and how many minutes the condition must last (0 = at once). A rule switched off finishes its active alarms.')}
+   <div class="svc" style="display:flex;gap:14px;align-items:end;flex-wrap:wrap">
+    <div><label class="l" for="fm-sample">Sample interval (min)</label>${num('fm-sample',s.sample_min,1,60)}</div>
+    <div><label class="l" for="fm-keep">Keep graphs (h)</label>${num('fm-keep',s.keep_hours,1,720)}</div>
+    <div><label class="l" for="fm-ping">Ping interval (min, 0 = off)</label>${num('fm-ping',s.ping_min,0,60)}</div>
+   </div>
+   <div class="svc" style="display:flex;gap:18px;flex-wrap:wrap"><span class="mut" style="font-size:12.5px;align-self:center">Optional graph lines:</span>${sw('fm-radios',s.show_radios,'Registered radios')}${sw('fm-calls',s.show_calls,'Calls in progress')}</div>
+   <div class="tw"><table><thead><tr><th>Alarm</th><th>On</th><th>Level</th><th>Limit</th><th>Minutes</th></tr></thead><tbody>${FM_RULES.map(([k,label,unit,mins])=>{const x=r[k];return `<tr><td><b>${label}</b></td>
+     <td><button class="tog" role="switch" id="fm-${k}-on" aria-checked="${!!x.enabled}" aria-label="${esc(label)} on" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button></td>
+     <td><select class="f" id="fm-${k}-sev" aria-label="${esc(label)} level"><option value="alarm"${x.severity==='alarm'?' selected':''}>ALARM</option><option value="warning"${x.severity==='warning'?' selected':''}>Warning</option></select></td>
+     <td>${unit?`<span style="display:inline-flex;gap:6px;align-items:center">${num('fm-'+k+'-thr',x.threshold,1,120,k==='ping'?1:0.5,80)}<span class="mut" style="font-size:12px">${unit}</span></span>`:'<span class="mut">—</span>'}</td>
+     <td>${mins?num('fm-'+k+'-min',x.minutes,k==='offline'?1:0,60,1,80):'<span class="mut">—</span>'}</td></tr>`;}).join('')}</tbody></table></div>
+   <div class="svc"><button class="btn pri" onclick="saveFleetMon()">Save</button></div>${msgDiv('fm-msg','padding:0 18px 12px')}</div>`;}
+async function saveFleetMon(){const s=JSON.parse(JSON.stringify(D.fleet.alarms.settings));const n=id=>{const e=$(id);return e?Number(e.value):0;};const on=id=>$(id).getAttribute('aria-checked')==='true';
+  s.sample_min=n('fm-sample');s.keep_hours=n('fm-keep');s.ping_min=n('fm-ping');s.show_radios=on('fm-radios');s.show_calls=on('fm-calls');
+  for(const [k,,unit,mins] of FM_RULES){const x=s.rules[k];x.enabled=on('fm-'+k+'-on');x.severity=$('fm-'+k+'-sev').value;if(unit)x.threshold=n('fm-'+k+'-thr');if(mins)x.minutes=n('fm-'+k+'-min');}
+  try{await postJ('/api/fleet/monitor/settings',s);D.fleet=await getJ('/api/fleet');setMsg('fm-msg','ok','Saved');render(true);}catch(e){setMsg('fm-msg','err',e.message);}}
 PG.fleettpl=['fleettpl','Fleet Control','fleet','Infrastructure'];
 const TPL_SEC=[['brew','Brew server'],['multi_network','Networks (Multi Network)'],['reselect','Cell reselection'],['rxlev_access_min_dbm','Min. access level'],['migration','Migration'],['presence_check_secs','Presence check'],['home_mode_display','Home mode display'],['access','ISSI whitelist'],['telemetry','Telemetry server'],['ota','Update source']];
 const tplSecName=k=>(TPL_SEC.find(x=>x[0]===k)||[k,k])[1];
@@ -2609,6 +2725,7 @@ R.settings=()=>{
     </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>
    ${updatesRepoCard()}
    ${fleetCfgSettingsCard()}
+   ${fleetMonSettingsCard()}
    ${usersCard()}`;
 };
 // Server settings: the reference source for Fleet Control updates (hint only, stations keep their own).

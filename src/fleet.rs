@@ -275,6 +275,11 @@ impl Fleet {
         self.data.log.iter().rev().cloned().collect()
     }
 
+    /// Change log entries newer than `id` (all of them for `None`), oldest first.
+    pub fn log_since(&self, id: Option<u64>) -> Vec<LogEntry> {
+        self.data.log.iter().filter(|e| id.is_none_or(|i| e.id > i)).cloned().collect()
+    }
+
     pub fn get(&self, id: &str) -> Option<&Station> {
         self.data.stations.get(id)
     }
@@ -791,6 +796,7 @@ pub async fn api_list(
         "templates": fleet.templates(),
         "bulk": fleet.bulk(),
         "confirm_secs": fleet.confirm_secs(),
+        "alarms": crate::fleet_monitor::list_json(&state, &stations.iter().map(|s| s.station.id.clone()).collect::<Vec<_>>()),
         "update_source": {"repo": ref_repo, "branch": ref_branch},
         "limits": {"build_min": crate::fleet_update::BUILD_LIMIT_MS / 60_000, "return_min": crate::fleet_update::RETURN_LIMIT_MS / 60_000, "max_interrupt_min": crate::fleet_update::MAX_INTERRUPT_MIN},
     }))
