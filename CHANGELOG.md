@@ -4,6 +4,11 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Dashboard: Stations & Cells page split.** Stations (Basestation mode, with
+  their cells) on top, then Terminals (apps and consoles, no cells), then the
+  individual cells. Other connection modes get their own "Network links" card.
+  Keys page help text for the switch to server keys brought up to date.
+
 - **Fleet Control, phase 8f: changes after the key management review.**
   Worked out with Patrick, OE1LHP. Fallback by the operator (*Fallback now…* on
   the Keys page: class 3 stations run class 2 on the fallback SCK and stay in
