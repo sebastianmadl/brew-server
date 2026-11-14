@@ -1126,7 +1126,7 @@ acknowledgement of the D-LOCATION UPDATE ACCEPT) and again when it changes:
   time (FlowStation: every 30 min).
 - The server keeps it per radio and connection; a report from a connection the
   radio is no longer registered through does not count. brew-server shows it on
-  the Radios page ("SC1 · clear" in green, else e.g. "SC3 · TEA2" in blue). Class outside 1 to 3 or KSG above 15: ignored.
+  the Radios page ("clear · SC1" in green, else e.g. "TEA2 · SC3" in blue). Class outside 1 to 3 or KSG above 15: ignored.
 - Without the extension (TetraPack, Brandmeister) nothing is sent.
 
 ## 12c. Fleet Control (`fleet-control`)
