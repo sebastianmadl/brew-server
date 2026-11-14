@@ -1127,3 +1127,51 @@ HTTP API: `POST /api/fleet/keys/sck/set` and `/sck/delete` take `role:
 `reauth_per_s`. `GET /api/fleet/keys` carries `fallback: {fallback_min,
 reauth_per_s, stations}` and, per network in `sck`, `fallback` and
 `coverage_fallback`.
+
+### 13.12 Changes after the review (phase 8f)
+
+Worked out with Patrick, OE1LHP.
+
+- **Fallback by the operator.** Keys page, Cipher keys card: *Fallback now…*
+  switches a network to its fallback SCK (needs one; rights *Fleet Control
+  keys* and *Fleet Control management*), *End fallback…* ends it. Stations get
+  `FallbackKeys` with `"forced": true`: a class 3 cell runs class 2 on the
+  fallback SCK (EN 300 392-7 clause 4.5.6.2) and stays in normal mode; `false`
+  takes it back to class 3 (clause 4.5.6.3). While forced the fallback SCK
+  cannot be removed. Phase `manual`, periods with `"manual": true`; the change
+  log says "by the operator". `POST /api/fleet/keys/sck/fallback {net, on}`.
+- **Reason.** An automatic period carries `lost_ms` (when the station lost this
+  server); the Key fallback card and the change log show it. A cell returns to
+  its class only after this server has been reachable for 60 s without a break.
+- **K per network.** K is kept per network and ISSI (`MCC-MNC/ISSI`): the same
+  ISSI in two networks are two radios. Keys from before are kept for any
+  network (`*`, chip "any network") until they are written for one. The Keys
+  page has a network selector; `net` (MCC-MNC, empty = this server's own
+  network, `*` for delete and model) in `/api/fleet/keys/set`, `/generate`,
+  `/import`, `/delete`, `/model`. A station only gets data of its own network.
+  Each K change counts up the K revision.
+- **Data sets expire.** Every set carries `exp_ms` (setting *A set stays valid,
+  days*, default 7, 1 to 90) and `rev` (the K revision). The station drops
+  expired sets and sets of an older revision. `POST /api/fleet/keys/settings`
+  takes `set_days`. The key store is synced to disk with its directory.
+- **Two-step switch to server keys.** The station lists the ISSIs of its own K
+  in the hello (`local_issis`, never K). *Use server keys* is refused while this
+  server has no K for one of them in the station's network (the refusal names
+  them and goes into the change log). The station keeps its own keys until the
+  first successful authentication with this server's data; the Stations table
+  shows "keeps n own keys until the first server authentication".
+- **Device profiles.** Columns *Firmware* and *Verified*. A radio whose model
+  is not set or not in the list gets the current SCK only (before: every key);
+  the radio list shows "model unknown: current SCK only".
+- **SCK delivery per radio.** The Radios table of the Cipher keys card shows
+  each key sent to a radio as sent, confirmed or rejected (with the radio's
+  reason), from this run.
+- **Change log.** Refused accesses to the key management (`/api/fleet/keys…`,
+  at most once a minute per login and route), refused requests of stations
+  (data for a radio without K, SCK requests) and automatic actions (SCK sent
+  automatically, a station switched to the current SCK after missing a change)
+  are logged.
+- **Rights per network.** Server settings → Users: *Fleet Control keys only
+  for networks* (MCC-MNC list, empty = every network). Such a user sees and
+  changes only the radios, keys and stations of those networks, never keys
+  kept for any network (`*`).

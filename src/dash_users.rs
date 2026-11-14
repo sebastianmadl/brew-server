@@ -67,6 +67,8 @@ struct User {
     secret: Secret,
     admin: bool,
     pages: BTreeSet<String>,
+    /// Networks (`MCC-MNC`) whose keys the user manages; empty: every network.
+    key_nets: BTreeSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +85,8 @@ struct FileUser {
     admin: bool,
     #[serde(default)]
     pages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    key_nets: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,6 +101,7 @@ pub struct UserView {
     pub name: String,
     pub admin: bool,
     pub pages: Vec<String>,
+    pub key_nets: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +124,8 @@ pub struct Access {
     pub pages: BTreeSet<String>,
     /// There are dashboard users (else no login, everyone is an admin).
     pub auth: bool,
+    /// Networks whose keys it manages (`None`: every network).
+    pub key_nets: Option<BTreeSet<String>>,
 }
 
 impl Access {
@@ -129,6 +136,12 @@ impl Access {
     /// "Fleet Control keys": admins, and users with that right (never Viewer).
     pub fn manages_keys(&self) -> bool {
         self.admin || (self.user.is_some() && self.pages.contains("fleet_keys"))
+    }
+
+    /// 8f: may manage the keys of network `net` (`MCC-MNC`). A user limited to some networks
+    /// never touches `*` (keys kept for any network).
+    pub fn keys_for_net(&self, net: &str) -> bool {
+        self.manages_keys() && (self.admin || self.key_nets.as_ref().is_none_or(|n| n.contains(net)))
     }
 
     /// "Fleet Control management": admins, and users with that right (never Viewer).
@@ -178,7 +191,7 @@ impl DashUsers {
                 Ok(f) => {
                     tracing::info!(path = %path.display(), users = f.users.len(), "dashboard users loaded");
                     Data {
-                        users: f.users.into_iter().map(|(n, u)| (n, User { secret: Secret::Hash(u.password_hash), admin: u.admin, pages: pages_of(&u.pages) })).collect(),
+                        users: f.users.into_iter().map(|(n, u)| (n, User { secret: Secret::Hash(u.password_hash), admin: u.admin, pages: pages_of(&u.pages), key_nets: u.key_nets.into_iter().collect() })).collect(),
                         viewer: pages_of(&f.viewer),
                         from_file: true,
                     }
@@ -226,19 +239,25 @@ impl DashUsers {
     pub fn access(&self, user: Option<&str>) -> Access {
         let d = self.read();
         if d.users.is_empty() {
-            return Access { user: None, admin: true, pages: PAGES.iter().map(|p| p.to_string()).collect(), auth: false };
+            return Access { user: None, admin: true, pages: PAGES.iter().map(|p| p.to_string()).collect(), auth: false, key_nets: None };
         }
         match user.and_then(|n| d.users.get(n).map(|u| (n, u))) {
-            Some((n, u)) if u.admin => Access { user: Some(n.to_owned()), admin: true, pages: PAGES.iter().map(|p| p.to_string()).collect(), auth: true },
-            Some((n, u)) => Access { user: Some(n.to_owned()), admin: false, pages: u.pages.clone(), auth: true },
-            None => Access { user: None, admin: false, pages: d.viewer.clone(), auth: true },
+            Some((n, u)) if u.admin => Access { user: Some(n.to_owned()), admin: true, pages: PAGES.iter().map(|p| p.to_string()).collect(), auth: true, key_nets: None },
+            Some((n, u)) => Access {
+                user: Some(n.to_owned()),
+                admin: false,
+                pages: u.pages.clone(),
+                auth: true,
+                key_nets: (!u.key_nets.is_empty()).then(|| u.key_nets.clone()),
+            },
+            None => Access { user: None, admin: false, pages: d.viewer.clone(), auth: true, key_nets: None },
         }
     }
 
     pub fn view(&self) -> UsersView {
         let d = self.read();
         UsersView {
-            users: d.users.iter().map(|(n, u)| UserView { name: n.clone(), admin: u.admin, pages: u.pages.iter().cloned().collect() }).collect(),
+            users: d.users.iter().map(|(n, u)| UserView { name: n.clone(), admin: u.admin, pages: u.pages.iter().cloned().collect(), key_nets: u.key_nets.iter().cloned().collect() }).collect(),
             viewer: d.viewer.iter().cloned().collect(),
             pages: PAGES,
             from_file: d.from_file,
@@ -248,7 +267,7 @@ impl DashUsers {
 
     /// Adds a user or changes one. `password` empty keeps the current one
     /// (a new user needs one). At least one admin stays.
-    pub fn upsert(&self, name: &str, password: &str, admin: bool, pages: &[String]) -> Result<(), String> {
+    pub fn upsert(&self, name: &str, password: &str, admin: bool, pages: &[String], key_nets: &[String]) -> Result<(), String> {
         if !valid_name(name) {
             return Err("User names are 1 to 32 letters, digits or . _ - @".into());
         }
@@ -265,8 +284,14 @@ impl DashUsers {
             return Err(if d.users.is_empty() { "The first user has to be an admin".into() } else { "At least one admin has to stay".into() });
         }
         let pages = if admin { BTreeSet::new() } else { pages_of(pages) };
+        let mut nets = BTreeSet::new();
+        for n in key_nets.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            crate::fleet_sck::check_net(n).map_err(|_| format!("Key networks: MCC-MNC like 232-1, not {n:?}"))?;
+            nets.insert(n.to_owned());
+        }
+        let key_nets = if admin { BTreeSet::new() } else { nets };
         let mut next = clone_data(&d);
-        next.users.insert(name.to_owned(), User { secret, admin, pages });
+        next.users.insert(name.to_owned(), User { secret, admin, pages, key_nets });
         self.save(&mut next)?;
         *d = next;
         drop(d);
@@ -343,6 +368,7 @@ impl DashUsers {
                 password_hash: match &u.secret { Secret::Hash(h) => h.clone(), Secret::Plain(_) => String::new() },
                 admin: u.admin,
                 pages: u.pages.iter().cloned().collect(),
+                key_nets: u.key_nets.iter().cloned().collect(),
             })).collect(),
             viewer: d.viewer.iter().cloned().collect(),
         };
@@ -363,6 +389,7 @@ fn from_config(cfg: &crate::config::DashboardConfig) -> Data {
             secret: Secret::Plain(p.clone()),
             admin: cfg.admins.is_empty() || cfg.admins.contains(n),
             pages: default_pages(),
+            key_nets: BTreeSet::new(),
         })).collect(),
         viewer: default_pages(),
         from_file: false,
@@ -395,6 +422,9 @@ pub struct UpsertRequest {
     pub admin: bool,
     #[serde(default)]
     pub pages: Vec<String>,
+    /// Networks whose keys the user manages (empty: every network).
+    #[serde(default)]
+    pub key_nets: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -430,7 +460,7 @@ pub async fn upsert(axum::extract::State(state): St, headers: axum::http::Header
     let name = req.name.trim().to_owned();
     let new_password = !req.password.is_empty();
     let n = name.clone();
-    let r = tokio::task::spawn_blocking(move || s.dash_users.upsert(&n, &req.password, req.admin, &req.pages))
+    let r = tokio::task::spawn_blocking(move || s.dash_users.upsert(&n, &req.password, req.admin, &req.pages, &req.key_nets))
         .await.unwrap_or_else(|e| Err(e.to_string()));
     if r.is_ok() && new_password {
         crate::dashboard_auth::end_sessions(&name, &headers);
@@ -497,11 +527,11 @@ mod tests {
         assert!(u.access(Some("admin")).admin);
         let bob = u.access(Some("bob"));
         assert!(!bob.admin && bob.sees("calls") && !bob.sees("accounts"), "config users see what the open dashboard showed");
-        assert_eq!(u.access(None), Access { user: None, admin: false, pages: default_pages(), auth: true });
+        assert_eq!(u.access(None), Access { user: None, admin: false, pages: default_pages(), auth: true, key_nets: None });
 
         // Two admins, a viewer that only sees the map.
-        u.upsert("carol", "carolpw", true, &[]).unwrap();
-        u.upsert("bob", "", false, &["calls".into(), "settings".into(), "nonsense".into()]).unwrap();
+        u.upsert("carol", "carolpw", true, &[], &[]).unwrap();
+        u.upsert("bob", "", false, &["calls".into(), "settings".into(), "nonsense".into()], &[]).unwrap();
         u.set_viewer(&["map".into()]).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("secret1") && !text.contains("carolpw") && text.contains("$argon2"), "only hashes in the file");
@@ -528,15 +558,15 @@ mod tests {
         let path = tmp();
         let u = DashUsers::open(&cfg(&path));
         assert!(u.remove("admin").is_err(), "the only admin");
-        assert!(u.upsert("admin", "", false, &[]).is_err(), "nor downgraded");
-        u.upsert("second", "secondpw", true, &[]).unwrap();
-        u.upsert("admin", "", false, &["map".into()]).unwrap();
+        assert!(u.upsert("admin", "", false, &[], &[]).is_err(), "nor downgraded");
+        u.upsert("second", "secondpw", true, &[], &[]).unwrap();
+        u.upsert("admin", "", false, &["map".into()], &[]).unwrap();
         assert!(u.remove("second").is_err(), "now second is the only admin");
         u.remove("bob").unwrap();
         assert!(!u.check("bob", "secret2"), "removed user cannot log in");
-        assert!(u.upsert("x", "", false, &[]).is_err(), "a new user needs a password");
-        assert!(u.upsert("x", "12345", false, &[]).is_err(), "too short");
-        assert!(u.upsert("bad name", "123456", false, &[]).is_err());
+        assert!(u.upsert("x", "", false, &[], &[]).is_err(), "a new user needs a password");
+        assert!(u.upsert("x", "12345", false, &[], &[]).is_err(), "too short");
+        assert!(u.upsert("bad name", "123456", false, &[], &[]).is_err());
         std::fs::remove_file(&path).ok();
     }
 
@@ -564,8 +594,8 @@ mod tests {
         let u = DashUsers::open(&c);
         let a = u.access(None);
         assert!(!a.auth && a.admin && a.sees("settings"));
-        assert!(u.upsert("bob", "bobbobbob", false, &[]).is_err());
-        u.upsert("admin", "adminpw", true, &[]).unwrap();
+        assert!(u.upsert("bob", "bobbobbob", false, &[], &[]).is_err());
+        u.upsert("admin", "adminpw", true, &[], &[]).unwrap();
         assert!(u.enabled() && !u.access(None).admin);
         std::fs::remove_file(&path).ok();
     }
@@ -575,11 +605,31 @@ mod tests {
         assert!(!default_pages().contains("fleet") && !default_pages().contains("fleet_manage"), "never given without asking");
         let pages = pages_of(&["fleet_manage".to_string()]);
         assert!(pages.contains("fleet") && pages.contains("fleet_manage"));
-        let user = Access { user: Some("bob".into()), admin: false, pages: pages.clone(), auth: true };
+        let user = Access { user: Some("bob".into()), admin: false, pages: pages.clone(), auth: true, key_nets: None };
         assert!(user.sees("fleet") && user.manages_fleet());
-        let viewer = Access { user: None, admin: false, pages, auth: true };
+        let viewer = Access { user: None, admin: false, pages, auth: true, key_nets: None };
         assert!(!viewer.manages_fleet(), "Viewer never manages");
-        let looker = Access { user: Some("eve".into()), admin: false, pages: pages_of(&["fleet".to_string()]), auth: true };
+        let looker = Access { user: Some("eve".into()), admin: false, pages: pages_of(&["fleet".to_string()]), auth: true, key_nets: None };
         assert!(looker.sees("fleet") && !looker.manages_fleet());
+    }
+
+    #[test]
+    fn key_rights_can_be_limited_to_networks() {
+        let dir = std::env::temp_dir().join(format!("du-nets-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = crate::config::DashboardConfig { users_file: dir.join("users.json"), ..Default::default() };
+        let u = DashUsers::open(&cfg);
+        u.upsert("admin", "adminpw", true, &[], &[]).unwrap();
+        assert!(u.upsert("k", "keyspw1", false, &["fleet_keys".into()], &["nonsense".into()]).is_err());
+        u.upsert("k", "keyspw1", false, &["fleet_keys".into()], &["232-1".into(), " ".into()]).unwrap();
+        let a = u.access(Some("k"));
+        assert!(a.keys_for_net("232-1") && !a.keys_for_net("232-2") && !a.keys_for_net("*"));
+        assert!(u.access(Some("admin")).keys_for_net("232-2"));
+        u.upsert("all", "allpw12", false, &["fleet_keys".into()], &[]).unwrap();
+        assert!(u.access(Some("all")).keys_for_net("232-2"), "no list: every network");
+        // Kept in the users file.
+        let again = DashUsers::open(&cfg);
+        assert_eq!(again.view().users.iter().find(|x| x.name == "k").unwrap().key_nets, vec!["232-1".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

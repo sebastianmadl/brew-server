@@ -930,14 +930,22 @@ R.radios=()=>{
   const q=UI.filter.radios||'';
   const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),(m.groups||[]).map(gName).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
+  const sorted=ms.slice().sort((a,b)=>a.issi-b.issi),term=sorted.filter(m=>m.mode==='Terminal'),rad=sorted.filter(m=>m.mode!=='Terminal');
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
-  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>). Apps and other terminals (Terminal mode) have no cells; a station without these extensions is shown without a cell.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
-  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
+  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${rad.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>); a station without these extensions is shown without a cell. <i>Security</i> is the security class the radio is registered with (EN 300 392-7 clause 6.2): SC1 = clear, SC2 = static cipher key (SCK), SC3 = derived and common cipher keys (DCK / CCK), with the air interface encryption algorithm (TEA1 to TEA7, from the KSG number of the ciphering parameters). Only stations with the <code>ms-security</code> extension report it (FlowStation); the value is the one of the registration and is updated when the station reports a change. Apps and other terminals are listed separately below.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Security</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
+  ${rad.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${secCell(m.security)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No radios registered</td></tr>'}
+  </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Terminal logins</h2><span class="cnt">${term.length}</span>${helpBtn('terms')}</div>${helpNote('terms','Apps, consoles and other terminals logged in to this server in Terminal mode with their own number. They are not on a radio cell and have no air interface security class.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Login</th><th>Groups</th><th>Address</th></tr></thead><tbody>
+  ${term.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="4" class="mut">No terminals logged in</td></tr>'}
   </tbody></table></div></div>
   <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th><th>Cell (global ID)</th></tr></thead><tbody>
   ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
+// Security class of a registration (`ms-security`): SC1 clear, SC2 / SC3 with the TEA from the KSG number.
+const secCell=x=>{if(!x)return '<span class="mut" title="The station does not report it (needs the ms-security extension)">—</span>';
+  const alg=x.ksg==null?'':x.ksg<=6?' · TEA'+(x.ksg+1):' · KSG '+x.ksg;
+  return x.class===1?'<span class="chip w" title="Registered without air interface encryption">SC1 · clear</span>':`<span class="chip a" title="${x.class===3?'Derived / common cipher keys (DCK / CCK)':'Static cipher key (SCK)'}">SC${x.class}${alg}</span>`;};
 // Name of an ISSI from the directory, if any.
 // Directory names first (always!), then the ham callsign database (D.cs, only asked for ISSIs without one).
 const nameOf=issi=>(D.issi||{})[String(issi)]||(D.cs||{})[String(issi)]||'';
@@ -1836,13 +1844,15 @@ function fkSckBody(d){
    <tr><th style="width:110px">Current</th><td>${key(n.current)}${n.current&&!n.current_in_use?'<div class="mut" style="font-size:12px;margin-top:4px">No station runs this key yet, so nothing goes to the radios. Check that it is the key the stations use (same check value), then use it on the stations.</div>':''}</td><td>${cov(n.coverage_current)}</td></tr>
    <tr><th>Next</th><td>${key(n.next)}</td><td>${cov(n.coverage_next)}</td></tr>
    <tr><th>Fallback</th><td>${key(n.fallback)}<div class="mut" style="font-size:12px;margin-top:4px">Security class 3 only: SCK 31 or 32, run as class 2 by a station that cannot reach this server and has radios it cannot authenticate any more (EN 300 392-7 clause 4.2.4.0). Radios get it sealed like the other keys, before anything fails.</div></td><td>${cov(n.coverage_fallback)}</td></tr>
+   ${n.fallback_forced?`<tr><th>Fallback</th><td colspan="2"><span class="chip w">by the operator</span> class 3 stations run class 2 on the fallback key since <b>${esc(new Date(n.fallback_forced.at_ms).toLocaleString())}</b>${n.fallback_forced.by?' · '+esc(n.fallback_forced.by):''}</td></tr>`:''}
    ${act?`<tr><th>Change</th><td colspan="2"><span class="chip w">planned</span> to SCK ${act.sckn} version ${act.vn} at <b>${esc(new Date(act.at_ms).toLocaleString())}</b>${act.by?' · '+esc(act.by):''} ${manage?'<button class="btn" onclick="fkSckCancel()">Cancel</button>':''}</td></tr>`:''}
    </tbody></table></div>
    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px">
     ${n.current?`<button class="btn" ${act?'disabled':''} onclick="fkSckSet('next',${nextSckn},${nextVn},'')" title="Random next key with number ${nextSckn}, version ${nextVn}; shown once">Generate next key</button>`:''}
     ${n.next&&!act?'<button class="btn danger" onclick="fkSckDelete(\'next\')">Remove next key</button>':''}
     <button class="btn" onclick="fkSckSet('fallback',${n.fallback&&n.fallback.sckn===31?32:31},${n.fallback?(n.fallback.vn+1)%65536:0},'')" title="Random fallback key; shown once">${n.fallback?'Replace fallback key':'Generate fallback key'}</button>
-    ${n.fallback?'<button class="btn danger" onclick="fkSckDelete(\'fallback\')">Remove fallback key</button>':''}
+    ${n.fallback&&!n.fallback_forced?'<button class="btn danger" onclick="fkSckDelete(\'fallback\')">Remove fallback key</button>':''}
+    ${n.fallback&&manage?(n.fallback_forced?'<button class="btn pri" onclick="fkSckForce(false)">End fallback…</button>':'<button class="btn danger" onclick="fkSckForce(true)" title="Class 3 stations of this network run class 2 on the fallback key, e.g. when the CCK is compromised">Fallback now…</button>'):''}
     ${n.current&&!n.next&&!act&&!n.current_in_use?'<button class="btn danger" onclick="fkSckDelete(\'current\')" title="No station runs this key yet">Remove current key</button>':''}
     ${n.next&&!act&&manage?`<button class="btn pri" onclick="fkSckActivate('next')">Activate next key…</button>`:''}
     ${own.length&&n.current&&!act&&manage?`<button class="btn" onclick="fkSckActivate('current')" title="Stations still running their own config key or an older key">Use current key on ${own.length} station${own.length===1?'':'s'}…</button>`:''}
@@ -1861,17 +1871,18 @@ function fkSckBody(d){
     <td>${s.switch_at_ms?`<span class="chip w">change ${esc(new Date(s.switch_at_ms).toLocaleTimeString())}</span>`:s.active?(s.matches_current?'<span class="chip a">current key</span>':'<span class="chip w">not the current key</span>'):''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No station of this network.</div>'}</div>`;
   h+=fkFallbackCard(d,st);
   const radios=Object.entries(n.radios||{});
-  h+=`<div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${radios.length}</span></div>${radios.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Holds</th><th>Missing</th><th>Model slots</th><th></th></tr></thead><tbody>${radios.map(([i,r])=>`<tr><td><b class="m">${esc(i)}</b></td>
+  h+=`<div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${radios.length}</span></div>${radios.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Holds</th><th>Missing</th><th>Last deliveries</th><th>Model slots</th><th></th></tr></thead><tbody>${radios.map(([i,r])=>`<tr><td><b class="m">${esc(i)}</b></td>
     <td>${(r.confirmed||[]).map(([a,b])=>`<span class="chip a">SCK ${a} v${b}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
     <td>${(r.missing||[]).map(x=>`<span class="chip w">SCK ${x}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
+    <td>${(r.delivery||[]).map(x=>`<span class="chip ${x.state==='confirmed'?'a':x.state==='rejected'?'d':''}" title="${esc(new Date(x.at_ms).toLocaleString())}${x.detail?': '+esc(x.detail):''}">SCK ${x.sckn} v${x.vn} ${x.state==='confirmed'?'confirmed':x.state==='rejected'?'rejected':'sent'}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
     <td class="m">${r.room==null?'<span class="mut" title="Model not set: no check">?</span>':r.room}${r.room===1&&n.next?' <span class="chip w" title="Holds one trunked mode key: gets the next key only when it becomes current">1 slot</span>':''}</td>
     <td style="text-align:right"><button class="btn" onclick="fkSckSend(${esc(i)})">Send</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No radio with K seen in this network.</div>'}</div>`;
   return h;}
 // Key fallback (fallback-v1): what each station reports about its fallback.
 function fkFallbackCard(d,st){
   const fb=(d.fallback&&d.fallback.stations)||{};const ids=st.map(s=>s.id).filter(id=>fb[id]);
-  const ph=p=>p==='fallback'?'<span class="chip w">in fallback</span>':p==='returning'?'<span class="chip i">returning</span>':'<span class="chip a">normal</span>';
-  const ep=e=>e?`${esc(new Date(e.from_ms).toLocaleString())} – ${e.to_ms?esc(new Date(e.to_ms).toLocaleString()):'now'}${e.class2?' · class 2':''}${e.temporary?' · '+e.temporary+' temporary':''}`:'<span class="mut">—</span>';
+  const ph=p=>p==='manual'?'<span class="chip w">fallback by the operator</span>':p==='fallback'?'<span class="chip w">in fallback</span>':p==='returning'?'<span class="chip i">returning</span>':'<span class="chip a">normal</span>';
+  const ep=e=>e?`${esc(new Date(e.from_ms).toLocaleString())} – ${e.to_ms?esc(new Date(e.to_ms).toLocaleString()):'now'}${e.class2?' · class 2':''}${e.manual?' · by the operator':''}${e.lost_ms?' · reason: this server unreachable since '+esc(new Date(e.lost_ms).toLocaleString())+', a radio without data sets':''}${e.temporary?' · '+e.temporary+' temporary':''}`:'<span class="mut">—</span>';
   return `<div class="card"><div class="ch"><h2>Key fallback</h2>${helpBtn('fkfb')}<span class="cnt">${ids.length}</span></div>
    ${helpNote('fkfb',`When a station with server keys cannot reach this server it authenticates from its stock of data sets. After ${(d.fallback&&d.fallback.fallback_min)||5} min without the server, once a radio cannot be authenticated any more, it goes to fallback: "system wide services temporarily not supported" (TS 100 392-2 clause 18.5.2), radios without data sets get a temporary registration (clause 16.4.8), and a class 3 cell runs class 2 on the fallback key (EN 300 392-7 clauses 4.2.4.0, 4.5.6.2). When this server is back the station fetches data sets first, authenticates the radios that registered without authentication again (${(d.fallback&&d.fallback.reauth_per_s)||2} per second, clause 4.1.2), then returns to class 3 and normal mode. Times in the server settings. Stations report their fallback periods when they are back; each goes into the change log.`)}
    ${ids.length?`<div class="tw"><table><thead><tr><th>Station</th><th>State</th><th>Fallback key held</th><th>Last fallback</th></tr></thead><tbody>${ids.map(id=>{const f=fb[id];const last=(f.episodes||[]).slice(-1)[0];return `<tr><td><b>${esc(fkStation(id))}</b></td><td>${ph(f.phase)}</td>
@@ -1897,6 +1908,9 @@ function fkSckShowOnce(r,role,sckn,vn){
 async function fkSckDelete(role){const cur=role==='current',fb=role==='fallback';
   if(!confirm(fb?'Remove the fallback key? Stations then have no class 2 fallback when this server is unreachable; radios keep the key they got.':cur?'Remove the current key? No station runs it and no radio got it from the server.':'Remove the next key? Radios that got it keep it, it is just never activated.'))return;
   try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net,role});setMsg('fk-msg','ok',fb?'Fallback key removed':cur?'Current key removed':'Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckForce(on){
+  if(!confirm(on?'Switch the class 3 stations of this network to the fallback key now? Each changes to security class 2 on SCK 31/32 at its next multiframe (EN 300 392-7 clause 4.5.6.2); radios without that key cannot encrypt. Radios stay registered and authenticate as usual.':'End the fallback? The class 3 stations return to class 3 with their CCK at the next multiframe (clause 4.5.6.3).'))return;
+  try{await postJ('/api/fleet/keys/sck/fallback',{net:UI.fk.net,on});setMsg('fk-msg','ok',on?'Fallback sent to the stations':'End of the fallback sent to the stations');setTimeout(fkLoad,1500);}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckSend(issi){try{await postJ('/api/fleet/keys/sck/send',issi?{net:UI.fk.net,issi:Number(issi)}:{net:UI.fk.net});setMsg('fk-msg','ok','Delivery started; results come in as the radios answer');setTimeout(fkLoad,4000);}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckCancel(){if(!confirm('Cancel the planned change? Stations that already switched keep the new key.'))return;
   try{await postJ('/api/fleet/keys/sck/cancel',{net:UI.fk.net});setMsg('fk-msg','ok','Change cancelled');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
@@ -1983,18 +1997,23 @@ R.fleetkeys=()=>{
     ${helpNote('fkeys',`This server is the authentication centre of the fleet: it holds the authentication key K of every radio, stations never see K (EN 300 392-7 clause 4.1.1). A station switched to <b>server keys</b> gets one-time authentication data sets (RS, KS, KS') from here and keeps a stock of ${d.settings.stock} per radio for radios seen at it or a neighbour in the last ${d.settings.days} days, so it can still authenticate while this server is away. K is write-only: after saving only its <b>check value</b> (first 8 bytes of SHA-256(K)) is shown, to compare with your records. K cannot be read out of a radio and there is no over-the-air transfer for K, so keys come in by import (CSV or a FlowStation export), by typing or by <b>Generate</b> (shown once, for programming the radio with CPS / KVL). The keys file is encrypted (AES-256-GCM) with <code>[keys] master_key_file</code>. Every change goes into the change log, never a key. Right: <i>Fleet Control keys</i> (Server settings → Users).`)}
     ${d.problem?`<div class="svc"><span class="chip d">Key store</span> ${esc(d.problem)}</div>`:''}${msgDiv('fk-msg','padding:0 18px 12px')}</div>`;
   let body='';
+  // K is kept per network (MCC-MNC): the same ISSI in two networks are two radios.
+  const kNets=[...new Set([...Object.keys((d.sck&&d.sck.nets)||{}),...(d.key_nets||[]).filter(x=>x!=='*')])].sort();
+  if(kNets.length&&!kNets.includes(UI.fk.net))UI.fk.net=kNets[0];
+  const kNet=UI.fk.net||'';
+  const kNetSel=kNets.length>1?`<select class="f" aria-label="Network" onchange="UI.fk.net=this.value;render(true)">${kNets.map(x=>`<option ${x===kNet?'selected':''}>${esc(x)}</option>`).join('')}</select>`:(kNet?`<span class="chip" title="Network (MCC-MNC)">${esc(kNet)}</span>`:'');
   if(k.tab==='radios'){
-    const q=(k.q||'').trim();const list=d.subs.filter(s=>!q||String(s.issi).includes(q)||(s.model||'').toLowerCase().includes(q.toLowerCase()));
-    body=`<div class="card"><div class="ch"><h2>Radios with K</h2><span class="cnt">${list.length}</span><span class="sp"></span><input class="f" placeholder="Search ISSI or model" aria-label="Search the radios" value="${esc(k.q||'')}" oninput="UI.fk.q=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the radios&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:200px"></div>
+    const q=(k.q||'').trim();const list=d.subs.filter(s=>(!kNet||s.net===kNet||s.net==='*')&&(!q||String(s.issi).includes(q)||(s.model||'').toLowerCase().includes(q.toLowerCase())));
+    body=`<div class="card"><div class="ch"><h2>Radios with K</h2><span class="cnt">${list.length}</span>${kNetSel}<span class="sp"></span><input class="f" placeholder="Search ISSI or model" aria-label="Search the radios" value="${esc(k.q||'')}" oninput="UI.fk.q=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the radios&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:200px"></div>
     ${list.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Check value</th><th>Model</th><th>Source</th><th>Last authentication</th><th>Stock per station</th><th></th></tr></thead><tbody>${list.map(s=>{const la=s.last_auth;const stock=Object.entries(s.stock||{});
-      return `<tr><td><b class="m">${s.issi}</b></td><td class="m">${esc(s.kcv)}</td>
-      <td><select class="f" style="width:120px" aria-label="Model of ${s.issi}" onchange="fkModel(${s.issi},this.value)">${fkModels(d).map(m=>`<option value="${esc(m)}" ${m===(s.model||'')?'selected':''}>${m||'—'}</option>`).join('')}${s.model&&!fkModels(d).includes(s.model)?`<option selected>${esc(s.model)}</option>`:''}</select></td>
+      return `<tr><td><b class="m">${s.issi}</b>${s.net==='*'?' <span class="chip w" title="K from before keys were kept per network: used in every network until it is written for one">any network</span>':''}</td><td class="m">${esc(s.kcv)}</td>
+      <td><select class="f" style="width:120px" aria-label="Model of ${s.issi}" onchange="fkModel('${esc(s.net)}',${s.issi},this.value)">${fkModels(d).map(m=>`<option value="${esc(m)}" ${m===(s.model||'')?'selected':''}>${m||'—'}</option>`).join('')}${s.model&&!fkModels(d).includes(s.model)?`<option selected>${esc(s.model)}</option>`:''}</select>${!fkModels(d).some(m=>m&&m.toLowerCase()===(s.model||'').toLowerCase())?'<span class="sub" title="Without a known model the radio gets the current SCK only, so no key overwrites one it needs">model unknown: current SCK only</span>':''}</td>
       <td><span class="chip">${esc(s.source)}</span><span class="sub">${esc(tmd(s.set_ms))}${s.by?' · '+esc(s.by):''}</span></td>
       <td>${la?`<span class="chip ${la.ok?'a':'d'}">${la.ok?(la.mutual?'ok · mutual':'ok'):'failed'}</span><span class="sub">${esc(fkStation(la.station))} · ${ago(la.at_ms)}</span>`:'<span class="mut">—</span>'}</td>
       <td style="font-size:12px">${stock.length?stock.map(([st,n])=>`<div>${esc(fkStation(st))}: <b class="m">${n}</b></div>`).join(''):'<span class="mut">—</span>'}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="fkGenerate(${s.issi},true)" title="New random K (shown once); the radio must be programmed with it">New K</button> <button class="btn danger" onclick="fkDelete(${s.issi})">${ic('trash')}Delete</button></td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No keys yet: import them, type them in or generate them.</div>'}</div>`;
+      <td style="text-align:right;white-space:nowrap"><button class="btn" onclick="fkGenerate(${s.issi},true)" title="New random K (shown once); the radio must be programmed with it">New K</button> <button class="btn danger" onclick="fkDelete('${esc(s.net)}',${s.issi})">${ic('trash')}Delete</button></td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No keys yet: import them, type them in or generate them.</div>'}</div>`;
   }else if(k.tab==='add'){
-    body=`<div class="card"><div class="ch"><h2>One radio</h2></div><div style="padding:12px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    body=`<div class="card"><div class="ch"><h2>One radio</h2>${kNetSel}</div><div style="padding:12px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
       <div><label class="l" for="fk-issi">ISSI</label><input class="f" id="fk-issi" inputmode="numeric" style="width:130px" autocomplete="off"></div>
       <div style="flex:1;min-width:300px"><label class="l" for="fk-k">K (32 hex digits; spaces, : and - are ignored)</label><input class="f m" id="fk-k" autocomplete="off" spellcheck="false" autocapitalize="off" oninput="fkPreview()" placeholder="0123 4567 89AB CDEF 0123 4567 89AB CDEF"></div>
       <button class="btn pri" onclick="fkSet()">Save K</button><button class="btn" onclick="fkGenerate(null,false)" title="Random K for this ISSI, shown once to program the radio (CPS / KVL)">Generate</button></div>
@@ -2004,7 +2023,7 @@ R.fleetkeys=()=>{
   }else if(k.tab==='cck'){
     body=fkCckBody(d);
   }else if(k.tab==='import'){
-    body=`<div class="card"><div class="ch"><h2>CSV</h2></div><div style="padding:12px 18px">
+    body=`<div class="card"><div class="ch"><h2>CSV</h2>${kNetSel}</div><div style="padding:12px 18px">
       <div class="mut" style="font-size:12.5px;margin-bottom:6px">One radio per line: <code>ISSI;K</code> (also <code>,</code> or tab). A header line and lines starting with <code>#</code> are skipped. If one line is wrong nothing is imported and the line number is shown.</div>
       <textarea class="f m" id="fk-csv" rows="8" style="width:100%" spellcheck="false" placeholder="2320972;0123456789ABCDEF0123456789ABCDEF"></textarea>
       <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><label class="btn">Open file…<input type="file" accept=".csv,.txt" style="display:none" onchange="fkFile(this,'fk-csv')"></label><button class="btn pri" onclick="fkImport(false)">Import CSV</button></div></div></div>
@@ -2019,7 +2038,7 @@ R.fleetkeys=()=>{
      <div class="svc mut" style="font-size:12.5px;display:block">Switching a station to <b>server keys</b> is a config change (the station restarts, about 20 s off the air). A station with keys of its own: export them on its Security page and import them here first; switching then removes them from the station. ${manage?'':'Switching needs the right Fleet Control management too.'}</div>
      ${st.length?`<div class="tw"><table><thead><tr><th>Station</th><th>Status</th><th>Key source</th><th>Stock</th><th></th></tr></thead><tbody>${st.map(s=>{const total=d.subs.reduce((n,x)=>n+((x.stock||{})[s.id]||0),0);const srv=s.key_source==='server';
        return `<tr><td><b>${esc(s.label)}</b>${s.label!==s.id?` <span class="mut m" style="font-size:12px">${esc(s.id)}</span>`:''}</td><td>${s.online?'<span class="st"><i></i>Online</span>':'<span class="st d"><i></i>Offline</span>'}</td>
-       <td>${!s.keys?'<span class="chip i" title="Software without keys-v1">not supported</span>':srv?'<span class="chip a">server</span>':`<span class="chip">local</span>${s.local_keys?`<span class="sub">${s.local_keys} keys in its config</span>`:''}`}</td>
+       <td>${!s.keys?'<span class="chip i" title="Software without keys-v1">not supported</span>':srv?`<span class="chip a">server</span>${s.local_keys?`<span class="sub" title="Two-step switch: the station removes its own keys after the first authentication with this server's data">keeps ${s.local_keys} own keys until the first server authentication</span>`:''}`:`<span class="chip">local</span>${s.local_keys?`<span class="sub">${s.local_keys} keys in its config</span>`:''}`}</td>
        <td class="m">${srv?total:'—'}</td>
        <td style="text-align:right">${manage&&s.keys&&s.online?(srv?`<button class="btn" onclick="fkSource('${esc(s.id)}','local',0)">Back to local keys</button>`:`<button class="btn pri" onclick="fkSource('${esc(s.id)}','server',${s.local_keys||0})">Use server keys</button>`):''}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No station in Fleet Control.</div>'}</div>`;
   }
@@ -2029,12 +2048,12 @@ function fkPreview(){const e=$('fk-prev');if(!e)return;const n=fkNorm(v('fk-k'))
   e.textContent=!n?'Type or paste K.':fkValid(n)?'32 hex digits: '+n.toUpperCase().match(/.{4}/g).join(' '):`${n.length} of 32 characters${/^[0-9a-fA-F]*$/.test(n)?'':' · only 0-9 and A-F'}`;}
 async function fkSet(){const issi=parseInt(v('fk-issi'),10),kk=fkNorm(v('fk-k'));
   if(!(issi>0))return setMsg('fk-msg','err','ISSI missing');if(!fkValid(kk))return setMsg('fk-msg','err','K needs exactly 32 hex digits');
-  try{const r=await postJ('/api/fleet/keys/set',{issi,k:kk});$('fk-k').value='';setMsg('fk-msg','ok',`K for ${issi} ${r.changed?'saved':'unchanged'} · check value ${r.kcv}`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+  try{const r=await postJ('/api/fleet/keys/set',{net:UI.fk.net||'',issi,k:kk});$('fk-k').value='';setMsg('fk-msg','ok',`K for ${issi} ${r.changed?'saved':'unchanged'} · check value ${r.kcv}`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkGenerate(issi,replace){
   if(issi==null){issi=parseInt(v('fk-issi'),10);if(!(issi>0))return setMsg('fk-msg','err','ISSI missing');}
-  const has=(UI.fk.data.subs||[]).some(s=>s.issi===issi);
+  const has=(UI.fk.data.subs||[]).some(s=>s.issi===issi&&s.net===UI.fk.net);
   if((replace||has)&&!confirm(`Replace the K of ${issi}? The radio then needs the new K (CPS / KVL) before it can authenticate again.`))return;
-  try{const r=await postJ('/api/fleet/keys/generate',{issi});fkShowOnce(r);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+  try{const r=await postJ('/api/fleet/keys/generate',{net:UI.fk.net||'',issi});fkShowOnce(r);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 // A generated K is shown exactly once: copy it or save the file now.
 function fkShowOnce(r){
   const file=`# K for ${r.issi}, check value ${r.kcv}\n${r.issi};${r.k}\n`;
@@ -2047,13 +2066,13 @@ function fkShowOnce(r){
    <div class="acts"><button class="btn pri" onclick="UI.fkOnce=null;closeSheet()">Done</button></div>`;
   $('scrim').classList.add('on');}
 function fkOnceFile(issi){if(!UI.fkOnce)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([UI.fkOnce],{type:'text/plain'}));a.download=`k-${issi}.csv`;document.body.appendChild(a);a.click();a.remove();UI.fkOnce=null;setMsg('fk-once-msg','ok','Saved (the file can only be saved once)');}
-async function fkDelete(issi){if(!confirm(`Delete the K of ${issi}? Stations drop its authentication data; the radio can no longer authenticate.`))return;
-  try{await postJ('/api/fleet/keys/delete',{issis:[issi]});setMsg('fk-msg','ok',`K of ${issi} deleted`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
-async function fkModel(issi,model){try{await postJ('/api/fleet/keys/model',{issi,model});fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkDelete(net,issi){if(!confirm(`Delete the K of ${issi}${net==='*'?'':' in network '+net}? Stations drop its authentication data; the radio can no longer authenticate.`))return;
+  try{await postJ('/api/fleet/keys/delete',{net,issis:[issi]});setMsg('fk-msg','ok',`K of ${issi} deleted`);fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkModel(net,issi,model){try{await postJ('/api/fleet/keys/model',{net,issi,model});fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 function fkFile(inp,target){const f=inp.files&&inp.files[0];if(!f)return;const r=new FileReader();
   r.onload=()=>{if(target){$(target).value=r.result;}else{UI.fk.file=r.result;UI.fk.fileName=f.name;const e=$('fk-file-name');if(e)e.textContent=f.name;}};r.readAsText(f);inp.value='';}
 async function fkImport(file){
-  const body=file?{file:UI.fk.file||'',password:v('fk-pw')}:{text:v('fk-csv')};
+  const body=file?{net:UI.fk.net||'',file:UI.fk.file||'',password:v('fk-pw')}:{net:UI.fk.net||'',text:v('fk-csv')};
   if(file&&!UI.fk.file)return setMsg('fk-msg','err','Choose the export file first');
   try{const r=await postJ('/api/fleet/keys/import',body);
     const rep=$('fk-report');
@@ -2065,7 +2084,7 @@ async function fkImport(file){
 async function fkSource(id,source,local){
   let drop=false;
   if(source==='server'){
-    if(local&&!confirm(`This station holds ${local} keys of its own. Did you export them on the station and import them here? Switching removes them from the station.`))return;
+    if(local&&!confirm(`This station holds ${local} keys of its own. Did you export them on the station and import them here? This server checks that it holds K for each of them; the station keeps its own keys until the first authentication with this server's data, then removes them.`))return;
     drop=local>0;
     if(!confirm('Switch this station to server keys? It restarts with the new config (about 20 s off the air).'))return;
   }else if(!confirm('Switch this station back to local keys? It then needs K in its own config to authenticate radios; its stock of authentication data is deleted. It restarts (about 20 s).'))return;
@@ -2076,22 +2095,25 @@ function keysSettingsCard(){
   const s=D.fkset;if(!s){getJ('/api/fleet/keys').then(r=>{D.fkset=r.settings;D.fksck=r.sck;D.fkcck=r.cck;if(UI.page==='settings')render(true);}).catch(()=>{});return '';}
   const sk=D.fksck||{warn_pct:90,profiles:[]};UI.fkProf=UI.fkProf||sk.profiles.map(p=>({...p}));
   return `<div class="card"><div class="ch"><h2>Fleet Control keys</h2>${helpBtn('fkset')}</div>
-   ${helpNote('fkset','Stock of one-time authentication data sets (RS, KS, KS\') a station with server keys keeps per radio, for radios registered at it or a neighbour station within the given days. The stock lets a station authenticate while this server is away; every set is used once and topped up.')}
+   ${helpNote('fkset','Stock of one-time authentication data sets (RS, KS, KS\') a station with server keys keeps per radio, for radios registered at it or a neighbour station within the given days. The stock lets a station authenticate while this server is away; every set is used once and topped up. A set not used within its validity is dropped by the station unused, and a set made before a radio\'s K changed is dropped as soon as one with the new K arrives.')}
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
    <div><label class="l" for="fks-stock">Sets per radio and station (1–50)</label><input class="f" id="fks-stock" inputmode="numeric" value="${s.stock}" style="width:110px"></div>
    <div><label class="l" for="fks-days">Radios seen within days (1–365)</label><input class="f" id="fks-days" inputmode="numeric" value="${s.days}" style="width:110px"></div>
+   <div><label class="l" for="fks-setdays">A set stays valid, days (1–90)</label><input class="f" id="fks-setdays" inputmode="numeric" value="${s.set_days||7}" style="width:110px"></div>
    <button class="btn pri" onclick="saveKeysSettings()">Save</button></div>${msgDiv('fks-msg','padding:0 18px 12px')}
    <div class="ch" style="border-top:1px solid var(--line)"><h2 style="font-size:14px">Cipher keys (SCK)</h2></div>
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-warn">Warn before a key change below (% of radios holding the key)</label><input class="f" id="fks-warn" inputmode="numeric" value="${sk.warn_pct}" style="width:110px"></div></div>
    <div style="padding:0 18px 12px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-fbmin">Key fallback after minutes without this server (1–60)</label><input class="f" id="fks-fbmin" inputmode="numeric" value="${sk.fallback_min||5}" style="width:110px"></div>
    <div><label class="l" for="fks-reauth">Re-authentication after the server is back, radios per second (1–20)</label><input class="f" id="fks-reauth" inputmode="numeric" value="${sk.reauth_per_s||2}" style="width:110px"></div>
    <button class="btn pri" onclick="saveFallbackSettings()">Save</button></div>${msgDiv('fkfb-msg','padding:0 18px 12px')}
-   <div class="svc mut" style="font-size:12.5px;display:block">Device profiles: how many keys a radio model holds. A model with one trunked mode SCK only gets the current key. Values from the Motorola MTP6000 Series Security Specifications; the other built-in models hold the same.</div>
-   <div class="tw"><table><thead><tr><th>Model</th><th>TM-SCK</th><th>DM-SCK</th><th>GCK</th><th>KAG</th><th></th></tr></thead><tbody>${UI.fkProf.map((p,i)=>`<tr>
+   <div class="svc mut" style="font-size:12.5px;display:block">Device profiles: how many keys a radio model holds. A model with one trunked mode SCK only gets the current key, and so does a radio whose model is not set or not in this list. Values from the Motorola MTP6000 Series Security Specifications (MTP6550/6650/6750, marked verified); the other built-in models are taken as equal, not checked against manufacturer documents.</div>
+   <div class="tw"><table><thead><tr><th>Model</th><th>TM-SCK</th><th>DM-SCK</th><th>GCK</th><th>KAG</th><th>Firmware</th><th>Verified</th><th></th></tr></thead><tbody>${UI.fkProf.map((p,i)=>`<tr>
     <td><input class="f" style="width:130px" aria-label="Model name" value="${esc(p.name)}" oninput="UI.fkProf[${i}].name=this.value"></td>
     ${['tm_sck','dm_sck','gck','kag'].map(f=>`<td><input class="f" inputmode="numeric" style="width:70px" aria-label="${f}" value="${p[f]}" oninput="UI.fkProf[${i}].${f}=parseInt(this.value,10)||0"></td>`).join('')}
+    <td><input class="f" style="width:110px" aria-label="Firmware of ${esc(p.name)}" value="${esc(p.firmware||'')}" oninput="UI.fkProf[${i}].firmware=this.value"></td>
+    <td><input type="checkbox" class="chk" aria-label="Values of ${esc(p.name)} verified" ${p.verified?'checked':''} onchange="UI.fkProf[${i}].verified=this.checked"></td>
     <td><button class="btn ic" title="Remove" aria-label="Remove ${esc(p.name)}" onclick="UI.fkProf.splice(${i},1);render(true)">${ic('trash')}</button></td></tr>`).join('')}</tbody></table></div>
-   <div style="display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap"><button class="btn" onclick="UI.fkProf.push({name:'',tm_sck:2,dm_sck:0,gck:0,kag:0});render(true)">Add model</button><button class="btn" onclick="UI.fkProf=null;saveSckSettings(true)">Built-in list</button><button class="btn pri" onclick="saveSckSettings(false)">Save</button></div>${msgDiv('fksk-msg','padding:0 18px 12px')}
+   <div style="display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap"><button class="btn" onclick="UI.fkProf.push({name:'',tm_sck:1,dm_sck:0,gck:0,kag:0,firmware:'',verified:false});render(true)">Add model</button><button class="btn" onclick="UI.fkProf=null;saveSckSettings(true)">Built-in list</button><button class="btn pri" onclick="saveSckSettings(false)">Save</button></div>${msgDiv('fksk-msg','padding:0 18px 12px')}
    <div class="ch" style="border-top:1px solid var(--line)"><h2 style="font-size:14px">Common cipher keys (CCK)</h2></div>
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-overlap">Overlap after a CCK change, minutes (0–1440): stations still recognise radios with the old CCK on the uplink</label><input class="f" id="fks-overlap" inputmode="numeric" value="${(D.fkcck||{overlap_min:30}).overlap_min}" style="width:110px"></div>
    <button class="btn pri" onclick="saveCckSettings()">Save</button></div>${msgDiv('fkck-msg','padding:0 18px 12px')}</div>`;}
@@ -2102,8 +2124,9 @@ async function saveCckSettings(){const overlap_min=parseInt(v('fks-overlap'),10)
   try{await postJ('/api/fleet/keys/cck/settings',{overlap_min});D.fkcck={...(D.fkcck||{}),overlap_min};setMsg('fkck-msg','ok','Saved');}catch(e){setMsg('fkck-msg','err',e.message);}}
 async function saveSckSettings(builtin){const warn_pct=parseInt(v('fks-warn'),10);
   try{await postJ('/api/fleet/keys/sck/settings',{warn_pct,profiles:builtin?[]:UI.fkProf});const r=await getJ('/api/fleet/keys');D.fksck=r.sck;UI.fkProf=null;setMsg('fksk-msg','ok','Saved');render(true);}catch(e){setMsg('fksk-msg','err',e.message);}}
-async function saveKeysSettings(){const stock=parseInt(v('fks-stock'),10),days=parseInt(v('fks-days'),10);
-  try{await postJ('/api/fleet/keys/settings',{stock,days});D.fkset={stock,days};setMsg('fks-msg','ok','Saved');}catch(e){setMsg('fks-msg','err',e.message);}}
+async function saveKeysSettings(){const stock=parseInt(v('fks-stock'),10),days=parseInt(v('fks-days'),10),set_days=parseInt(v('fks-setdays'),10);
+  if(!(set_days>=1&&set_days<=90))return setMsg('fks-msg','err','A set stays valid 1-90 days');
+  try{await postJ('/api/fleet/keys/settings',{stock,days,set_days});D.fkset={stock,days,set_days};setMsg('fks-msg','ok','Saved');}catch(e){setMsg('fks-msg','err',e.message);}}
 R.fleettpl=()=>{
   const tp=UI.tp;if(!tp)return loading;const f=D.fleet||{};const m=f.can_manage;const v=tp.v;
   const back=`<button class="btn ic" title="Back" aria-label="Back" onclick="show('${tp.back==='fleetcfg'&&UI.fc?'fleetcfg':'fleet'}')">‹</button>`;
@@ -3042,7 +3065,7 @@ function usersCard(){
    ${!D.who.auth?`<div class="svc"><span class="chip w">No users</span> There is no login: anyone who opens this dashboard is an admin. Add an admin user.</div>`:''}
    ${D.who.auth&&!u.from_file?`<div class="svc mut" style="font-size:12.5px">From the config (<code>[dashboard] users</code>) until the first change here.</div>`:''}
    <div class="tw"><table><thead><tr><th>User</th><th>Sees</th><th></th></tr></thead><tbody>
-   ${u.users.map((x,i)=>`<tr><td><b class="m">${esc(x.name)}</b>${x.admin?' <span class="chip a">Admin</span>':''}${x.name===D.who.username?' <span class="mut" style="font-size:12px">(you)</span>':''}</td><td>${pageChips(x.pages,x.admin)}</td><td style="text-align:right;white-space:nowrap"><button class="btn" onclick="editUser(${i})">Edit</button> <button class="btn danger hide-s" onclick="delUser(${i})">Delete</button></td></tr>`).join('')||'<tr><td colspan="3" class="mut">No users</td></tr>'}
+   ${u.users.map((x,i)=>`<tr><td><b class="m">${esc(x.name)}</b>${x.admin?' <span class="chip a">Admin</span>':''}${x.name===D.who.username?' <span class="mut" style="font-size:12px">(you)</span>':''}</td><td>${pageChips(x.pages,x.admin)}${!x.admin&&(x.key_nets||[]).length&&x.pages.includes('fleet_keys')?` <span class="chip w" title="Fleet Control keys only for these networks">keys: ${esc(x.key_nets.join(', '))}</span>`:''}</td><td style="text-align:right;white-space:nowrap"><button class="btn" onclick="editUser(${i})">Edit</button> <button class="btn danger hide-s" onclick="delUser(${i})">Delete</button></td></tr>`).join('')||'<tr><td colspan="3" class="mut">No users</td></tr>'}
    <tr><td><b>Viewer</b><span class="sub">not logged in · ${D.who.open?'open dashboard':'closed dashboard: sees nothing'}</span></td><td>${pageChips(u.viewer,false)}</td><td style="text-align:right"><button class="btn" onclick="editUser('viewer')">Edit</button></td></tr>
    </tbody></table></div>${msgDiv('dusr-msg','padding:12px 18px')}</div>`;
 }
@@ -3059,6 +3082,7 @@ function editUser(i){
    <label style="display:flex;gap:12px;align-items:center"><button type="button" class="tog" role="switch" id="du-admin" aria-checked="${x.admin}" onclick="duAdmin(this)"></button><span><b style="font-size:13.5px">Admin</b><br><span class="mut" style="font-size:12px">Every page, and may change everything</span></span></label>`}
    <div><span class="l" style="display:block">Pages ${viewer?'Viewer':'this user'} sees</span><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:6px">${boxes}</div>
    <div class="mut" style="font-size:12px;margin-top:6px">${esc(PAGES.filter(p=>p[5]).map(p=>p[1]).join(', '))}: admins only. Station addresses are shown to admins only.</div></div>
+   ${viewer?'':`<div><label class="l" for="du-nets">Fleet Control keys only for networks (MCC-MNC, comma separated; empty: every network)</label><input class="f" id="du-nets" value="${esc((x.key_nets||[]).join(', '))}" placeholder="e.g. 232-1" ${x.admin?'disabled':''} spellcheck="false" autocapitalize="off"><div class="mut" style="font-size:12px;margin-top:4px">A user limited to networks sees and changes only their radios, keys and stations; keys kept for any network (*) stay with the others.</div></div>`}
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts">${!viewer&&i>=0?`<button class="btn danger" style="margin-right:auto" onclick="closeSheet();delUser(${i})">${ic('trash')}Delete</button>`:''}<button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveUser(${viewer?"'viewer'":i})">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>{const f=$(i>=0?'du-pw':'du-name');if(f)f.focus();},30);
@@ -3071,7 +3095,8 @@ async function saveUser(i){
   try{
     if(i==='viewer'){D.dusers=await postJ('/api/dashboard-users/viewer',{pages});closeSheet();setMsg('dusr-msg','ok','Viewer pages saved.');}
     else{const name=$('du-name').value.trim(),first=!D.who.auth;
-      D.dusers=await postJ('/api/dashboard-users',{name,password:$('du-pw').value,admin:on('du-admin'),pages});closeSheet();
+      const key_nets=(($('du-nets')||{}).value||'').split(',').map(x=>x.trim()).filter(Boolean);
+      D.dusers=await postJ('/api/dashboard-users',{name,password:$('du-pw').value,admin:on('du-admin'),pages,key_nets});closeSheet();
       setMsg('dusr-msg','ok',`${name} saved.${first?' The dashboard now needs a login.':''}`);
       if(first){await refreshSlow();openLogin(false);}}
     await refreshSlow();

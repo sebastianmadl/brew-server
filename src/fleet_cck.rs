@@ -271,7 +271,7 @@ pub fn note_result(ks: &mut KeyStore, net: &str, la: u16, issi: u32, cck_id: u16
 /// Radios with K seen at a station of the scope.
 fn members(ks: &KeyStore, net: &str, scope: &str, logins: &HashMap<String, String>) -> Vec<u32> {
     let stations: Vec<&String> = scope_stations(ks, net, scope).filter_map(|(id, _)| logins.get(id)).collect();
-    ks.issis().into_iter().filter(|i| ks.seen_of(*i).is_some_and(|(st, _)| stations.iter().any(|l| *l == st))).collect()
+    ks.issis(net).into_iter().filter(|i| ks.seen_of(*i).is_some_and(|(st, _)| stations.iter().any(|l| *l == st))).collect()
 }
 
 /// (radios that hold `cck_id`, radios of the scope).
@@ -544,6 +544,9 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     let next = match req.role.as_str() {
         "next" => true,
         "current" => false,
@@ -593,6 +596,9 @@ pub async fn api_delete(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     let current = req.role.as_deref() == Some("current");
     match delete_key(&mut keystore(&state), &req.net, &req.scope, current) {
         Ok(had) => {
@@ -632,6 +638,9 @@ pub async fn api_activate(State(state): State<Arc<AppState>>, headers: HeaderMap
     if !a.manages_keys() || !a.manages_fleet() {
         return (StatusCode::FORBIDDEN, "This needs the rights Fleet Control keys and Fleet Control management").into_response();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     if req.in_secs > MAX_LEAD_SECS {
         return crate::fleet_keys::bad("at most 7 days ahead");
     }
@@ -657,6 +666,9 @@ pub async fn api_cancel(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     let a = crate::dashboard::access(&state, &headers);
     if !a.manages_keys() || !a.manages_fleet() {
         return (StatusCode::FORBIDDEN, "This needs the rights Fleet Control keys and Fleet Control management").into_response();
+    }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
     }
     match cancel(&mut keystore(&state), &req.net, &req.scope) {
         Ok(had) => {
@@ -705,7 +717,7 @@ mod tests {
     fn store_with_radios(issis: &[u32]) -> KeyStore {
         let mut ks = KeyStore::memory();
         for &i in issis {
-            ks.set_k(i, &K, "manual", None, 0).unwrap();
+            ks.set_k("232-1", i, &K, "manual", None, 0).unwrap();
             ks.note_seen(i, "1000001", 1);
         }
         ks

@@ -33,8 +33,9 @@ pub const X_BREW_EXTENSIONS: &str = "X-Brew-Extensions";
 /// `cell-directory` (`SERVICE_CELL_DIRECTORY`, to a Basestation that also names
 /// it in its capabilities, see `directory_updates`) and `group-access`
 /// (`SERVICE_GROUP_ACCESS`, likewise, see `group_access::updates`) and
-/// `issi-check` (`SERVICE_ISSI_CHECK` answers, see `netlink`).
-pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check";
+/// `issi-check` (`SERVICE_ISSI_CHECK` answers, see `netlink`) and
+/// `ms-security` (`SERVICE_MS_SECURITY`, see [`handle_ms_security`]).
+pub const EXTENSIONS: &str = "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check, ms-security";
 
 /// Capability in `SERVICE_BTS_INFO` (and extension in `X-Brew-Extensions`) for
 /// `SERVICE_CELL_DIRECTORY`.
@@ -183,6 +184,9 @@ pub struct BtsInfo {
 
 #[derive(Default)]
 pub struct CarrierRegistry {
+    /// ISSI -> the connection that reported its security class, the class (1 clear, 2, 3) and
+    /// the KSG number (`SERVICE_MS_SECURITY`).
+    ms_security: HashMap<u32, (ClientId, u8, Option<u8>)>,
     /// Each connection's last announcement, with the order it was made in.
     by_client: HashMap<ClientId, (u64, BtsInfo)>,
     /// The connection serving each carrier.
@@ -292,6 +296,16 @@ impl CarrierRegistry {
         let cell = info.cells.iter().find(|c| c.key.carrier == carrier && c.key.carrier_ext == carrier_ext)?.clone();
         self.ms_cells.insert(issi, (client, cell.key, crate::telemetry::now_ms()));
         Some(cell)
+    }
+
+    /// The security class `client` reported for `issi` (class, KSG number). A report from another
+    /// connection does not count: the radio is wherever its registration is.
+    pub fn ms_security(&self, issi: u32, client: ClientId) -> Option<(u8, Option<u8>)> {
+        self.ms_security.get(&issi).filter(|(id, _, _)| *id == client).map(|(_, c, k)| (*c, *k))
+    }
+
+    pub fn set_ms_security(&mut self, issi: u32, client: ClientId, class: u8, ksg: Option<u8>) {
+        self.ms_security.insert(issi, (client, class, ksg));
     }
 
     /// The cell `client` last reported `issi` on, as long as it still
@@ -486,6 +500,36 @@ pub fn parse_bts_info(json: &str) -> Result<BtsInfo, String> {
         return Err(format!("capability {bad:?} must be 1-{MAX_CAPABILITY_LEN} characters"));
     }
     Ok(BtsInfo { cells, capabilities: msg.capabilities })
+}
+
+#[derive(serde::Deserialize)]
+struct MsSecurityMessage {
+    issi: u32,
+    class: u8,
+    #[serde(default)]
+    ksg: Option<u8>,
+}
+
+/// A `SERVICE_MS_SECURITY` from `source`: the security class the radio is registered with
+/// (Basestation connections only; class 1 to 3, KSG 0 to 15).
+pub async fn handle_ms_security(state: &Arc<AppState>, source: ClientId, json: &str) {
+    let msg = match serde_json::from_str::<MsSecurityMessage>(json) {
+        Ok(m) if (1..=3).contains(&m.class) && m.ksg.is_none_or(|k| k <= 15) => m,
+        Ok(_) => {
+            warn!(%source, json, "MS security service message out of range");
+            return;
+        }
+        Err(e) => {
+            warn!(%source, error = %e, json, "malformed MS security service message");
+            return;
+        }
+    };
+    let mut inner = state.inner.write().await;
+    if inner.clients.get(&source).is_none_or(|c| c.mode != ClientMode::Basestation) {
+        return;
+    }
+    tracing::debug!(%source, issi = msg.issi, class = msg.class, "subscriber security class");
+    inner.carriers.set_ms_security(msg.issi, source, msg.class, if msg.class == 1 { None } else { msg.ksg });
 }
 
 #[derive(serde::Deserialize)]
@@ -875,7 +919,7 @@ mod tests {
     #[test]
     fn extensions_keep_bts_info_and_add_the_new_ones() {
         let offered: Vec<&str> = EXTENSIONS.split(',').map(str::trim).collect();
-        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY, crate::group_access::CAPABILITY, crate::netlink::EXT_ISSI_CHECK]);
+        assert_eq!(offered, ["bts-info", crate::handover::CAPABILITY, "ms-cell", crate::handover::CAPABILITY_MS_MOVED, "ms-reselection", crate::call_restore::CAPABILITY, crate::call_restore::CAPABILITY_HANDOFF, CAPABILITY_CELL_DIRECTORY, crate::group_access::CAPABILITY, crate::netlink::EXT_ISSI_CHECK, "ms-security"]);
     }
 
     #[test]

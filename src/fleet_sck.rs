@@ -126,9 +126,20 @@ pub struct SckNet {
     /// 4.2.4.0 and Table A.96), run as class 2 by a station whose key server is unreachable.
     #[serde(default)]
     pub fallback: Option<SckEntry>,
+    /// The operator switched the class 3 stations of this network to the fallback SCK by hand
+    /// (for example a compromised CCK): who and when. Stations run class 2 on it until cleared.
+    #[serde(default)]
+    pub fallback_forced: Option<Forced>,
     /// Keys each radio confirmed with U-OTAR SCK RESULT, as (SCKN, SCK-VN).
     #[serde(default)]
     pub confirmed: BTreeMap<u32, Vec<(u8, u16)>>,
+}
+
+/// Who switched a network to its fallback SCK, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Forced {
+    pub by: Option<String>,
+    pub at_ms: u64,
 }
 
 /// How many keys a radio model holds (Server settings, editable).
@@ -144,6 +155,12 @@ pub struct Profile {
     pub gck: u8,
     #[serde(default)]
     pub kag: u8,
+    /// Firmware the values were read on (free text, empty: not known).
+    #[serde(default)]
+    pub firmware: String,
+    /// The values are checked against the manufacturer's documents or the radio itself.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// The built-in profiles. MTP6000 series: "Motorola MTP6000 Series Security Specifications"
@@ -156,7 +173,16 @@ pub struct Profile {
 pub fn default_profiles() -> Vec<Profile> {
     ["MTP3550", "MTP6550", "MTP6650", "MTP6750", "MTP850 S", "MTH800"]
         .into_iter()
-        .map(|name| Profile { name: name.into(), tm_sck: 2, dm_sck: 30, gck: 16, kag: 10 })
+        // Verified: the models the security specification names; the others are taken as equal.
+        .map(|name| Profile {
+            name: name.into(),
+            tm_sck: 2,
+            dm_sck: 30,
+            gck: 16,
+            kag: 10,
+            firmware: String::new(),
+            verified: matches!(name, "MTP6550" | "MTP6650" | "MTP6750"),
+        })
         .collect()
 }
 
@@ -225,6 +251,43 @@ pub struct SckRuntime {
     pub stations: HashMap<String, StationSck>,
     /// Last delivery per radio (ms).
     attempts: HashMap<u32, u64>,
+    /// 8f: what happened to each key sent to a radio, by (network, ISSI) and (SCKN, SCK-VN):
+    /// sent, confirmed or rejected (U-OTAR SCK RESULT, EN 300 392-7 clause 4.5.2). Not stored:
+    /// the confirmed keys are kept in [`SckNet::confirmed`].
+    delivery: HashMap<(String, u32), BTreeMap<(u8, u16), Delivery>>,
+}
+
+/// One key on its way to a radio (8f).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Delivery {
+    /// `sent`, `confirmed`, `rejected`.
+    pub state: &'static str,
+    pub at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Keys sealed for `issi` went to its station.
+pub fn note_sent(ks: &mut KeyStore, net: &str, issi: u32, keys: &[SealedSckWire], now_ms: u64) {
+    let map = ks.sck_rt.delivery.entry((net.to_owned(), issi)).or_default();
+    for k in keys {
+        map.insert((k.sckn, k.vn), Delivery { state: "sent", at_ms: now_ms, detail: None });
+    }
+}
+
+/// The radio's answer for one key.
+pub fn note_answer(ks: &mut KeyStore, net: &str, issi: u32, (sckn, vn): (u8, u16), ok: bool, detail: Option<String>, now_ms: u64) {
+    let d = Delivery { state: if ok { "confirmed" } else { "rejected" }, at_ms: now_ms, detail: if ok { None } else { detail } };
+    ks.sck_rt.delivery.entry((net.to_owned(), issi)).or_default().insert((sckn, vn), d);
+}
+
+/// The delivery state of each key of `issi` this run knows about.
+pub fn deliveries(ks: &KeyStore, net: &str, issi: u32) -> Vec<serde_json::Value> {
+    ks.sck_rt
+        .delivery
+        .get(&(net.to_owned(), issi))
+        .map(|m| m.iter().map(|((n, v), d)| serde_json::json!({"sckn": n, "vn": v, "state": d.state, "at_ms": d.at_ms, "detail": d.detail})).collect())
+        .unwrap_or_default()
 }
 
 pub fn net_name(mcc: u16, mnc: u16) -> String {
@@ -379,6 +442,9 @@ pub fn set_fallback(ks: &mut KeyStore, net: &str, sckn: u8, vn: u16, key: Option
 pub fn delete_fallback(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     ks.ready()?;
     let Some(n) = ks.sck_mut().nets.get_mut(net) else { return Ok(false) };
+    if n.fallback_forced.is_some() {
+        return Err("the stations run this fallback key now; end the fallback first".into());
+    }
     let Some(old) = n.fallback.take() else { return Ok(false) };
     let id = old.id();
     n.confirmed.values_mut().for_each(|v| v.retain(|k| *k != id));
@@ -389,6 +455,34 @@ pub fn delete_fallback(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     }
     ks.save();
     Ok(true)
+}
+
+/// Switch the class 3 stations of `net` to the fallback SCK (`on`) or back. Needs a fallback
+/// SCK. Returns whether anything changed.
+pub fn set_forced(ks: &mut KeyStore, net: &str, on: bool, by: Option<&str>, now_ms: u64) -> Result<bool, String> {
+    ks.ready()?;
+    check_net(net)?;
+    let n = ks.sck_mut().nets.get_mut(net);
+    if on {
+        let n = n.ok_or("this network has no fallback SCK")?;
+        if n.fallback.is_none() {
+            return Err("this network has no fallback SCK".into());
+        }
+        if n.fallback_forced.is_some() {
+            return Ok(false);
+        }
+        n.fallback_forced = Some(Forced { by: by.map(str::to_owned), at_ms: now_ms });
+    } else {
+        let Some(n) = n.filter(|n| n.fallback_forced.is_some()) else { return Ok(false) };
+        n.fallback_forced = None;
+    }
+    ks.save();
+    Ok(true)
+}
+
+/// True while the operator keeps `net` on its fallback SCK.
+pub fn forced_of(ks: &KeyStore, net: &str) -> bool {
+    ks.sck().nets.get(net).is_some_and(|n| n.fallback_forced.is_some())
 }
 
 /// The fallback SCK of `net`.
@@ -403,7 +497,9 @@ pub fn current_in_use(ks: &KeyStore, net: &str) -> bool {
     ks.sck_rt.stations.values().any(|st| st.net == net && st.active.as_ref().is_some_and(|a| cur.same_as(a)))
 }
 
-/// The keys `issi` should hold: the current one, and the next one when its model has room.
+/// The keys `issi` should hold: the current one, and the next one when its model has room. A
+/// radio without a known model gets the current key only (8f: a key it has no room for would
+/// overwrite one it needs).
 /// Nothing while no station runs the current key: a wrong current key would otherwise overwrite
 /// the key the radios use today (they keep keys by number).
 ///
@@ -413,7 +509,7 @@ pub fn current_in_use(ks: &KeyStore, net: &str) -> bool {
 fn deliverable(ks: &KeyStore, net: &str, issi: u32) -> Vec<SckEntry> {
     let Some(n) = ks.sck().nets.get(net) else { return Vec::new() };
     let in_use = current_in_use(ks, net);
-    let room = ks.sck().profile(ks.model_of(issi)).map_or(u8::MAX, |p| p.tm_sck) as usize;
+    let room = ks.sck().profile(ks.model_of(net, issi)).map_or(1, |p| p.tm_sck) as usize;
     let mut out: Vec<SckEntry> = Vec::new();
     if in_use {
         out.extend(n.current.iter().cloned());
@@ -434,8 +530,8 @@ pub fn missing(ks: &KeyStore, net: &str, issi: u32) -> Vec<SckEntry> {
 }
 
 /// Seal `keys` for `issi` under a fresh session key (clause 4.5.2.2). `None` without K.
-pub fn seal_for(ks: &KeyStore, issi: u32, keys: &[SckEntry]) -> Option<(String, Vec<SealedSckWire>)> {
-    let k = ks.k_of(issi)?;
+pub fn seal_for(ks: &KeyStore, net: &str, issi: u32, keys: &[SckEntry]) -> Option<(String, Vec<SealedSckWire>)> {
+    let k = ks.k_of(net, issi)?;
     let rso = random::<10>();
     let kso = crate::taa1::ta41(&k, &rso);
     let sealed = keys
@@ -471,13 +567,13 @@ pub fn note_result(ks: &mut KeyStore, net: &str, issi: u32, sckn: u8, vn: u16, o
 }
 
 /// Radios of `net` with K: seen at one of its stations (Brew logins).
-fn members(ks: &KeyStore, logins: &[String]) -> Vec<u32> {
-    ks.issis().into_iter().filter(|i| ks.seen_of(*i).is_some_and(|(st, _)| logins.iter().any(|l| l == st))).collect()
+fn members(ks: &KeyStore, net: &str, logins: &[String]) -> Vec<u32> {
+    ks.issis(net).into_iter().filter(|i| ks.seen_of(*i).is_some_and(|(st, _)| logins.iter().any(|l| l == st))).collect()
 }
 
 /// (radios that hold the key, radios of the net).
 pub fn coverage(ks: &KeyStore, net: &str, id: (u8, u16), logins: &[String]) -> (usize, usize) {
-    let m = members(ks, logins);
+    let m = members(ks, net, logins);
     let confirmed = ks.sck().nets.get(net).map(|n| &n.confirmed);
     let have = m.iter().filter(|i| confirmed.and_then(|c| c.get(i)).is_some_and(|v| v.contains(&id))).count();
     (have, m.len())
@@ -632,6 +728,9 @@ pub fn on_state(state: &Arc<AppState>, id: &str, active: Option<SckRef>, from_co
     };
     if let Some((sckn, vn)) = catch_up {
         tracing::info!(station = %id, sckn, vn, "station missed an SCK change; switching it now");
+        crate::fleet_keys::log_station_once(state, id, "keys_auto", format!("catchup/{id}/{sckn}/{vn}"), 0, |label| {
+            format!("Basestation {label} missed an SCK change: switched it to SCK {sckn} version {vn} automatically")
+        });
         crate::fleet_keys::send(state, id, ControlCommand::SckActivate { sckn, vn, at_ms: crate::fleet::now_ms() });
     }
     state.monitor.emit("fleet_changed", serde_json::json!({"keys": true}));
@@ -645,13 +744,19 @@ pub fn on_demand(state: &Arc<AppState>, id: &str, issi: u32, sckns: &[u8]) {
         let mut ks = keystore(state);
         let wanted: Vec<SckEntry> = deliverable(&ks, &s.net, issi).into_iter().filter(|e| sckns.is_empty() || sckns.contains(&e.sckn)).collect();
         ks.sck_rt.attempts.insert(issi, crate::fleet::now_ms());
-        match seal_for(&ks, issi, &wanted) {
-            Some((rso, sealed)) if !wanted.is_empty() => (rso, sealed),
+        match seal_for(&ks, &s.net, issi, &wanted) {
+            Some((rso, sealed)) if !wanted.is_empty() => {
+                note_sent(&mut ks, &s.net, issi, &sealed, crate::fleet::now_ms());
+                (rso, sealed)
+            }
             _ => (hex(&[0u8; 10]), Vec::new()),
         }
     };
     if sealed.is_empty() {
         tracing::info!(station = %id, issi, "SCK request rejected (no K or no such key)");
+        crate::fleet_keys::log_station_once(state, id, "keys_refused", format!("sck/{id}/{issi}"), 3600 * 1000, |label| {
+            format!("Basestation {label}: SCK request of ISSI {issi} rejected (no K or no such key on this server)")
+        });
     }
     crate::fleet_keys::send(state, id, ControlCommand::SckSealed { issi, rso, keys: sealed });
 }
@@ -659,7 +764,11 @@ pub fn on_demand(state: &Arc<AppState>, id: &str, issi: u32, sckns: &[u8]) {
 pub fn on_result(state: &Arc<AppState>, id: &str, issi: u32, sckn: u8, vn: u16, ok: bool, detail: Option<String>) {
     let nets = station_nets(state);
     let Some(s) = nets.get(id) else { return };
-    keystore(state).sck_mut_note(&s.net, issi, sckn, vn, ok);
+    {
+        let mut ks = keystore(state);
+        ks.sck_mut_note(&s.net, issi, sckn, vn, ok);
+        note_answer(&mut ks, &s.net, issi, (sckn, vn), ok, detail.clone(), crate::fleet::now_ms());
+    }
     if !ok {
         let names = crate::control::station_names(state);
         let why = detail.unwrap_or_default();
@@ -702,17 +811,25 @@ pub fn tick(state: &Arc<AppState>, registered: &[(u32, String)]) {
             let job = {
                 let mut ks = keystore(state);
                 let due = ks.sck_rt.attempts.get(&issi).is_none_or(|t| now.saturating_sub(*t) >= RETRY_MS);
-                let miss = if due && ks.has_k(issi) { missing(&ks, &s.net, issi) } else { Vec::new() };
+                let miss = if due && ks.has_k(&s.net, issi) { missing(&ks, &s.net, issi) } else { Vec::new() };
                 if miss.is_empty() {
                     None
                 } else {
                     ks.sck_rt.attempts.insert(issi, now);
                     // Send every deliverable key: a radio with two slots gets both in one PDU.
                     let all = deliverable(&ks, &s.net, issi);
-                    seal_for(&ks, issi, &all)
+                    let sealed = seal_for(&ks, &s.net, issi, &all);
+                    if let Some((_, keys)) = &sealed {
+                        note_sent(&mut ks, &s.net, issi, keys, now);
+                    }
+                    sealed
                 }
             };
             if let Some((rso, keys)) = job {
+                let list = keys.iter().map(|k| format!("SCK {} v{}", k.sckn, k.vn)).collect::<Vec<_>>().join(", ");
+                crate::fleet_keys::log_station_once(state, id, "keys_auto", format!("sckauto/{issi}/{list}"), 3600 * 1000, |label| {
+                    format!("Basestation {label}: {list} sent to ISSI {issi} automatically")
+                });
                 crate::fleet_keys::send(state, id, ControlCommand::SckSealed { issi, rso, keys });
             }
         }
@@ -750,12 +867,12 @@ pub fn view(ks: &KeyStore, nets: &HashMap<String, StationNet>, now_ms: u64) -> s
                 })
                 .collect();
             let radios: serde_json::Map<String, serde_json::Value> = ks
-                .issis()
+                .issis(net)
                 .into_iter()
                 .filter(|i| n.confirmed.contains_key(i) || ks.seen_of(*i).is_some_and(|(st, _)| logins.iter().any(|l| l == st)))
                 .map(|i| {
-                    let room = ks.sck().profile(ks.model_of(i)).map(|p| p.tm_sck);
-                    (i.to_string(), serde_json::json!({"confirmed": n.confirmed.get(&i).cloned().unwrap_or_default(), "room": room, "missing": missing(ks, net, i).iter().map(|e| e.sckn).collect::<Vec<_>>()}))
+                    let room = ks.sck().profile(ks.model_of(net, i)).map(|p| p.tm_sck);
+                    (i.to_string(), serde_json::json!({"confirmed": n.confirmed.get(&i).cloned().unwrap_or_default(), "room": room, "missing": missing(ks, net, i).iter().map(|e| e.sckn).collect::<Vec<_>>(), "delivery": deliveries(ks, net, i)}))
                 })
                 .collect();
             (
@@ -768,6 +885,7 @@ pub fn view(ks: &KeyStore, nets: &HashMap<String, StationNet>, now_ms: u64) -> s
                     "coverage_next": cov(&n.next),
                     "fallback": n.fallback.as_ref().map(entry),
                     "coverage_fallback": cov(&n.fallback),
+                    "fallback_forced": n.fallback_forced,
                     "current_in_use": current_in_use(ks, net),
                     "stations": stations,
                     "radios": radios,
@@ -801,6 +919,9 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
     let a = crate::dashboard::access(&state, &headers);
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
+    }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
     }
     let next = match req.role.as_str() {
         "next" => true,
@@ -856,6 +977,9 @@ pub async fn api_delete(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     let current = req.role == "current";
     let fallback = req.role == "fallback";
     let res = if fallback {
@@ -875,6 +999,44 @@ pub async fn api_delete(State(state): State<Arc<AppState>>, headers: HeaderMap, 
                 }
             }
             Json(serde_json::json!({"ok": true, "removed": had})).into_response()
+        }
+        Err(e) => crate::fleet_keys::bad(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ForceReq {
+    net: String,
+    on: bool,
+}
+
+/// `POST /api/fleet/keys/sck/fallback` (Fleet Control keys and management): the operator
+/// switches the class 3 stations of a network to its fallback SCK (EN 300 392-7 clauses 4.2.4.0,
+/// 4.5.6.2), or back to class 3 (clause 4.5.6.3).
+pub async fn api_force(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(req): Json<ForceReq>) -> Response {
+    let a = crate::dashboard::access(&state, &headers);
+    if !a.manages_keys() || !a.manages_fleet() {
+        return (axum::http::StatusCode::FORBIDDEN, "This needs the rights Fleet Control keys and Fleet Control management").into_response();
+    }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
+    let res = set_forced(&mut keystore(&state), &req.net, req.on, a.user.as_deref(), crate::fleet::now_ms());
+    match res {
+        Ok(changed) => {
+            if changed {
+                crate::fleet_keys::log(
+                    &state,
+                    a.user.as_deref(),
+                    if req.on {
+                        format!("network {}: fallback by the operator, class 3 stations run class 2 on the fallback SCK", req.net)
+                    } else {
+                        format!("network {}: fallback by the operator ended, class 3 again", req.net)
+                    },
+                );
+                crate::fleet_fallback::push_net(&state, &req.net);
+            }
+            Json(serde_json::json!({"ok": true, "changed": changed})).into_response()
         }
         Err(e) => crate::fleet_keys::bad(e),
     }
@@ -908,6 +1070,9 @@ pub async fn api_activate(State(state): State<Arc<AppState>>, headers: HeaderMap
     if !a.manages_keys() || !a.manages_fleet() {
         return (StatusCode::FORBIDDEN, "This needs the rights Fleet Control keys and Fleet Control management").into_response();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     if req.in_secs > MAX_LEAD_SECS {
         return crate::fleet_keys::bad("at most 7 days ahead");
     }
@@ -936,6 +1101,9 @@ pub async fn api_cancel(State(state): State<Arc<AppState>>, headers: HeaderMap, 
     if !a.manages_keys() || !a.manages_fleet() {
         return (StatusCode::FORBIDDEN, "This needs the rights Fleet Control keys and Fleet Control management").into_response();
     }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
+    }
     let res = cancel(&mut keystore(&state), &req.net);
     match res {
         Ok(had) => {
@@ -963,6 +1131,9 @@ pub async fn api_send(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
     let a = crate::dashboard::access(&state, &headers);
     if !a.manages_keys() {
         return crate::fleet_keys::forbidden();
+    }
+    if let Some(r) = crate::fleet_keys::net_refused(&state, &a, &req.net) {
+        return r;
     }
     {
         let mut ks = keystore(&state);
@@ -1078,7 +1249,8 @@ mod tests {
     fn store_with_radios(issis: &[u32]) -> KeyStore {
         let mut ks = KeyStore::memory();
         for &i in issis {
-            ks.set_k(i, &K, "manual", None, 0).unwrap();
+            ks.set_k("232-1", i, &K, "manual", None, 0).unwrap();
+            ks.set_model("232-1", i, "MTP6650").unwrap();
             ks.note_seen(i, "1000001", 1);
         }
         ks
@@ -1116,8 +1288,8 @@ mod tests {
         station_runs(&mut ks, "232-1", [0x11; 10]);
         assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![31, 32]);
         // A radio with one slot keeps the key in use.
-        ks.sck_mut().profiles = Some(vec![Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0 }]);
-        ks.set_model(101, "one").unwrap();
+        ks.sck_mut().profiles = Some(vec![Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0, firmware: String::new(), verified: false }]);
+        ks.set_model("232-1", 101, "one").unwrap();
         assert_eq!(missing(&ks, "232-1", 101).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![31]);
         // Removing the current key keeps the fallback key.
         ks.sck_rt.stations.clear();
@@ -1154,7 +1326,7 @@ mod tests {
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
         let keys = missing(&ks, "232-1", 100);
         assert_eq!(keys.iter().map(|e| e.id()).collect::<Vec<_>>(), vec![(1, 5), (2, 6)]);
-        let (rso, sealed) = seal_for(&ks, 100, &keys).unwrap();
+        let (rso, sealed) = seal_for(&ks, "232-1", 100, &keys).unwrap();
         let kso = crate::taa1::ta41(&K, &unhex_n::<10>(&rso).unwrap());
         for (s, want) in sealed.iter().zip([[0x11; 10], [0x22; 10]]) {
             let ssck = unhex_n::<15>(&s.ssck).unwrap();
@@ -1162,7 +1334,23 @@ mod tests {
             let wrong = crate::taa1::ta41(&[0x58; 16], &unhex_n::<10>(&rso).unwrap());
             assert!(crate::taa1::otar::ta52(&ssck, &wrong, s.vn).is_err(), "another radio's K cannot open it");
         }
-        assert!(seal_for(&ks, 200, &keys).is_none(), "no K: nothing to seal");
+        assert!(seal_for(&ks, "232-1", 200, &keys).is_none(), "no K: nothing to seal");
+    }
+
+    #[test]
+    fn each_key_sent_to_a_radio_shows_sent_confirmed_or_rejected() {
+        let mut ks = store_with_radios(&[100]);
+        let sealed = |n: u8, v: u16| SealedSckWire { sckn: n, vn: v, ssck: String::new() };
+        note_sent(&mut ks, "232-1", 100, &[sealed(1, 5), sealed(2, 6)], 10);
+        let d = deliveries(&ks, "232-1", 100);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|x| x["state"] == "sent" && x["at_ms"] == 10));
+        note_answer(&mut ks, "232-1", 100, (1, 5), true, None, 20);
+        note_answer(&mut ks, "232-1", 100, (2, 6), false, Some("no room".into()), 21);
+        let d = deliveries(&ks, "232-1", 100);
+        assert_eq!((d[0]["state"].as_str(), d[1]["state"].as_str()), (Some("confirmed"), Some("rejected")));
+        assert_eq!(d[1]["detail"], "no room");
+        assert!(deliveries(&ks, "232-2", 100).is_empty(), "per network");
     }
 
     #[test]
@@ -1171,10 +1359,17 @@ mod tests {
         set_key(&mut ks, "232-1", false, 1, 5, Some([0x11; 10]), None, 0).unwrap();
         station_runs(&mut ks, "232-1", [0x11; 10]);
         set_key(&mut ks, "232-1", true, 2, 6, Some([0x22; 10]), None, 0).unwrap();
-        ks.sck_mut().profiles = Some(vec![Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0 }]);
-        ks.set_model(101, "one").unwrap();
+        let mut list = default_profiles();
+        list.push(Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0, firmware: String::new(), verified: false });
+        ks.sck_mut().profiles = Some(list);
+        ks.set_model("232-1", 101, "one").unwrap();
         assert_eq!(missing(&ks, "232-1", 100).len(), 2);
         assert_eq!(missing(&ks, "232-1", 101).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![1]);
+        // A radio without a known model is treated like one slot (8f).
+        ks.set_model("232-1", 100, "").unwrap();
+        assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![1]);
+        ks.set_model("232-1", 100, "Unknown 9000").unwrap();
+        assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![1]);
     }
 
     #[test]

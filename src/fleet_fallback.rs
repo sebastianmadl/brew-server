@@ -41,6 +41,12 @@ pub struct FallbackEpisode {
     pub class2: bool,
     #[serde(default)]
     pub temporary: u32,
+    /// Started by the operator (`/api/fleet/keys/sck/fallback`).
+    #[serde(default)]
+    pub manual: bool,
+    /// 8f, reason of an automatic fallback: the station lost this server at (Unix ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_ms: Option<u64>,
 }
 
 /// What a station last reported (not stored).
@@ -81,6 +87,7 @@ pub fn command(ks: &crate::fleet_keys::KeyStore, net: &str) -> ControlCommand {
         key: crate::fleet_sck::fallback_of(ks, net),
         after_s: d.fallback_min.clamp(1, 60) as u32 * 60,
         reauth_per_s: d.reauth_per_s.clamp(1, 20),
+        forced: crate::fleet_sck::forced_of(ks, net),
     }
 }
 
@@ -131,9 +138,18 @@ fn new_log_lines(rt: &mut FallbackRuntime, id: &str, episodes: &[FallbackEpisode
     let mut out = Vec::new();
     let when = utc;
     for e in episodes {
-        let mode = if e.class2 { "class 2 on the fallback SCK" } else { "same security class" };
+        let mode = match (e.class2, e.manual) {
+            (true, true) => "class 2 on the fallback SCK, by the operator",
+            (true, false) => "class 2 on the fallback SCK",
+            _ => "same security class",
+        };
+        let why = match (e.manual, e.lost_ms) {
+            (true, None) => "asked for on this server".to_owned(),
+            (_, Some(lost)) => format!("this server unreachable since {} and a radio without data sets", when(lost)),
+            (false, None) => "this server was unreachable".to_owned(),
+        };
         if rt.logged.insert((id.to_owned(), e.from_ms, false)) && e.to_ms.is_none() {
-            out.push(format!("in key fallback since {} ({mode}): this server was unreachable", when(e.from_ms)));
+            out.push(format!("in key fallback since {} ({mode}): {why}", when(e.from_ms)));
         }
         if let Some(to) = e.to_ms.filter(|_| rt.logged.insert((id.to_owned(), e.from_ms, true))) {
             out.push(format!(
@@ -184,16 +200,39 @@ mod tests {
     #[test]
     fn the_command_carries_the_networks_fallback_sck_and_the_settings() {
         let mut ks = KeyStore::memory();
-        let ControlCommand::FallbackKeys { key, after_s, reauth_per_s } = command(&ks, "232-1") else { panic!() };
+        let ControlCommand::FallbackKeys { key, after_s, reauth_per_s, .. } = command(&ks, "232-1") else { panic!() };
         assert!(key.is_none());
         assert_eq!((after_s, reauth_per_s), (300, 2), "defaults: 5 min, 2 radios per second");
         crate::fleet_sck::set_fallback(&mut ks, "232-1", 31, 4, Some([0x5A; 10]), None, 0).unwrap();
         ks.sck_mut().fallback_min = 10;
         ks.sck_mut().reauth_per_s = 5;
-        let ControlCommand::FallbackKeys { key, after_s, reauth_per_s } = command(&ks, "232-1") else { panic!() };
+        let ControlCommand::FallbackKeys { key, after_s, reauth_per_s, .. } = command(&ks, "232-1") else { panic!() };
         assert_eq!(key.map(|k| (k.sckn, k.vn, k.key)), Some((31, 4, "5a".repeat(10))));
         assert_eq!((after_s, reauth_per_s), (600, 5));
         assert!(matches!(command(&ks, "232-2"), ControlCommand::FallbackKeys { key: None, .. }), "per network");
+    }
+
+    #[test]
+    fn the_operator_switches_a_network_to_its_fallback_sck_and_back() {
+        let mut ks = KeyStore::memory();
+        assert!(crate::fleet_sck::set_forced(&mut ks, "232-1", true, None, 0).is_err(), "needs a fallback SCK");
+        crate::fleet_sck::set_fallback(&mut ks, "232-1", 31, 4, Some([0x5A; 10]), None, 0).unwrap();
+        assert!(crate::fleet_sck::set_forced(&mut ks, "232-1", true, Some("seb"), 5).unwrap());
+        assert!(!crate::fleet_sck::set_forced(&mut ks, "232-1", true, Some("seb"), 6).unwrap(), "already on");
+        assert!(matches!(command(&ks, "232-1"), ControlCommand::FallbackKeys { forced: true, .. }));
+        assert!(matches!(command(&ks, "232-2"), ControlCommand::FallbackKeys { forced: false, .. }), "per network");
+        assert!(crate::fleet_sck::delete_fallback(&mut ks, "232-1").is_err(), "the stations run it now");
+        assert!(crate::fleet_sck::set_forced(&mut ks, "232-1", false, None, 7).unwrap());
+        assert!(matches!(command(&ks, "232-1"), ControlCommand::FallbackKeys { forced: false, .. }));
+        assert!(crate::fleet_sck::delete_fallback(&mut ks, "232-1").unwrap());
+    }
+
+    #[test]
+    fn an_operator_fallback_is_logged_as_such() {
+        let mut rt = FallbackRuntime::default();
+        let e = FallbackEpisode { from_ms: 1_000, to_ms: None, class2: true, temporary: 0, manual: true, lost_ms: None };
+        let lines = new_log_lines(&mut rt, "bs1", &[e]);
+        assert!(lines[0].contains("by the operator") && lines[0].contains("asked for on this server"), "{lines:?}");
     }
 
     #[test]
@@ -206,10 +245,12 @@ mod tests {
     #[test]
     fn each_period_is_logged_once_at_start_and_once_at_the_end() {
         let mut rt = FallbackRuntime::default();
-        let open = FallbackEpisode { from_ms: 1_000, to_ms: None, class2: true, temporary: 0 };
-        assert_eq!(new_log_lines(&mut rt, "bs1", &[open.clone()]).len(), 1);
+        let open = FallbackEpisode { from_ms: 1_000, to_ms: None, class2: true, temporary: 0, manual: false, lost_ms: Some(0) };
+        let lines = new_log_lines(&mut rt, "bs1", &[open.clone()]);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("unreachable since 1970-01-01 00:00:00 UTC"), "the reason: {lines:?}");
         assert!(new_log_lines(&mut rt, "bs1", &[open]).is_empty(), "reported again: not logged twice");
-        let closed = FallbackEpisode { from_ms: 1_000, to_ms: Some(61_000), class2: true, temporary: 3 };
+        let closed = FallbackEpisode { from_ms: 1_000, to_ms: Some(61_000), class2: true, temporary: 3, manual: false, lost_ms: Some(0) };
         let lines = new_log_lines(&mut rt, "bs1", &[closed.clone()]);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("3 temporary"), "{lines:?}");
@@ -222,8 +263,8 @@ mod tests {
 
     #[test]
     fn wire_shapes_match_the_station() {
-        let cmd = ControlCommand::FallbackKeys { key: None, after_s: 300, reauth_per_s: 2 };
-        assert_eq!(cmd.to_wire_json(), serde_json::json!({"FallbackKeys": {"key": null, "after_s": 300, "reauth_per_s": 2}}));
+        let cmd = ControlCommand::FallbackKeys { key: None, after_s: 300, reauth_per_s: 2, forced: true };
+        assert_eq!(cmd.to_wire_json(), serde_json::json!({"FallbackKeys": {"key": null, "after_s": 300, "reauth_per_s": 2, "forced": true}}));
         let r: crate::control::ControlResponse = serde_json::from_value(serde_json::json!({"FallbackState": {
             "phase": "fallback", "key": {"sckn": 31, "vn": 4, "check": "AB"},
             "episodes": [{"from_ms": 5, "to_ms": null, "class2": true, "temporary": 0}]

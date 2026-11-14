@@ -4,6 +4,24 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8f: changes after the key management review.**
+  Worked out with Patrick, OE1LHP. Fallback by the operator (*Fallback now…* on
+  the Keys page: class 3 stations run class 2 on the fallback SCK and stay in
+  normal mode until it is ended). The reason of an automatic fallback is shown,
+  and a cell returns only after the server has been reachable for a minute.
+  K per network (`MCC-MNC/ISSI`, older keys kept for any network) with a
+  network selector on the Keys page and `net` in the key API. Data sets expire
+  (default 7 days, 1 to 90) and carry the K revision. Two-step switch to server
+  keys: refused while K is missing for one of the station's radios, the station
+  keeps its own keys until the first server authentication. Device profiles
+  with firmware and verified; radios of unknown model get the current SCK only.
+  SCK delivery per radio (sent / confirmed / rejected). Refused accesses,
+  refused station requests and automatic actions go into the change log.
+  Fleet Control key rights can be limited to networks per user. Radios page:
+  new column *Security* (security class and TEA per radio, from stations with
+  the new Brew extension `ms-security`, service 0x25) and apps / consoles in
+  their own card *Terminal logins*. See `docs/Fleet-Control.md` 13.12 and
+  `docs/Brew-Extensions.md` 12d.
 - **Fleet Control, phase 8d: key fallback while the server is away.**
   A fallback SCK per network (SCKN 31/32, EN 300 392-7 clause 4.2.4.0) that
   reaches the radios like the class 2 SCKs, plus two settings: minutes without

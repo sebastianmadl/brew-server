@@ -198,6 +198,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/fleet/keys/source", axum::routing::post(crate::fleet_keys::api_source))
         .route("/api/fleet/keys/sck/set", axum::routing::post(crate::fleet_sck::api_set))
         .route("/api/fleet/keys/sck/delete", axum::routing::post(crate::fleet_sck::api_delete))
+        .route("/api/fleet/keys/sck/fallback", axum::routing::post(crate::fleet_sck::api_force))
         .route("/api/fleet/keys/sck/activate", axum::routing::post(crate::fleet_sck::api_activate))
         .route("/api/fleet/keys/sck/cancel", axum::routing::post(crate::fleet_sck::api_cancel))
         .route("/api/fleet/keys/sck/send", axum::routing::post(crate::fleet_sck::api_send))
@@ -256,11 +257,37 @@ async fn require_basic(State(state): State<Arc<AppState>>, request: Request, nex
     // settings -> Users); admin routes are checked by `require_admin`.
     let needed = need(&path);
     if needed != Need::Admin && !allowed(&a, needed) {
-        return denied(&a, &cfg.realm, request.headers());
+        let res = denied(&a, &cfg.realm, request.headers());
+        log_key_refusal(&state, &a, &path, res.status());
+        return res;
     }
     let admin = a.admin;
     let res = next.run(request).await;
+    // Refusals inside the key routes (missing rights checked by the handler).
+    log_key_refusal(&state, &a, &path, res.status());
     if admin { res } else { scrub(&path, res).await }
+}
+
+/// 8f: a refused access to the key management (`/api/fleet/keys…`) goes into the change log,
+/// at most once a minute per login and route.
+fn log_key_refusal(state: &Arc<AppState>, a: &crate::dash_users::Access, path: &str, status: StatusCode) {
+    if status != StatusCode::FORBIDDEN || !path.starts_with("/api/fleet/keys") {
+        return;
+    }
+    static LAST: std::sync::Mutex<Option<HashMap<(String, String), u64>>> = std::sync::Mutex::new(None);
+    let now = crate::fleet::now_ms();
+    let who = a.user.clone().unwrap_or_else(|| "(no login)".into());
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let map = last.get_or_insert_with(HashMap::new);
+        map.retain(|_, t| now.saturating_sub(*t) < 60_000);
+        if map.contains_key(&(who.clone(), path.to_owned())) {
+            return;
+        }
+        map.insert((who.clone(), path.to_owned()), now);
+    }
+    tracing::warn!(user = %who, path, "key management: access refused");
+    crate::fleet_keys::log(state, a.user.as_deref(), format!("access refused: {who} has not the rights for {path}"));
 }
 
 /// Guards the privileged sub-router (see `run`): only usernames listed in
@@ -288,7 +315,10 @@ async fn require_admin(State(state): State<Arc<AppState>>, request: Request, nex
         return scrub(&path, res).await;
     }
     match a.user {
-        Some(_) => (StatusCode::FORBIDDEN, "Forbidden: this needs an admin of the dashboard\n").into_response(),
+        Some(_) => {
+            log_key_refusal(&state, &a, &path, StatusCode::FORBIDDEN);
+            (StatusCode::FORBIDDEN, "Forbidden: this needs an admin of the dashboard\n").into_response()
+        }
         None if crate::dashboard_auth::from_ui(request.headers()) => (StatusCode::UNAUTHORIZED, "login required").into_response(),
         None => basic_challenge(&state.config.dashboard.realm),
     }
@@ -340,7 +370,7 @@ fn need(path: &str) -> Need {
         | "/api/fleet/templates/delete" | "/api/fleet/bulk/preview" | "/api/fleet/bulk/start" | "/api/fleet/bulk/cancel" | "/api/fleet/alarms/ack" => &["fleet_manage"],
         "/api/fleet/keys" | "/api/fleet/keys/set" | "/api/fleet/keys/generate" | "/api/fleet/keys/import" | "/api/fleet/keys/delete"
         | "/api/fleet/keys/model" | "/api/fleet/keys/sck/set" | "/api/fleet/keys/sck/delete" | "/api/fleet/keys/sck/send" | "/api/fleet/keys/cck/set" | "/api/fleet/keys/cck/delete" => &["fleet_keys"],
-        "/api/fleet/keys/source" | "/api/fleet/keys/sck/activate" | "/api/fleet/keys/sck/cancel" | "/api/fleet/keys/cck/activate" | "/api/fleet/keys/cck/cancel" => &["fleet_keys", "fleet_manage"],
+        "/api/fleet/keys/source" | "/api/fleet/keys/sck/fallback" | "/api/fleet/keys/sck/activate" | "/api/fleet/keys/sck/cancel" | "/api/fleet/keys/cck/activate" | "/api/fleet/keys/cck/cancel" => &["fleet_keys", "fleet_manage"],
         _ => return Need::Admin,
     })
 }
@@ -1202,6 +1232,8 @@ pub async fn connections_snapshot(State(state): State<Arc<AppState>>) -> Json<se
                     "basestation_addr": basestation.and_then(|c| c.remote_addr).map(|a| a.to_string()),
                     // The cell the station reported the radio on (`SERVICE_MS_CELL`).
                     "cell": ms_cell_json(&inner, *issi, s.client_id),
+                    // The security class the station reported (`SERVICE_MS_SECURITY`).
+                    "security": inner.carriers.ms_security(*issi, s.client_id).map(|(class, ksg)| serde_json::json!({"class": class, "ksg": ksg})),
                     "groups": s.groups.iter().copied().collect::<Vec<_>>(),
                 })
             }).collect();
@@ -2090,6 +2122,11 @@ mod tests {
         }
         packet(protocol::build_service(protocol::SERVICE_MS_CELL, r#"{"issi":7,"carrier":1530,"carrier_ext":268}"#), bs).await;
         packet(protocol::build_service(protocol::SERVICE_MS_CELL, r#"{"issi":9,"carrier":1528,"carrier_ext":268}"#), bs).await;
+        // Security classes (`ms-security`): class 1 carries no KSG, out of range is ignored.
+        packet(protocol::build_service(protocol::SERVICE_MS_SECURITY, r#"{"issi":7,"class":3,"ksg":1}"#), bs).await;
+        packet(protocol::build_service(protocol::SERVICE_MS_SECURITY, r#"{"issi":8,"class":1,"ksg":1}"#), bs).await;
+        packet(protocol::build_service(protocol::SERVICE_MS_SECURITY, r#"{"issi":9,"class":4}"#), bs).await;
+        packet(protocol::build_service(protocol::SERVICE_MS_SECURITY, r#"{"issi":9,"class":2,"ksg":0}"#), bs).await;
         // 9 moves to another station that reports no cell: its old cell no longer counts.
         packet(protocol::build_subscriber_message(SUB_REGISTER, 9, &[]), other).await;
         let Json(cells) = ms_cells_snapshot(State(state.clone())).await;
@@ -2098,6 +2135,10 @@ mod tests {
         assert!(h.contains("/api/ms-cells") && h.contains("bcell[i]"), "main page shows the cell per subscriber");
         // 9's move is in the roaming log on the Connections page.
         let Json(conn) = connections_snapshot(State(state.clone())).await;
+        let sec = |issi: u64| conn["mobile_stations"].as_array().unwrap().iter().find(|m| m["issi"] == issi).unwrap()["security"].clone();
+        assert_eq!(sec(7), serde_json::json!({"class": 3, "ksg": 1}));
+        assert_eq!(sec(8), serde_json::json!({"class": 1, "ksg": null}));
+        assert!(sec(9).is_null(), "reported by the station it left");
         assert_eq!(conn["roaming_log"][0]["issi"], 9);
         assert_eq!(conn["roaming_log"][0]["kind"], "reselection");
         assert!(conn["roaming_log"][0]["reselection"].is_null(), "the station did not say how");
@@ -2689,7 +2730,7 @@ mod tests {
         assert_eq!(need("/api/fleet/graph"), Need::Pages(&["fleet"]), "graphs: visibility");
         assert_eq!(need("/api/fleet/alarms/ack"), Need::Pages(&["fleet_manage"]), "acknowledging: management");
         assert_eq!(need("/api/fleet/monitor/settings"), Need::Admin, "alarm rules are server settings");
-        let looker = crate::dash_users::Access { user: Some("eve".into()), admin: false, pages: ["fleet".to_string()].into(), auth: true };
+        let looker = crate::dash_users::Access { user: Some("eve".into()), admin: false, pages: ["fleet".to_string()].into(), auth: true, key_nets: None };
         assert!(allowed(&looker, need("/api/fleet")) && !allowed(&looker, need("/api/fleet/remove")));
     }
 }

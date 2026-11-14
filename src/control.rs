@@ -140,7 +140,7 @@ pub enum ControlCommand {
     /// station's network (SCKN 31/32, EN 300 392-7 clause 4.2.4.0), how long
     /// without this server before the station goes to fallback, and how many
     /// radios per second it authenticates again when the server is back.
-    FallbackKeys { key: Option<crate::fleet_sck::SckWire>, after_s: u32, reauth_per_s: u8 },
+    FallbackKeys { key: Option<crate::fleet_sck::SckWire>, after_s: u32, reauth_per_s: u8, forced: bool },
 }
 
 impl ControlCommand {
@@ -217,6 +217,10 @@ pub enum ControlResponse {
         /// `keys-v1`: number of K in the station's own config.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         local_keys: Option<u32>,
+        /// `keys-v1`: the ISSIs of those keys (never K). With server keys: the own keys the
+        /// station still keeps until the first authentication with server data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_issis: Option<Vec<u32>>,
     },
     /// Fleet Control (`config-v1`): the answer to `GetConfig`.
     ConfigInfo {
@@ -537,11 +541,11 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
     };
 
-    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities, config_hash, config_pending, key_source, local_keys } = &response {
+    if let ControlResponse::StationHello { protocol, version, brew_login, mcc, mnc, fleet_control, capabilities, config_hash, config_pending, key_source, local_keys, local_issis } = &response {
         let hello = crate::fleet::Hello {
             protocol: *protocol, version: version.clone(), brew_login: brew_login.clone(), mcc: *mcc, mnc: *mnc,
             fleet_control: *fleet_control, capabilities: capabilities.clone(),
-            key_source: key_source.clone(), local_keys: *local_keys,
+            key_source: key_source.clone(), local_keys: *local_keys, local_issis: local_issis.clone(),
         };
         let (changed, resend) = {
             let names = station_names(state);

@@ -183,6 +183,13 @@ pub const SERVICE_CALL_NETWORK: u8 = 0x23;
 /// answers with the same type (`{"taken":[..],"free":[..]}`). See `netlink`.
 pub const SERVICE_ISSI_CHECK: u8 = 0x24;
 
+/// `CLASS_SERVICE` type a Basestation sends when the ciphering of a radio's
+/// registration takes effect or changes: `{"issi":N,"class":1|2|3,"ksg":N}`,
+/// the security class (EN 300 392-7 clause 6.2) and the KSG number of the
+/// ciphering parameters (left out for class 1). Only sent to a server that
+/// offered the `ms-security` extension; shown on the Radios page.
+pub const SERVICE_MS_SECURITY: u8 = 0x25;
+
 /// Builds a `CLASS_SERVICE` message: class, type, NUL-terminated JSON.
 pub fn build_service(service_type: u8, json: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(3 + json.len());

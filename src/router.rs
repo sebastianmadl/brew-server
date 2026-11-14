@@ -202,6 +202,9 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_CELL => {
             crate::carriers::handle_ms_cell(&state, source, &svc.json_data).await;
         }
+        BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_SECURITY => {
+            crate::carriers::handle_ms_security(&state, source, &svc.json_data).await;
+        }
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_MS_RESELECTION => {
             crate::roaming_log::handle_reselection(&state, source, &svc.json_data).await;
         }

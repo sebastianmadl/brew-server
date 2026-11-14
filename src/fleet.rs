@@ -42,6 +42,8 @@ pub struct Hello {
     pub key_source: Option<String>,
     /// `keys-v1`: number of K in the station's own config.
     pub local_keys: Option<u32>,
+    /// `keys-v1`: their ISSIs (older stations leave it out).
+    pub local_issis: Option<Vec<u32>>,
 }
 
 /// One station in the Fleet Manager.
@@ -81,6 +83,10 @@ pub struct Station {
     /// `keys-v1`: number of K in its own config.
     #[serde(default)]
     pub local_keys: Option<u32>,
+    /// `keys-v1`: the ISSIs of its own K (with server keys: kept until the first authentication
+    /// with server data).
+    #[serde(default)]
+    pub local_issis: Option<Vec<u32>>,
 }
 
 /// Maintenance flag of a station (the station's own copy runs out at the same time).
@@ -373,6 +379,7 @@ impl Fleet {
             cfg: entry.as_ref().map(|s| s.cfg.clone()).unwrap_or_default(),
             key_source: h.key_source.clone(),
             local_keys: h.local_keys,
+            local_issis: h.local_issis.clone(),
         };
         if let Some(r) = entry.as_ref().and_then(|s| s.restart.as_ref()) {
             let secs = now_ms.saturating_sub(r.at_ms) / 1000;
@@ -1196,7 +1203,7 @@ mod tests {
     use super::*;
 
     fn hello(on: bool, version: &str) -> Hello {
-        Hello { protocol: 1, version: version.into(), brew_login: Some("1000001".into()), mcc: 232, mnc: 20, fleet_control: on, capabilities: if on { vec!["fleet-v1".into()] } else { vec![] }, key_source: None, local_keys: None }
+        Hello { protocol: 1, version: version.into(), brew_login: Some("1000001".into()), mcc: 232, mnc: 20, fleet_control: on, capabilities: if on { vec!["fleet-v1".into()] } else { vec![] }, key_source: None, local_keys: None, local_issis: None }
     }
     fn no_names(_: &str) -> Option<String> {
         None

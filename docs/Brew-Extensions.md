@@ -55,7 +55,7 @@ The server adds a response header to the HTTP 101 of a Basestation's
 WebSocket upgrade:
 
 ```
-X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check, mni
+X-Brew-Extensions: bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check, mni, ms-security
 ```
 
 - Comma separated, names trimmed of spaces, empty names ignored, order
@@ -110,6 +110,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x22` | `SERVICE_GROUP_NETWORK` | Basestation → server | `mni` | `mni` |
 | `0x23` | `SERVICE_CALL_NETWORK` | both | `mni` | `mni` |
 | `0x24` | `SERVICE_ISSI_CHECK` | Basestation → server → Basestation | `issi-check` | – |
+| `0x25` | `SERVICE_MS_SECURITY` | Basestation → server | `ms-security` | – |
 
 A minimal server can implement `bts-info` and `handover-v1` alone (announced
 reselection), and add the others one by one; each is independent except where
@@ -1100,6 +1101,32 @@ the parties, each only where it is not the server's own network:
   app) it registered in the visitor's network, are delivered here. The far
   server would send the call back over the same connection, which a Brew
   server does not do.
+
+## 12d. Security class per radio (`ms-security`)
+
+### 12d.1 `SERVICE_MS_SECURITY` (0x25)
+
+Basestation → server, only when the server offered `ms-security`. Sent when
+the ciphering of a radio's registration takes effect (after the LLC
+acknowledgement of the D-LOCATION UPDATE ACCEPT) and again when it changes:
+
+```json
+{"issi":2320001,"class":3,"ksg":1}
+```
+
+- `class`: the security class the radio is registered with (EN 300 392-7
+  clause 6.2): 1 = clear, 2 = static cipher key (SCK), 3 = derived and common
+  cipher keys (DCK / CCK).
+- `ksg`: KSG number of the ciphering parameters (0 = TEA1 … 6 = TEA7, 8 to 11
+  proprietary), left out for class 1.
+- A cell-wide change of class (EN 300 392-7 clause 4.5.6.2 / 4.5.6.3, e.g. a
+  class 3 cell on its fallback SCK) is reported for every radio it affects; the
+  radios stay registered. A Basestation may send all classes again from time to
+  time (FlowStation: every 30 min).
+- The server keeps it per radio and connection; a report from a connection the
+  radio is no longer registered through does not count. brew-server shows it on
+  the Radios page. Class outside 1 to 3 or KSG above 15: ignored.
+- Without the extension (TetraPack, Brandmeister) nothing is sent.
 
 ## 12c. Fleet Control (`fleet-control`)
 
