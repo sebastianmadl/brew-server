@@ -18,7 +18,8 @@ Unreleased:
   SCK delivery per radio (sent / confirmed / rejected). Refused accesses,
   refused station requests and automatic actions go into the change log.
   Fleet Control key rights can be limited to networks per user. Radios page:
-  new column *Security* (security class and TEA per radio, from stations with
+  new column *Security* ("SC1 · clear" in green, else class and TEA such
+  as "SC3 · TEA2", from stations with
   the new Brew extension `ms-security`, service 0x25) and apps / consoles in
   their own card *Terminal logins*. See `docs/Fleet-Control.md` 13.12 and
   `docs/Brew-Extensions.md` 12d.

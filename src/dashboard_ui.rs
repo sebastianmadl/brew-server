@@ -942,10 +942,13 @@ R.radios=()=>{
   ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
-// Security class of a registration (`ms-security`): SC1 clear, SC2 / SC3 with the TEA from the KSG number.
+// Security class of a registration (`ms-security`): "SC1 · clear" for class 1, else "SC3 · TEA2" with the
+// algorithm from the KSG number (EN 300 392-7 V3.5.1 table 6.2: 0-3 TEA1-TEA4, 4-7 reserved, shown as "KSG n", 8-15 proprietary).
+const ksgName=k=>k==null?'':k<=3?'TEA'+(k+1):k<=7?'KSG '+k:'KSG '+k+' (proprietary)';
 const secCell=x=>{if(!x)return '<span class="mut" title="The station does not report it (needs the ms-security extension)">—</span>';
-  const alg=x.ksg==null?'':x.ksg<=6?' · TEA'+(x.ksg+1):' · KSG '+x.ksg;
-  return x.class===1?'<span class="chip w" title="Registered without air interface encryption">SC1 · clear</span>':`<span class="chip a" title="${x.class===3?'Derived / common cipher keys (DCK / CCK)':'Static cipher key (SCK)'}">SC${x.class}${alg}</span>`;};
+  if(x.class===1)return '<span class="chip a" title="Security class 1: no air interface encryption">SC1 · clear</span>';
+  const alg=ksgName(x.ksg);
+  return `<span class="chip b" title="Security class ${x.class}: ${x.class===3?'derived / common cipher keys (DCK / CCK)':'static cipher key (SCK)'}">SC${x.class}${alg?' · '+alg:''}</span>`;};
 // Name of an ISSI from the directory, if any.
 // Directory names first (always!), then the ham callsign database (D.cs, only asked for ISSIs without one).
 const nameOf=issi=>(D.issi||{})[String(issi)]||(D.cs||{})[String(issi)]||'';

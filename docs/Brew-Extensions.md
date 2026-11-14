@@ -1117,15 +1117,16 @@ acknowledgement of the D-LOCATION UPDATE ACCEPT) and again when it changes:
 - `class`: the security class the radio is registered with (EN 300 392-7
   clause 6.2): 1 = clear, 2 = static cipher key (SCK), 3 = derived and common
   cipher keys (DCK / CCK).
-- `ksg`: KSG number of the ciphering parameters (0 = TEA1 … 6 = TEA7, 8 to 11
-  proprietary), left out for class 1.
+- `ksg`: KSG number of the ciphering parameters (EN 300 392-7 table 6.2:
+  0 to 3 = TEA1 to TEA4, 4 to 7 reserved in V3.5.1, 8 to 15 proprietary), left out for
+  class 1.
 - A cell-wide change of class (EN 300 392-7 clause 4.5.6.2 / 4.5.6.3, e.g. a
   class 3 cell on its fallback SCK) is reported for every radio it affects; the
   radios stay registered. A Basestation may send all classes again from time to
   time (FlowStation: every 30 min).
 - The server keeps it per radio and connection; a report from a connection the
   radio is no longer registered through does not count. brew-server shows it on
-  the Radios page. Class outside 1 to 3 or KSG above 15: ignored.
+  the Radios page ("SC1 · clear" in green, else e.g. "SC3 · TEA2" in blue). Class outside 1 to 3 or KSG above 15: ignored.
 - Without the extension (TetraPack, Brandmeister) nothing is sent.
 
 ## 12c. Fleet Control (`fleet-control`)
