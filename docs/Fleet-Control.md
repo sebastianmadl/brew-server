@@ -1081,3 +1081,49 @@ SwMI does that inside itself is not specified.
   the LA it is about to move to (clause 4.5.1.3 case 2).
 
 `GET /api/fleet/keys` carries `dck: {radios}` (how many DCKs the server holds).
+
+### 13.11 Key fallback while the server is away (phase 8d, `fallback-v1`)
+
+What a station with server keys does while this server (its authentication
+centre) is unreachable, and how it comes back. Designed with Patrick, OE1LHP.
+The server only hands out the settings and the fallback SCK; the station decides
+on its own, because it is cut off when it matters.
+
+```json
+{"FallbackKeys": {"key": {"sckn": 31, "vn": 4, "key": "<20 hex>"}, "after_s": 300, "reauth_per_s": 2}}   // server
+{"FallbackState": {"phase": "fallback", "key": {"sckn": 31, "vn": 4, "check": "<16 hex>"},
+                   "episodes": [{"from_ms": 1794610800000, "to_ms": null, "class2": true, "temporary": 0}]}}  // station
+```
+
+- **Fallback SCK** per network (Keys page, Cipher keys card: *Generate
+  fallback*, *Enter a key* with "Fallback (31/32)", *Remove fallback*). SCKN 31
+  or 32 (EN 300 392-7 clause 4.2.4.0, Table A.96), not the number of the
+  current or next SCK. It reaches the radios like the class 2 SCKs (sealed per
+  radio, clause 4.5.2.2), so they hold it before anything fails, and goes to
+  the stations of that network in `FallbackKeys`.
+- **Settings** (Server settings): minutes without the server before fallback
+  (`fallback_min`, default 5, 1 to 60) and radios re-authenticated per second
+  on return (`reauth_per_s`, default 2, 1 to 20). Every station with
+  `fallback-v1` gets them after its hello and on every change.
+- **On the station:** it authenticates from its stock as long as it has sets.
+  After `fallback_min` without the server, once a radio could not be
+  authenticated, it goes to fallback: "system wide services temporarily not
+  supported" (TS 100 392-2 clause 18.5.2) and temporary registration for radios
+  without sets (clause 16.4.8). A class 3 cell holding the fallback SCK runs
+  class 2 on it (clause 4.5.6.2). When the server is back it fetches fresh sets
+  first, authenticates the radios that registered without authentication again
+  at no more than `reauth_per_s` per second (clause 4.1.2), and only then
+  returns to class 3 (clause 4.5.6.3) and normal mode.
+- **Reports:** each station reports its phase (`normal`, `fallback`,
+  `returning`), the fallback SCK it holds and its fallback periods. The Keys
+  page shows them in the *Key fallback* card; the change log gets one line when
+  a period starts and one when it ends (with the number of temporary
+  registrations), each once.
+- After a reconnect a station sends the DCKs of its class 3 radios again
+  (`DckReport`), so DCKs created during the outage reach the neighbours.
+
+HTTP API: `POST /api/fleet/keys/sck/set` and `/sck/delete` take `role:
+"fallback"`; `POST /api/fleet/keys/sck/settings` takes `fallback_min` and
+`reauth_per_s`. `GET /api/fleet/keys` carries `fallback: {fallback_min,
+reauth_per_s, stations}` and, per network in `sck`, `fallback` and
+`coverage_fallback`.

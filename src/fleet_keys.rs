@@ -289,12 +289,13 @@ pub struct KeyStore {
     /// What the stations report about their CCK (`fleet_cck`).
     pub(crate) cck_rt: crate::fleet_cck::CckRuntime,
     pub(crate) dck_rt: crate::fleet_dck::DckRuntime,
+    pub(crate) fallback_rt: crate::fleet_fallback::FallbackRuntime,
 }
 
 impl KeyStore {
     /// Memory only (tests, storage off): keys work until the restart.
     pub fn memory() -> Self {
-        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default(), dck_rt: Default::default() }
+        Self { path: None, master: Some(random::<32>()), problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default(), dck_rt: Default::default(), fallback_rt: Default::default() }
     }
 
     /// The store next to the history log; `None`: storage is off.
@@ -312,7 +313,7 @@ impl KeyStore {
         };
         let path = with(".fleet-keys");
         let master_path = master_file.map(Path::to_path_buf).unwrap_or_else(|| with(".fleet-master-key"));
-        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default(), dck_rt: Default::default() };
+        let mut store = Self { path: Some(path.clone()), master: None, problem: None, data: Data::default(), stock: HashMap::new(), sck_rt: Default::default(), cck_rt: Default::default(), dck_rt: Default::default(), fallback_rt: Default::default() };
         let master = match std::fs::read_to_string(&master_path) {
             Ok(text) => match unhex_n::<32>(text.trim()) {
                 Some(m) => Some(m),
@@ -945,6 +946,7 @@ pub async fn api_list(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
         "sck": crate::fleet_sck::view(&keys, &nets, crate::fleet::now_ms()),
         "cck": crate::fleet_cck::view(&keys, &logins),
         "dck": crate::fleet_dck::view(&keys),
+        "fallback": crate::fleet_fallback::view(&keys),
     }))
     .into_response()
 }

@@ -23,6 +23,7 @@ mod fleet_keys;
 mod fleet_sck;
 mod fleet_cck;
 mod fleet_dck;
+mod fleet_fallback;
 mod fleet_monitor;
 mod fleet_update;
 mod fsnet;

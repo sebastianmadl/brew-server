@@ -4,6 +4,16 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Fleet Control, phase 8d: key fallback while the server is away.**
+  A fallback SCK per network (SCKN 31/32, EN 300 392-7 clause 4.2.4.0) that
+  reaches the radios like the class 2 SCKs, plus two settings: minutes without
+  the server before fallback (default 5) and radios re-authenticated per second
+  on return (default 2). Stations with `fallback-v1` decide on their own: stock
+  first, then "system wide services temporarily not supported" with temporary
+  registration, a class 3 cell runs class 2 on the fallback SCK; on return
+  fresh data sets, throttled re-authentication, then class 3 again. Stations
+  report their fallback periods (new *Key fallback* card, change log). Designed
+  with Patrick, OE1LHP. See `docs/Fleet-Control.md` 13.11.
 - **Fleet Control, phase 8e: class 3 radios moving between stations.**
   Stations with `dck-v1` and server keys report the DCK of each class 3 radio
   that authenticates there; the server keeps it in memory only and passes it to

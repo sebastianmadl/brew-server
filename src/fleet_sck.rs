@@ -122,6 +122,10 @@ pub struct SckNet {
     pub current: Option<SckEntry>,
     pub next: Option<SckEntry>,
     pub activation: Option<Activation>,
+    /// Phase 8d: the fallback SCK of a class 3 network (SCKN 31 or 32, EN 300 392-7 clause
+    /// 4.2.4.0 and Table A.96), run as class 2 by a station whose key server is unreachable.
+    #[serde(default)]
+    pub fallback: Option<SckEntry>,
     /// Keys each radio confirmed with U-OTAR SCK RESULT, as (SCKN, SCK-VN).
     #[serde(default)]
     pub confirmed: BTreeMap<u32, Vec<(u8, u16)>>,
@@ -160,6 +164,14 @@ fn default_warn() -> u8 {
     90
 }
 
+fn default_fallback_min() -> u8 {
+    5
+}
+
+fn default_reauth_per_s() -> u8 {
+    2
+}
+
 /// Everything of phase 8b that goes into the encrypted key store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SckData {
@@ -171,11 +183,17 @@ pub struct SckData {
     /// Warn before a change when fewer radios than this hold the key (percent).
     #[serde(default = "default_warn")]
     pub warn_pct: u8,
+    /// Phase 8d: minutes without the server before a station goes to fallback (1-60).
+    #[serde(default = "default_fallback_min")]
+    pub fallback_min: u8,
+    /// Phase 8d: radios a station authenticates per second once the server is back (1-20).
+    #[serde(default = "default_reauth_per_s")]
+    pub reauth_per_s: u8,
 }
 
 impl Default for SckData {
     fn default() -> Self {
-        Self { nets: BTreeMap::new(), profiles: None, warn_pct: default_warn() }
+        Self { nets: BTreeMap::new(), profiles: None, warn_pct: default_warn(), fallback_min: default_fallback_min(), reauth_per_s: default_reauth_per_s() }
     }
 }
 
@@ -293,6 +311,16 @@ pub fn delete_current(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     if in_use {
         return Err("stations run this key; it can only be replaced by a key change".into());
     }
+    if n.fallback.is_some() {
+        // The fallback key stays.
+        let old = n.current.take().map(|e| e.id());
+        if let Some(id) = old {
+            n.confirmed.values_mut().for_each(|v| v.retain(|k| *k != id));
+            n.confirmed.retain(|_, v| !v.is_empty());
+        }
+        ks.save();
+        return Ok(true);
+    }
     ks.sck_mut().nets.remove(net);
     ks.save();
     Ok(true)
@@ -312,6 +340,62 @@ pub fn delete_next(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Phase 8d: set the fallback SCK of `net` (SCKN 31 or 32); `key` `None`: a random one
+/// (returned once). Its number may not be the current or next SCK's: radios keep keys by number.
+pub fn set_fallback(ks: &mut KeyStore, net: &str, sckn: u8, vn: u16, key: Option<[u8; 10]>, by: Option<&str>, now_ms: u64) -> Result<(String, Option<[u8; 10]>), String> {
+    ks.ready()?;
+    check_net(net)?;
+    if !matches!(sckn, 31 | 32) {
+        return Err("the fallback SCK has number 31 or 32 (EN 300 392-7 Table A.96)".into());
+    }
+    let generated = key.is_none();
+    let key = key.unwrap_or_else(random::<10>);
+    let entry = SckEntry {
+        sckn,
+        vn,
+        key: hex(&key),
+        check: check_value(&key),
+        source: if generated { "generated" } else { "entered" }.into(),
+        by: by.map(str::to_owned),
+        set_ms: now_ms,
+    };
+    let n = ks.sck_mut().nets.entry(net.to_owned()).or_default();
+    if [&n.current, &n.next].into_iter().flatten().any(|e| e.sckn == sckn) {
+        return Err(format!("SCK {sckn} is already the current or next key of this network"));
+    }
+    if let Some(old) = &n.fallback {
+        let id = old.id();
+        n.confirmed.values_mut().for_each(|v| v.retain(|k| *k != id));
+    }
+    let id = entry.id();
+    n.confirmed.values_mut().for_each(|v| v.retain(|k| *k != id));
+    n.confirmed.retain(|_, v| !v.is_empty());
+    n.fallback = Some(entry.clone());
+    ks.save();
+    ks.sck_rt.attempts.clear();
+    Ok((entry.check, generated.then_some(key)))
+}
+
+pub fn delete_fallback(ks: &mut KeyStore, net: &str) -> Result<bool, String> {
+    ks.ready()?;
+    let Some(n) = ks.sck_mut().nets.get_mut(net) else { return Ok(false) };
+    let Some(old) = n.fallback.take() else { return Ok(false) };
+    let id = old.id();
+    n.confirmed.values_mut().for_each(|v| v.retain(|k| *k != id));
+    n.confirmed.retain(|_, v| !v.is_empty());
+    let empty = n.current.is_none() && n.next.is_none() && n.confirmed.is_empty();
+    if empty {
+        ks.sck_mut().nets.remove(net);
+    }
+    ks.save();
+    Ok(true)
+}
+
+/// The fallback SCK of `net`.
+pub fn fallback_of(ks: &KeyStore, net: &str) -> Option<SckWire> {
+    ks.sck().nets.get(net)?.fallback.as_ref().map(|e| e.wire(false))
+}
+
 /// True when a station of `net` reported that it runs the server's current key (from the server
 /// or, with the same value, from its own config).
 pub fn current_in_use(ks: &KeyStore, net: &str) -> bool {
@@ -322,15 +406,23 @@ pub fn current_in_use(ks: &KeyStore, net: &str) -> bool {
 /// The keys `issi` should hold: the current one, and the next one when its model has room.
 /// Nothing while no station runs the current key: a wrong current key would otherwise overwrite
 /// the key the radios use today (they keep keys by number).
+///
+/// Phase 8d: the fallback SCK (31/32) of a class 3 network goes too, when the model has room
+/// for it besides the others; a network without a current SCK (class 3) needs no station
+/// running one first.
 fn deliverable(ks: &KeyStore, net: &str, issi: u32) -> Vec<SckEntry> {
-    if !current_in_use(ks, net) {
-        return Vec::new();
-    }
     let Some(n) = ks.sck().nets.get(net) else { return Vec::new() };
-    let room = ks.sck().profile(ks.model_of(issi)).map_or(u8::MAX, |p| p.tm_sck);
-    let mut out: Vec<SckEntry> = n.current.iter().cloned().collect();
-    if let Some(next) = n.next.as_ref().filter(|_| room >= 2 || n.current.is_none()) {
-        out.push(next.clone());
+    let in_use = current_in_use(ks, net);
+    let room = ks.sck().profile(ks.model_of(issi)).map_or(u8::MAX, |p| p.tm_sck) as usize;
+    let mut out: Vec<SckEntry> = Vec::new();
+    if in_use {
+        out.extend(n.current.iter().cloned());
+        if let Some(next) = n.next.as_ref().filter(|_| room >= 2 || n.current.is_none()) {
+            out.push(next.clone());
+        }
+    }
+    if let Some(fb) = n.fallback.as_ref().filter(|_| (in_use || n.current.is_none()) && out.len() < room) {
+        out.push(fb.clone());
     }
     out
 }
@@ -361,7 +453,7 @@ pub fn seal_for(ks: &KeyStore, issi: u32, keys: &[SckEntry]) -> Option<(String, 
 /// A radio's answer for one key.
 pub fn note_result(ks: &mut KeyStore, net: &str, issi: u32, sckn: u8, vn: u16, ok: bool) {
     let Some(n) = ks.sck_mut().nets.get_mut(net) else { return };
-    let known = [&n.current, &n.next].into_iter().flatten().any(|e| e.id() == (sckn, vn));
+    let known = [&n.current, &n.next, &n.fallback].into_iter().flatten().any(|e| e.id() == (sckn, vn));
     if !known {
         return;
     }
@@ -674,6 +766,8 @@ pub fn view(ks: &KeyStore, nets: &HashMap<String, StationNet>, now_ms: u64) -> s
                     "activation": n.activation,
                     "coverage_current": cov(&n.current),
                     "coverage_next": cov(&n.next),
+                    "fallback": n.fallback.as_ref().map(entry),
+                    "coverage_fallback": cov(&n.fallback),
                     "current_in_use": current_in_use(ks, net),
                     "stations": stations,
                     "radios": radios,
@@ -681,7 +775,7 @@ pub fn view(ks: &KeyStore, nets: &HashMap<String, StationNet>, now_ms: u64) -> s
             )
         })
         .collect();
-    serde_json::json!({"warn_pct": ks.sck().warn_pct, "profiles": ks.sck().profiles(), "nets": out, "now_ms": now_ms})
+    serde_json::json!({"warn_pct": ks.sck().warn_pct, "fallback_min": ks.sck().fallback_min, "reauth_per_s": ks.sck().reauth_per_s, "profiles": ks.sck().profiles(), "nets": out, "now_ms": now_ms})
 }
 
 // ───────────────────────────── dashboard API ─────────────────────────────
@@ -710,8 +804,8 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
     }
     let next = match req.role.as_str() {
         "next" => true,
-        "current" => false,
-        _ => return crate::fleet_keys::bad("role: current or next"),
+        "current" | "fallback" => false,
+        _ => return crate::fleet_keys::bad("role: current, next or fallback"),
     };
     let key = if req.key.trim().is_empty() {
         None
@@ -721,7 +815,11 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
             Err(e) => return crate::fleet_keys::bad(e),
         }
     };
-    let res = set_key(&mut keystore(&state), &req.net, next, req.sckn, req.vn, key, a.user.as_deref(), crate::fleet::now_ms());
+    let res = if req.role == "fallback" {
+        set_fallback(&mut keystore(&state), &req.net, req.sckn, req.vn, key, a.user.as_deref(), crate::fleet::now_ms())
+    } else {
+        set_key(&mut keystore(&state), &req.net, next, req.sckn, req.vn, key, a.user.as_deref(), crate::fleet::now_ms())
+    };
     match res {
         Ok((check, generated)) => {
             crate::fleet_keys::log(
@@ -730,6 +828,9 @@ pub async fn api_set(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
                 format!("network {}: {} SCK {} version {} {} (check value {check})", req.net, req.role, req.sckn, req.vn, if generated.is_some() { "generated" } else { "entered" }),
             );
             push_net(&state, &req.net);
+            if req.role == "fallback" {
+                crate::fleet_fallback::push_net(&state, &req.net);
+            }
             let grouped = generated.map(|k| {
                 let h = hex(&k).to_uppercase();
                 h.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or("")).collect::<Vec<_>>().join(" ")
@@ -756,12 +857,22 @@ pub async fn api_delete(State(state): State<Arc<AppState>>, headers: HeaderMap, 
         return crate::fleet_keys::forbidden();
     }
     let current = req.role == "current";
-    let res = if current { delete_current(&mut keystore(&state), &req.net) } else { delete_next(&mut keystore(&state), &req.net) };
+    let fallback = req.role == "fallback";
+    let res = if fallback {
+        delete_fallback(&mut keystore(&state), &req.net)
+    } else if current {
+        delete_current(&mut keystore(&state), &req.net)
+    } else {
+        delete_next(&mut keystore(&state), &req.net)
+    };
     match res {
         Ok(had) => {
             if had {
-                crate::fleet_keys::log(&state, a.user.as_deref(), format!("network {}: {} SCK removed", req.net, if current { "current" } else { "next" }));
+                crate::fleet_keys::log(&state, a.user.as_deref(), format!("network {}: {} SCK removed", req.net, req.role));
                 push_net(&state, &req.net);
+                if fallback {
+                    crate::fleet_fallback::push_net(&state, &req.net);
+                }
             }
             Json(serde_json::json!({"ok": true, "removed": had})).into_response()
         }
@@ -870,6 +981,11 @@ pub async fn api_send(State(state): State<Arc<AppState>>, headers: HeaderMap, Js
 #[derive(Deserialize)]
 pub struct SettingsReq {
     warn_pct: u8,
+    /// Phase 8d; `None`: keep.
+    #[serde(default)]
+    fallback_min: Option<u8>,
+    #[serde(default)]
+    reauth_per_s: Option<u8>,
     /// `None`: keep; empty list: back to the built-in profiles.
     #[serde(default)]
     profiles: Option<Vec<Profile>>,
@@ -883,6 +999,12 @@ pub async fn api_settings(State(state): State<Arc<AppState>>, headers: HeaderMap
     }
     if req.warn_pct > 100 {
         return crate::fleet_keys::bad("warning level 0-100 %");
+    }
+    if req.fallback_min.is_some_and(|m| !(1..=60).contains(&m)) {
+        return crate::fleet_keys::bad("fallback after 1-60 min");
+    }
+    if req.reauth_per_s.is_some_and(|r| !(1..=20).contains(&r)) {
+        return crate::fleet_keys::bad("re-authentication 1-20 radios per second");
     }
     if let Some(list) = &req.profiles {
         let mut seen = std::collections::HashSet::new();
@@ -901,6 +1023,12 @@ pub async fn api_settings(State(state): State<Arc<AppState>>, headers: HeaderMap
         ks.ready().map(|_| {
             let d = ks.sck_mut();
             d.warn_pct = req.warn_pct;
+            if let Some(m) = req.fallback_min {
+                d.fallback_min = m;
+            }
+            if let Some(r) = req.reauth_per_s {
+                d.reauth_per_s = r;
+            }
             if let Some(list) = req.profiles {
                 d.profiles = if list.is_empty() { None } else { Some(list.into_iter().map(|p| Profile { name: p.name.trim().to_owned(), ..p }).collect()) };
             }
@@ -910,6 +1038,7 @@ pub async fn api_settings(State(state): State<Arc<AppState>>, headers: HeaderMap
     match res {
         Ok(()) => {
             crate::fleet_keys::log(&state, a.user.as_deref(), format!("SCK settings changed (warning below {} %)", req.warn_pct));
+            crate::fleet_fallback::push_all(&state);
             Json(serde_json::json!({"ok": true})).into_response()
         }
         Err(e) => crate::fleet_keys::bad(e),
@@ -953,6 +1082,47 @@ mod tests {
             ks.note_seen(i, "1000001", 1);
         }
         ks
+    }
+
+    #[test]
+    fn the_fallback_sck_is_31_or_32_and_reaches_class3_radios_without_a_current_key() {
+        let mut ks = store_with_radios(&[100]);
+        assert!(set_fallback(&mut ks, "232-1", 1, 0, None, None, 0).unwrap_err().contains("31 or 32"));
+        let (check, shown) = set_fallback(&mut ks, "232-1", 31, 4, Some([0x5A; 10]), None, 0).unwrap();
+        assert_eq!(check, check_value(&[0x5A; 10]));
+        assert!(shown.is_none());
+        // Class 3 network: no current SCK, the fallback key goes to the radios at once.
+        assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.id()).collect::<Vec<_>>(), vec![(31, 4)]);
+        note_result(&mut ks, "232-1", 100, 31, 4, true);
+        assert!(missing(&ks, "232-1", 100).is_empty());
+        assert_eq!(coverage(&ks, "232-1", (31, 4), &["1000001".to_string()]), (1, 1));
+        // A replaced fallback key must go again.
+        set_fallback(&mut ks, "232-1", 32, 5, None, None, 0).unwrap();
+        assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![32]);
+        assert_eq!(fallback_of(&ks, "232-1").map(|w| (w.sckn, w.vn)), Some((32, 5)));
+        assert!(delete_fallback(&mut ks, "232-1").unwrap());
+        assert!(fallback_of(&ks, "232-1").is_none());
+        assert!(!ks.sck().nets.contains_key("232-1"), "nothing left of the network");
+    }
+
+    #[test]
+    fn the_fallback_sck_takes_a_free_slot_and_its_own_number() {
+        let mut ks = store_with_radios(&[100, 101]);
+        set_key(&mut ks, "232-1", false, 31, 1, Some([0x11; 10]), None, 0).unwrap();
+        assert!(set_fallback(&mut ks, "232-1", 31, 2, None, None, 0).unwrap_err().contains("already"));
+        set_fallback(&mut ks, "232-1", 32, 2, Some([0x5A; 10]), None, 0).unwrap();
+        // While no station runs the current key nothing goes, the fallback key neither.
+        assert!(missing(&ks, "232-1", 100).is_empty());
+        station_runs(&mut ks, "232-1", [0x11; 10]);
+        assert_eq!(missing(&ks, "232-1", 100).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![31, 32]);
+        // A radio with one slot keeps the key in use.
+        ks.sck_mut().profiles = Some(vec![Profile { name: "One".into(), tm_sck: 1, dm_sck: 0, gck: 0, kag: 0 }]);
+        ks.set_model(101, "one").unwrap();
+        assert_eq!(missing(&ks, "232-1", 101).iter().map(|e| e.sckn).collect::<Vec<_>>(), vec![31]);
+        // Removing the current key keeps the fallback key.
+        ks.sck_rt.stations.clear();
+        assert!(delete_current(&mut ks, "232-1").unwrap());
+        assert_eq!(fallback_of(&ks, "232-1").map(|w| w.sckn), Some(32));
     }
 
     #[test]

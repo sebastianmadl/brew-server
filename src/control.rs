@@ -136,6 +136,11 @@ pub enum ControlCommand {
     /// another station of the same location area or next door (EN 300 392-7
     /// clause 6.6.1.1); `drop`: radios whose DCK is void.
     DckKeys { keys: Vec<crate::fleet_dck::DckWire>, drop: Vec<u32> },
+    /// Fleet Control (`fallback-v1`, phase 8d): the fallback SCK of the
+    /// station's network (SCKN 31/32, EN 300 392-7 clause 4.2.4.0), how long
+    /// without this server before the station goes to fallback, and how many
+    /// radios per second it authenticates again when the server is back.
+    FallbackKeys { key: Option<crate::fleet_sck::SckWire>, after_s: u32, reauth_per_s: u8 },
 }
 
 impl ControlCommand {
@@ -334,6 +339,15 @@ pub enum ControlResponse {
     /// Fleet Control (`dck-v1`): a class 3 radio authenticated at the station;
     /// its new DCK.
     DckReport { key: crate::fleet_dck::DckWire },
+    /// Fleet Control (`fallback-v1`): `normal`, `fallback` or `returning`, the
+    /// fallback SCK held, and the station's last fallback periods.
+    FallbackState {
+        phase: String,
+        #[serde(default)]
+        key: Option<crate::fleet_sck::SckRef>,
+        #[serde(default)]
+        episodes: Vec<crate::fleet_fallback::FallbackEpisode>,
+    },
     /// Fleet Control (`update-v1`): progress of an OTA run on the station.
     UpdateProgress {
         stage: String,
@@ -552,6 +566,7 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         crate::fleet_sck::after_hello(state, id);
         crate::fleet_cck::after_hello(state, id);
         crate::fleet_dck::after_hello(state, id);
+        crate::fleet_fallback::after_hello(state, id);
         return;
     }
     match &response {
@@ -568,6 +583,9 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         }
         ControlResponse::CckResult { issi, cck_id, ok, detail } => return crate::fleet_cck::on_result(state, id, *issi, *cck_id, *ok, detail.clone()),
         ControlResponse::DckReport { key } => return crate::fleet_dck::on_report(state, id, key.clone()).await,
+        ControlResponse::FallbackState { phase, key, episodes } => {
+            return crate::fleet_fallback::on_state(state, id, phase.clone(), key.clone(), episodes.clone());
+        }
         _ => {}
     }
     if let ControlResponse::FleetMetrics { cpu_pct, cpu_temp_c, cells, radios, calls, health, .. } = &response {
@@ -601,7 +619,8 @@ async fn handle_response(state: &Arc<AppState>, id: &str, data: &[u8]) {
         ControlResponse::StationHello { .. } | ControlResponse::UpdateProgress { .. } | ControlResponse::FleetMetrics { .. }
         | ControlResponse::AuthStock { .. } | ControlResponse::AuthVectorRequest { .. } | ControlResponse::AuthReport { .. }
         | ControlResponse::SckState { .. } | ControlResponse::SckDemand { .. } | ControlResponse::SckResult { .. }
-        | ControlResponse::CckState { .. } | ControlResponse::CckResult { .. } | ControlResponse::DckReport { .. } => {}
+        | ControlResponse::CckState { .. } | ControlResponse::CckResult { .. } | ControlResponse::DckReport { .. }
+        | ControlResponse::FallbackState { .. } => {}
     }
 }
 

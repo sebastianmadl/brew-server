@@ -1835,17 +1835,20 @@ function fkSckBody(d){
    <div class="tw"><table><tbody>
    <tr><th style="width:110px">Current</th><td>${key(n.current)}${n.current&&!n.current_in_use?'<div class="mut" style="font-size:12px;margin-top:4px">No station runs this key yet, so nothing goes to the radios. Check that it is the key the stations use (same check value), then use it on the stations.</div>':''}</td><td>${cov(n.coverage_current)}</td></tr>
    <tr><th>Next</th><td>${key(n.next)}</td><td>${cov(n.coverage_next)}</td></tr>
+   <tr><th>Fallback</th><td>${key(n.fallback)}<div class="mut" style="font-size:12px;margin-top:4px">Security class 3 only: SCK 31 or 32, run as class 2 by a station that cannot reach this server and has radios it cannot authenticate any more (EN 300 392-7 clause 4.2.4.0). Radios get it sealed like the other keys, before anything fails.</div></td><td>${cov(n.coverage_fallback)}</td></tr>
    ${act?`<tr><th>Change</th><td colspan="2"><span class="chip w">planned</span> to SCK ${act.sckn} version ${act.vn} at <b>${esc(new Date(act.at_ms).toLocaleString())}</b>${act.by?' · '+esc(act.by):''} ${manage?'<button class="btn" onclick="fkSckCancel()">Cancel</button>':''}</td></tr>`:''}
    </tbody></table></div>
    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px">
     ${n.current?`<button class="btn" ${act?'disabled':''} onclick="fkSckSet('next',${nextSckn},${nextVn},'')" title="Random next key with number ${nextSckn}, version ${nextVn}; shown once">Generate next key</button>`:''}
     ${n.next&&!act?'<button class="btn danger" onclick="fkSckDelete(\'next\')">Remove next key</button>':''}
+    <button class="btn" onclick="fkSckSet('fallback',${n.fallback&&n.fallback.sckn===31?32:31},${n.fallback?(n.fallback.vn+1)%65536:0},'')" title="Random fallback key; shown once">${n.fallback?'Replace fallback key':'Generate fallback key'}</button>
+    ${n.fallback?'<button class="btn danger" onclick="fkSckDelete(\'fallback\')">Remove fallback key</button>':''}
     ${n.current&&!n.next&&!act&&!n.current_in_use?'<button class="btn danger" onclick="fkSckDelete(\'current\')" title="No station runs this key yet">Remove current key</button>':''}
     ${n.next&&!act&&manage?`<button class="btn pri" onclick="fkSckActivate('next')">Activate next key…</button>`:''}
     ${own.length&&n.current&&!act&&manage?`<button class="btn" onclick="fkSckActivate('current')" title="Stations still running their own config key or an older key">Use current key on ${own.length} station${own.length===1?'':'s'}…</button>`:''}
    </div></div>
    <div class="card"><div class="ch"><h2>Enter a key</h2></div><div style="padding:12px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-    <div><label class="l" for="fks-role">Key</label><select class="f" id="fks-role"><option value="current">Current</option><option value="next">Next</option></select></div>
+    <div><label class="l" for="fks-role">Key</label><select class="f" id="fks-role"><option value="current">Current</option><option value="next">Next</option><option value="fallback">Fallback (31/32)</option></select></div>
     <div><label class="l" for="fks-n">Number (1–32)</label><input class="f" id="fks-n" inputmode="numeric" style="width:90px" value="${n.current?nextSckn:1}"></div>
     <div><label class="l" for="fks-vn">Version (0–65535)</label><input class="f" id="fks-vn" inputmode="numeric" style="width:110px" value="${n.current?nextVn:0}"></div>
     <div style="flex:1;min-width:260px"><label class="l" for="fks-k">SCK (20 hex digits; empty: generate)</label><input class="f m" id="fks-k" autocomplete="off" spellcheck="false" autocapitalize="off" oninput="fkSckPreview()" placeholder="0123 4567 89AB CDEF 0123"></div>
@@ -1856,6 +1859,7 @@ function fkSckBody(d){
     <td>${s.active?`<span class="m">SCK ${s.active.sckn} v${s.active.vn} · ${esc(s.active.check)}</span>`:'<span class="mut">—</span>'}</td>
     <td>${!s.sck?'<span class="chip i" title="Offline, local keys or software without sck-v1">not with server keys</span>':s.from_config?'<span class="chip">its own config</span>':'<span class="chip a">server</span>'}</td>
     <td>${s.switch_at_ms?`<span class="chip w">change ${esc(new Date(s.switch_at_ms).toLocaleTimeString())}</span>`:s.active?(s.matches_current?'<span class="chip a">current key</span>':'<span class="chip w">not the current key</span>'):''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No station of this network.</div>'}</div>`;
+  h+=fkFallbackCard(d,st);
   const radios=Object.entries(n.radios||{});
   h+=`<div class="card"><div class="ch"><h2>Radios</h2><span class="cnt">${radios.length}</span></div>${radios.length?`<div class="tw"><table><thead><tr><th>ISSI</th><th>Holds</th><th>Missing</th><th>Model slots</th><th></th></tr></thead><tbody>${radios.map(([i,r])=>`<tr><td><b class="m">${esc(i)}</b></td>
     <td>${(r.confirmed||[]).map(([a,b])=>`<span class="chip a">SCK ${a} v${b}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
@@ -1863,13 +1867,24 @@ function fkSckBody(d){
     <td class="m">${r.room==null?'<span class="mut" title="Model not set: no check">?</span>':r.room}${r.room===1&&n.next?' <span class="chip w" title="Holds one trunked mode key: gets the next key only when it becomes current">1 slot</span>':''}</td>
     <td style="text-align:right"><button class="btn" onclick="fkSckSend(${esc(i)})">Send</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No radio with K seen in this network.</div>'}</div>`;
   return h;}
+// Key fallback (fallback-v1): what each station reports about its fallback.
+function fkFallbackCard(d,st){
+  const fb=(d.fallback&&d.fallback.stations)||{};const ids=st.map(s=>s.id).filter(id=>fb[id]);
+  const ph=p=>p==='fallback'?'<span class="chip w">in fallback</span>':p==='returning'?'<span class="chip i">returning</span>':'<span class="chip a">normal</span>';
+  const ep=e=>e?`${esc(new Date(e.from_ms).toLocaleString())} – ${e.to_ms?esc(new Date(e.to_ms).toLocaleString()):'now'}${e.class2?' · class 2':''}${e.temporary?' · '+e.temporary+' temporary':''}`:'<span class="mut">—</span>';
+  return `<div class="card"><div class="ch"><h2>Key fallback</h2>${helpBtn('fkfb')}<span class="cnt">${ids.length}</span></div>
+   ${helpNote('fkfb',`When a station with server keys cannot reach this server it authenticates from its stock of data sets. After ${(d.fallback&&d.fallback.fallback_min)||5} min without the server, once a radio cannot be authenticated any more, it goes to fallback: "system wide services temporarily not supported" (TS 100 392-2 clause 18.5.2), radios without data sets get a temporary registration (clause 16.4.8), and a class 3 cell runs class 2 on the fallback key (EN 300 392-7 clauses 4.2.4.0, 4.5.6.2). When this server is back the station fetches data sets first, authenticates the radios that registered without authentication again (${(d.fallback&&d.fallback.reauth_per_s)||2} per second, clause 4.1.2), then returns to class 3 and normal mode. Times in the server settings. Stations report their fallback periods when they are back; each goes into the change log.`)}
+   ${ids.length?`<div class="tw"><table><thead><tr><th>Station</th><th>State</th><th>Fallback key held</th><th>Last fallback</th></tr></thead><tbody>${ids.map(id=>{const f=fb[id];const last=(f.episodes||[]).slice(-1)[0];return `<tr><td><b>${esc(fkStation(id))}</b></td><td>${ph(f.phase)}</td>
+    <td>${f.key?`<span class="m">SCK ${f.key.sckn} v${f.key.vn} · ${esc(f.key.check)}</span>`:'<span class="chip w">none</span>'}</td><td>${ep(last)}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">No station of this network reports fallback (needs server keys and a FlowStation with fallback-v1).</div>'}</div>`;}
 function fkSckPreview(){const e=$('fks-prev');if(!e)return;const n=String(v('fks-k')||'').replace(/[\s:\-]/g,'');
   e.textContent=!n?'Empty: a random key is generated and shown once.':/^[0-9a-fA-F]{20}$/.test(n)?'20 hex digits: '+n.toUpperCase().match(/.{4}/g).join(' '):`${n.length} of 20 characters${/^[0-9a-fA-F]*$/.test(n)?'':' · only 0-9 and A-F'}`;}
 async function fkSckSet(role,sckn,vn,key){
   if(!(sckn>=1&&sckn<=32))return setMsg('fk-msg','err','Number 1-32');if(!(vn>=0&&vn<=65535))return setMsg('fk-msg','err','Version 0-65535');
+  if(role==='fallback'&&sckn!==31&&sckn!==32)return setMsg('fk-msg','err','The fallback key has number 31 or 32');
   if(role==='current'&&!confirm('Replace the current key? Stations keep running their key until a change is activated; radios get the new key as soon as they are registered.'))return;
+  if(role==='fallback'&&!confirm('Set the fallback key? Radios keep keys by number: if radios already hold an SCK '+sckn+' (from the CPS), enter that key instead.'))return;
   try{const r=await postJ('/api/fleet/keys/sck/set',{net:UI.fk.net,role,sckn,vn,key:key||''});
-    if(r.key_once)fkSckShowOnce(r,role,sckn,vn);else setMsg('fk-msg','ok',`${role==='next'?'Next':'Current'} key saved · check value ${r.check}`);
+    if(r.key_once)fkSckShowOnce(r,role,sckn,vn);else setMsg('fk-msg','ok',`${role==='next'?'Next':role==='fallback'?'Fallback':'Current'} key saved · check value ${r.check}`);
     const kf=$('fks-k');if(kf)kf.value='';fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 function fkSckShowOnce(r,role,sckn,vn){
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${sckn===''?`New ${esc(role)}: CCK-id ${vn}`:`New ${role} key: SCK ${sckn} version ${vn}`}</h3></div><div class="sb">
@@ -1879,9 +1894,9 @@ function fkSckShowOnce(r,role,sckn,vn){
    <div style="display:flex;gap:8px;padding:0 18px 12px"><button class="btn" onclick="navigator.clipboard.writeText('${esc(r.key_once.replace(/ /g,''))}').then(()=>setMsg('fks-once-msg','ok','Copied'))">Copy</button></div>${msgDiv('fks-once-msg','padding:0 18px')}</div>
    <div class="acts"><button class="btn pri" onclick="closeSheet()">Done</button></div>`;
   $('scrim').classList.add('on');}
-async function fkSckDelete(role){const cur=role==='current';
-  if(!confirm(cur?'Remove the current key? No station runs it and no radio got it from the server.':'Remove the next key? Radios that got it keep it, it is just never activated.'))return;
-  try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net,role});setMsg('fk-msg','ok',cur?'Current key removed':'Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
+async function fkSckDelete(role){const cur=role==='current',fb=role==='fallback';
+  if(!confirm(fb?'Remove the fallback key? Stations then have no class 2 fallback when this server is unreachable; radios keep the key they got.':cur?'Remove the current key? No station runs it and no radio got it from the server.':'Remove the next key? Radios that got it keep it, it is just never activated.'))return;
+  try{await postJ('/api/fleet/keys/sck/delete',{net:UI.fk.net,role});setMsg('fk-msg','ok',fb?'Fallback key removed':cur?'Current key removed':'Next key removed');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckSend(issi){try{await postJ('/api/fleet/keys/sck/send',issi?{net:UI.fk.net,issi:Number(issi)}:{net:UI.fk.net});setMsg('fk-msg','ok','Delivery started; results come in as the radios answer');setTimeout(fkLoad,4000);}catch(e){setMsg('fk-msg','err',e.message);}}
 async function fkSckCancel(){if(!confirm('Cancel the planned change? Stations that already switched keep the new key.'))return;
   try{await postJ('/api/fleet/keys/sck/cancel',{net:UI.fk.net});setMsg('fk-msg','ok','Change cancelled');fkLoad();}catch(e){setMsg('fk-msg','err',e.message);}}
@@ -2068,6 +2083,9 @@ function keysSettingsCard(){
    <button class="btn pri" onclick="saveKeysSettings()">Save</button></div>${msgDiv('fks-msg','padding:0 18px 12px')}
    <div class="ch" style="border-top:1px solid var(--line)"><h2 style="font-size:14px">Cipher keys (SCK)</h2></div>
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-warn">Warn before a key change below (% of radios holding the key)</label><input class="f" id="fks-warn" inputmode="numeric" value="${sk.warn_pct}" style="width:110px"></div></div>
+   <div style="padding:0 18px 12px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-fbmin">Key fallback after minutes without this server (1–60)</label><input class="f" id="fks-fbmin" inputmode="numeric" value="${sk.fallback_min||5}" style="width:110px"></div>
+   <div><label class="l" for="fks-reauth">Re-authentication after the server is back, radios per second (1–20)</label><input class="f" id="fks-reauth" inputmode="numeric" value="${sk.reauth_per_s||2}" style="width:110px"></div>
+   <button class="btn pri" onclick="saveFallbackSettings()">Save</button></div>${msgDiv('fkfb-msg','padding:0 18px 12px')}
    <div class="svc mut" style="font-size:12.5px;display:block">Device profiles: how many keys a radio model holds. A model with one trunked mode SCK only gets the current key. Values from the Motorola MTP6000 Series Security Specifications; the other built-in models hold the same.</div>
    <div class="tw"><table><thead><tr><th>Model</th><th>TM-SCK</th><th>DM-SCK</th><th>GCK</th><th>KAG</th><th></th></tr></thead><tbody>${UI.fkProf.map((p,i)=>`<tr>
     <td><input class="f" style="width:130px" aria-label="Model name" value="${esc(p.name)}" oninput="UI.fkProf[${i}].name=this.value"></td>
@@ -2077,6 +2095,9 @@ function keysSettingsCard(){
    <div class="ch" style="border-top:1px solid var(--line)"><h2 style="font-size:14px">Common cipher keys (CCK)</h2></div>
    <div style="padding:12px 18px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div><label class="l" for="fks-overlap">Overlap after a CCK change, minutes (0–1440): stations still recognise radios with the old CCK on the uplink</label><input class="f" id="fks-overlap" inputmode="numeric" value="${(D.fkcck||{overlap_min:30}).overlap_min}" style="width:110px"></div>
    <button class="btn pri" onclick="saveCckSettings()">Save</button></div>${msgDiv('fkck-msg','padding:0 18px 12px')}</div>`;}
+async function saveFallbackSettings(){const fallback_min=parseInt(v('fks-fbmin'),10),reauth_per_s=parseInt(v('fks-reauth'),10),warn_pct=parseInt(v('fks-warn'),10);
+  if(!(fallback_min>=1&&fallback_min<=60))return setMsg('fkfb-msg','err','1-60 minutes');if(!(reauth_per_s>=1&&reauth_per_s<=20))return setMsg('fkfb-msg','err','1-20 radios per second');
+  try{await postJ('/api/fleet/keys/sck/settings',{warn_pct,fallback_min,reauth_per_s});D.fksck={...(D.fksck||{}),fallback_min,reauth_per_s};setMsg('fkfb-msg','ok','Saved');}catch(e){setMsg('fkfb-msg','err',e.message);}}
 async function saveCckSettings(){const overlap_min=parseInt(v('fks-overlap'),10);
   try{await postJ('/api/fleet/keys/cck/settings',{overlap_min});D.fkcck={...(D.fkcck||{}),overlap_min};setMsg('fkck-msg','ok','Saved');}catch(e){setMsg('fkck-msg','err',e.message);}}
 async function saveSckSettings(builtin){const warn_pct=parseInt(v('fks-warn'),10);
