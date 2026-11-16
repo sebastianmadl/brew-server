@@ -12,10 +12,6 @@
 //! else at its next login), with the INFO "Basestation XYZ switched off Fleet
 //! Control", or when a user with Fleet Control management removes it. The
 //! change log keeps 90 days. Both survive restarts in `<storage path>.fleet`.
-//!
-//! Note: Fleet Control manages stations, not encryption keys. Key management or key distribution
-//! through the server is not part of this project and will not be added; please do not build it
-//! on top of this code, it can put everyone involved in its development at risk (see CHANGELOG.md).
 
 use serde::{Deserialize, Serialize};
 use std::{
