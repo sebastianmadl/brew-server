@@ -82,6 +82,7 @@ dashboard's `/healthz` (port 9003) answers on both, with the node's role.
 - [Roaming](docs/Roaming.md) -- kick stale registrations on old Basestations
 - [Handover](docs/Handover.md) -- radios keep group and individual calls when they move between Basestations
 - [Brew extensions](docs/Brew-Extensions.md) -- the protocol behind it, for other server and Basestation implementations
+- [Fleet Control](docs/Fleet-Control.md) -- manage the Basestations from the server over the control channel (stations opt in; protocol, Fleet Manager, rights, change log)
 - [Late entry](docs/Late-Entry.md) -- join running group calls mid-over
 - [Routing](docs/Routing.md) -- DGNA to several radios, talkgroup pools
 - [Multi Network](docs/Multi-Network.md) -- connect to other Brew networks and bridge talkgroups across them (tested on air with TetraPack, including visitors and migration)
