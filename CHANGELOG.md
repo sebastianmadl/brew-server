@@ -2,7 +2,7 @@
 
 All notable changes to brew-server, newest first.
 
-Unreleased:
+Version 1.21.2 adds:
 
 - **Multi Network: a restarted link no longer loses its registrations.**
   Field 2026-11-15: saving a network restarted the TetraPack link, the new
