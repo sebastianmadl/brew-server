@@ -2,6 +2,13 @@
 
 All notable changes to brew-server, newest first.
 
+> **Note on encryption.** brew-server handles no air-interface encryption keys.
+> Key management or key distribution through this server is not part of this
+> project and will not be added. Please do not build it on top of this code: it
+> can put everyone involved in its development at risk. The encryption code in
+> FlowStation comes from contributors and upstream; the SC3 patch there (PR #47)
+> was a contributed patch that the fork maintainer only submitted.
+
 Unreleased:
 
 - **Multi Network: a restarted link no longer loses its registrations.**
