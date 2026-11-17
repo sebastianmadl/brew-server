@@ -464,6 +464,7 @@ const I={
  sip:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M7 14h7M16 10h1"/>',
  sipcfg:'<path d="M4 6h10M4 12h6M4 18h10"/><circle cx="17" cy="6" r="2"/><circle cx="13" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
  sms:'<path d="M4 6h16v12H4z"/><path d="M4 6l8 7 8-7"/>',
+ power:'<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
  tsds:'<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
  ha:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',
  set:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -650,6 +651,7 @@ async function refreshSlow(){
   tasks.push(getJ('/api/names').then(v=>D.names=v).catch(()=>{}));
   tasks.push(getJ('/api/network-names').then(v=>D.netNames=v).catch(()=>{}));
   tasks.push(getJ('/api/issi-names').then(v=>D.issi=v).catch(()=>{}));
+  tasks.push(getJ('/api/issi-kinds').then(v=>D.ikind=v).catch(()=>{}));
   tasks.push(getJ('/api/gssi-names').then(v=>D.gssi=v).catch(()=>{}));
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   tasks.push(getJ('/api/talkgroups').then(v=>D.tg=v).catch(()=>{}));
@@ -788,6 +790,10 @@ async function clearHistory(k){
   const what=k==='calls'?'every call':'every SDS (with delivery reports and the telemetry SDS log)';
   if(!confirm(`Delete ${what} from the history? The totals stay. This cannot be undone.`))return;
   try{await postJ('/api/history/clear',k==='calls'?{calls:true}:{sds:true});setMsg(k+'-msg','ok',k==='calls'?'Calls deleted.':'SDS deleted.');await refreshFast();}catch(e){setMsg(k+'-msg','err',e.message);}
+  render(true);}
+async function clearRegLog(){
+  if(!confirm('Delete the whole registration log? This cannot be undone.'))return;
+  try{await postJ('/api/history/clear',{registrations:true});D.regs=[];setMsg('reg-msg','ok','Registration log deleted.');}catch(e){setMsg('reg-msg','err',e.message);}
   render(true);}
 const keptNote=(st,k)=>{const d=st.keep_days;return `${k==='calls'?st.kept_calls:st.kept_sds} kept${d?` · up to ${d} days`:''}`;};
 
@@ -970,12 +976,16 @@ R.radios=()=>{
   const q=UI.filter.radios||'';
   const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),(m.groups||[]).map(gName).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
+  ms.sort((a,b)=>a.issi-b.issi);const radios=ms.filter(m=>m.mode!=='Terminal'),terms=ms.filter(m=>m.mode==='Terminal');
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
-  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${ms.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>). Apps and other terminals (Terminal mode) have no cells; a station without these extensions is shown without a cell.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
-  ${ms.sort((a,b)=>a.issi-b.issi).map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
+  <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${radios.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>); a station without these extensions is shown without a cell. Numbers logged in as Terminal (apps, consoles, bridges) are listed in their own card below.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
+  ${radios.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
   </tbody></table></div></div>
-  <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th><th>Cell (global ID)</th></tr></thead><tbody>
-  ${regs.slice(0,300).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
+  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${terms.length}</span>${helpBtn('rterms')}</div>${helpNote('rterms','Numbers registered in Terminal mode: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>). Which one a number is, is set on the Directory page (default Terminal). They have no cells.')}<div class="tw"><table><thead><tr><th>Number</th><th>Type</th><th>Login</th><th>Groups</th><th>Address</th></tr></thead><tbody>
+  ${terms.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${tKindChip(m.issi,m.basestation_name)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No terminals or bridges registered</td></tr>'}
+  </tbody></table></div></div>
+  <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${D.status&&D.status.keep_days?`kept up to ${D.status.keep_days} days`:'kept across restarts'}${regs.length>1000?' · newest 1000 shown, search for older':''}</span>${D.who.admin?`<button class="btn danger" onclick="clearRegLog()">${ic('trash')}Clear</button>`:''}</div>${msgDiv('reg-msg','padding:0 18px')}<div class="tw sdsl"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th><th>Cell (global ID)</th></tr></thead><tbody>
+  ${regs.slice(0,1000).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
   </tbody></table></div></div>`;
 };
 // Name of an ISSI from the directory, if any.
@@ -1002,7 +1012,10 @@ const infoOf=login=>(D.names||{})[login]||nameOf(login);
 // FlowStation name for Brew and the dashboard, not an ETSI identity.
 const CELL_ID_HELP='<b>Station</b> = a base station (FlowStation) connected in Basestation mode, named by its Brew login. <b>Global cell ID</b> = <i>login/cell</i>: the Brew login of the station and the number of the cell inside the station (local cell number, 0 = primary), e.g. 1000002/1. The global cell ID is defined by brew-server and FlowStation for Brew and this dashboard; it is not an ETSI identity. On the air interface a cell is identified by MCC, MNC, main carrier and band plan; the location area (LA) is shown separately.';
 // The cell column of a radio: its global cell ID, or why there is none.
-const cellCell=(name,mode)=>name?`<span class="chip">${esc(name)}</span>`:mode==='Terminal'?'<span class="mut" title="Apps and other terminals have no cells">— (terminal)</span>':'<span class="mut" title="The station reports no cells">—</span>';
+// A number that logs in as Terminal: "bridge" when the Directory says so ([issi_kinds]), else "terminal".
+const tKind=(...ns)=>ns.some(n=>(D.ikind||{})[String(n)]==='bridge')?'bridge':'terminal';
+const tKindChip=(...ns)=>tKind(...ns)==='bridge'?'<span class="chip b">Bridge</span>':'<span class="chip i">Terminal</span>';
+const cellCell=(name,mode,...ns)=>name?`<span class="chip">${esc(name)}</span>`:mode==='Terminal'?`<span class="mut" title="Terminals and bridges have no cells">— (${tKind(...ns)})</span>`:'<span class="mut" title="The station reports no cells">—</span>';
 // Global cell ID of a station cell seen in telemetry, by its carrier (unique in a network).
 const gcidOf=carrier=>{const c=((D.conn&&D.conn.cells)||[]).find(x=>x.online!==false&&x.carrier===carrier);return c?c.name:'';};
 // "Bost FlowStation/v0.5.6-55a08812" -> "Bost FlowStation v0.5.6-55a08812".
@@ -1020,8 +1033,8 @@ R.stations=()=>{
   <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${bs.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Base stations connected in Basestation mode, by login. A station that opens several connections (one per cell or per network) is listed once, with all its cells, the radios summed and every remote address. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
   ${bs.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${b.cells.sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true})).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No stations connected</td></tr>'}
   </tbody></table></div></div>
-  <div class="card"><div class="ch"><h2>Terminals</h2><span class="cnt">${term.length}</span>${helpBtn('sterms')}</div>${helpNote('sterms','Apps, consoles and other terminals connected in Terminal mode with their own number. They have no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
-  ${term.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No terminals connected</td></tr>'}
+  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${term.length}</span>${helpBtn('sterms')}</div>${helpNote('sterms','Logins in Terminal mode with their own number: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>), as set on the Directory page (default Terminal). They have no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Type</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
+  ${term.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${tKindChip(b.station)}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No terminals or bridges connected</td></tr>'}
   </tbody></table></div></div>
   ${netl.length?`<div class="card"><div class="ch"><h2>Network links</h2><span class="cnt">${netl.length}</span></div><div class="tw"><table><thead><tr><th>Login</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
   ${netl.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">—</td></tr>'}
@@ -1231,7 +1244,7 @@ R.fleet=()=>{
      <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
      <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
-     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${!live&&(fleetHas(x,'restart-v1')||(D.ctl||[]).includes(x.id))?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart or shut down the service, or reboot the system">Restart</button>`:''}${x.online?'':`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${!live&&(fleetHas(x,'restart-v1')||(D.ctl||[]).includes(x.id))?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart or shut down the service, or reboot the system">${ic('power')}Power options</button>`:''}${x.online?'':`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
   ${fleetTplCard(f)}${fleetNbCard(f)}
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
@@ -1754,7 +1767,7 @@ function fleetRestartDlg(id){
   const x=(D.fleet.stations||[]).find(s=>s.id===id);if(!x)return;
   const v1=fleetHas(x,'restart-v1'),cmd=(D.ctl||[]).includes(id);
   const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fr-kind" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)" onchange="$('fr-callrow').hidden=this.value==='shutdown'||!${v1}"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
-  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Restart ${esc(x.label)}</h3></div><div class="sb">
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Power options · ${esc(x.label)}</h3></div><div class="sb">
    <div style="display:grid;gap:10px">${radio('service','Restart service','Restarts FlowStation only (a few seconds to a minute off the air).',true)}${v1?radio('host','Reboot system','Reboots the whole computer (about 2 min off the air).',false):''}${cmd?radio('shutdown','Shut down service','Stops FlowStation. It does not come back by itself: someone has to start it on the station.',false):''}</div>
    <label id="fr-callrow" style="display:flex;gap:10px;align-items:center;font-size:13px" ${v1?'':'hidden'}><button class="tog" role="switch" id="fr-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Restart during call <span class="mut" style="font-size:12px">(otherwise refused while a call is in progress)</span></label>
    <div class="mut" style="font-size:12.5px">${v1?'The station restarts 5 s after it accepts. Not back after 10 min: marked ALARM in the change log.':'This station has no <code>restart-v1</code> (older FlowStation): the restart goes as a station command, without call protection and without an entry in the change log.'}</div>
@@ -2402,7 +2415,7 @@ R.issis=()=>{
   const plain=k=>!names[k]&&!acc[k];
   const rows=keys.filter(k=>(f==='hidden'?hid.has(k):!(hid.has(k)&&plain(k)))&&(f==='all'||f==='hidden'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k])||(f==='limited'&&acc[k]))&&match(q,k,names[k],...((acc[k]||{}).issis||[])));
   const accCell=k=>accChips(acc[k])||'<span class="mut">Open</span>';
-  const where=K==='issi'?(m=>m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')
+  const where=K==='issi'?((m,k)=>(m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')+((m&&m.mode==='Terminal')||tKind(k)==='bridge'?' '+tKindChip(k):''))
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
   const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. The login of a bridge (Brew login in Network mode, up to 12 digits, for example a link to another network) can be named here too; the name shows under the login on Stations &amp; Cells. Terminals (apps) and base stations are named on the Accounts page. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
     :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones (with <i>Only these</i>, listed listeners missing from the allow list are added to it on save); who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. <br><br>Which groups may be used at all (<b>managed talkgroups</b>) is set on the Routing page; naming a group here does not allow it, but a group with <i>Only these</i> counts as allowed there.<br><br><b>✕</b> hides a group without a name from this page while radios are on it (display only); the filter <i>Hidden</i> shows it again. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>, <code>[talkgroups]</code>).';
@@ -2412,7 +2425,7 @@ R.issis=()=>{
   <div class="card"><div class="ch"><h2>${K==='issi'?'Radios':'Groups'}</h2><span class="cnt">${Object.keys(names).length} names</span>${helpBtn('dir'+K)}</div>
    ${helpNote('dir'+K,help)}
    <div class="tw"><table><thead><tr><th>${d.what}</th><th>Name</th>${K==='gssi'?'<th>Access</th>':''}<th class="hide-s">Now</th>${adm?'<th></th>':''}</tr></thead><tbody>
-   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):K==='issi'&&(D.cs||{})[k]?`<span class="mut" title="From the ham callsign database (a Directory name comes first)">${esc(D.cs[k])} · database</span>`:'<span class="mut">—</span>'}</td>${K==='gssi'?`<td>${accCell(k)}</td>`:''}<td class="hide-s">${where(seen.get(k))}</td>
+   ${rows.slice(0,1000).map(k=>`<tr><td><b class="m">${k}</b></td><td>${names[k]?esc(names[k]):K==='issi'&&(D.cs||{})[k]?`<span class="mut" title="From the ham callsign database (a Directory name comes first)">${esc(D.cs[k])} · database</span>`:'<span class="mut">—</span>'}</td>${K==='gssi'?`<td>${accCell(k)}</td>`:''}<td class="hide-s">${where(seen.get(k),k)}</td>
      ${adm?`<td style="text-align:right;white-space:nowrap">${names[k]?`<button class="btn" onclick="editName('${k}')">Edit</button> <button class="btn danger" onclick="delName('${k}')" aria-label="Delete name">${ic('trash')}<span class="hide-s">Delete</span></button>`:acc[k]?`<button class="btn" onclick="editName('${k}')">Edit</button>`:`<button class="btn" onclick="editName('${k}')">${ic('plus')}Name</button>`}${K==='gssi'&&plain(k)?(hid.has(k)?` <button class="btn" onclick="hideGroup('${k}',false)">Show</button>`:` <button class="btn" onclick="hideGroup('${k}',true)" aria-label="Hide group ${k} from this page" title="Hide from this page">✕</button>`):''}</td>`:''}</tr>`).join('')||`<tr><td colspan="5" class="mut">${keys.length?'Nothing matches':'No names yet'}</td></tr>`}
    </tbody></table></div>${rows.length>1000?'<div class="msg mut" style="padding:10px 18px">First 1000 shown, use the search.</div>':''}${msgDiv('issi-msg','padding:10px 18px')}</div>`;
 };
@@ -2423,6 +2436,7 @@ function editName(k,kind){
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${K==='gssi'?(k?'Group '+k:'Add group'):(k?(n?'Edit name':'Name for '+k):'Add name')}</h3></div><div class="sb">
    <div><label class="l" for="in-issi">${d.what}</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. ${d.ex}"></div>
    <div><label class="l" for="in-name">Name${K==='gssi'?' (optional)':''}</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. ${esc(d.exn)}"></div>
+   ${K==='issi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">When it logs in as Terminal</span><div class="seg" role="radiogroup" id="in-kind" style="margin-top:5px">${[['terminal','Terminal (app, console)'],['bridge','Bridge']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${tKind(k)===v}" aria-checked="${tKind(k)===v}" onclick="document.querySelectorAll('#in-kind button').forEach(b=>{const on=b===this;b.setAttribute('aria-pressed',on);b.setAttribute('aria-checked',on);})">${l}</button>`).join('')}</div><div class="mut" style="font-size:12px;margin-top:4px">Shown on Radios and Stations &amp; Cells. Radios on a base station are not affected.</div></div>`:''}
    ${K==='gssi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Access</span><div class="seg" role="radiogroup" id="in-acc" style="margin-top:5px">${[['open','Open'],['allow','Only these'],['block','Block these']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${am===v}" aria-checked="${am===v}" onclick="setAcc('${v}')">${l}</button>`).join('')}</div></div>
    <div id="in-acc-box" ${am==='open'?'hidden':''}><label class="l" for="in-acc-list" id="in-acc-l">${am==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)'}</label>
    <textarea class="f" id="in-acc-list" rows="4" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, 2321100">${a?a.issis.join(', '):''}</textarea>
@@ -2448,10 +2462,14 @@ async function saveName(){
     if(v==='allow'&&rx){const sp=t=>t.split(/[\s,;]+/).filter(Boolean),have=sp(acc.issis),miss=sp(acc.rx_only_issis).filter(i=>!have.includes(i));
       if(miss.length){acc.issis=have.concat(miss).join(', ');added=miss;}}}
   const had=(D[K]||{})[issi]||'';
+  const kb=K==='issi'&&document.querySelector('#in-kind button[aria-pressed="true"]'),kind=kb?kb.dataset.v:null,kindChanged=!!kind&&kind!==tKind(issi);
+  if(!name&&kindChanged&&!had){m.className='msg mut';m.textContent='Saving…';
+    try{D.ikind=await postJ('/api/issi-kinds/set',{issi,kind});closeSheet();setMsg('issi-msg','ok',`${issi}: ${kind}.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}return;}
   if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||acc.rx_only||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
   m.className='msg mut';m.textContent='Saving…';
   try{
     if(name||had)D[K]=await postJ(DIR[K].api+'/set',{issi,name});
+    if(kindChanged)D.ikind=await postJ('/api/issi-kinds/set',{issi,kind});
     if(acc){D.access=await postJ('/api/group-access/set',acc);D.tg=await getJ('/api/talkgroups').catch(()=>D.tg);}
     closeSheet();setMsg(UI.edFrom||'issi-msg','ok',`${issi} saved.`+(added.length?` ${added.join(', ')} also added to the allowed ISSIs (listen only).`:''));render(true);
   }catch(e){m.className='msg err';m.textContent=e.message;}
@@ -2964,11 +2982,11 @@ mod tests {
         assert!(PAGE_HTML.contains("<th>Cell (global ID)</th>"));
         assert!(PAGE_HTML.contains("Cell (local / global ID)"), "telemetry: local number and global ID");
         assert!(PAGE_HTML.contains("it is not an ETSI identity"));
-        assert!(PAGE_HTML.contains("Apps and other terminals (Terminal mode) have no cells"));
+        assert!(PAGE_HTML.contains("Apps and other terminals (Terminal mode) have no cells"), "cells help");
         assert!(PAGE_HTML.contains("a station without it is counted as a station, its cells are unknown"));
         assert!(PAGE_HTML.contains("bs.map(b=>") && PAGE_HTML.contains("term.map(b=>") && PAGE_HTML.contains("function connGroups("), "one row per station, not per connection");
         let st = PAGE_HTML.find("<h2>Stations</h2><span class=\"cnt\">${bs.length}").expect("stations card");
-        let te = PAGE_HTML.find("<h2>Terminals</h2><span class=\"cnt\">${term.length}").expect("terminals card");
+        let te = PAGE_HTML.find("<h2>Terminals &amp; bridges</h2><span class=\"cnt\">${term.length}").expect("terminals card");
         let ce = PAGE_HTML[te..].find("<h2>Cells</h2>").expect("cells card after terminals");
         assert!(st < te && ce > 0, "Stations & Cells page: stations, then terminals, then cells");
         for page in [&*crate::dashboard::TELEMETRY_SDS_HTML, &*crate::dashboard::REGISTRATIONS_HTML] {
@@ -3194,6 +3212,23 @@ mod tests {
     /// manages (restart and shut down together), DGNA & Radio actions replaces Control and takes
     /// DGNA from Routing.
     #[test]
+    fn terminals_and_bridges_are_told_apart() {
+        assert!(PAGE_HTML.contains("const radios=ms.filter(m=>m.mode!=='Terminal'),terms=ms.filter(m=>m.mode==='Terminal');"), "Radios page: two lists");
+        assert!(PAGE_HTML.contains("<h2>Terminals &amp; bridges</h2><span class=\"cnt\">${terms.length}"));
+        assert!(PAGE_HTML.contains("${tKindChip(b.station)}"), "Stations & Cells shows the type");
+        assert!(PAGE_HTML.contains("— (${tKind(...ns)})"), "the cell column names it");
+        assert!(PAGE_HTML.contains("postJ('/api/issi-kinds/set',{issi,kind})"), "set in the Directory dialog");
+        assert!(PAGE_HTML.contains("getJ('/api/issi-kinds')"));
+    }
+
+    #[test]
+    fn registration_log_scrolls_and_admins_can_clear_it() {
+        assert!(PAGE_HTML.contains("<h2>Registration log</h2>"));
+        assert!(PAGE_HTML.contains(r#"onclick="clearRegLog()""#) && PAGE_HTML.contains("postJ('/api/history/clear',{registrations:true})"));
+        assert!(PAGE_HTML.contains("${regs.slice(0,1000).map(r=>"));
+    }
+
+    #[test]
     fn telemetry_sds_is_a_second_list_on_the_sds_page() {
         let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
         let pages = &pages[..pages.find("];").unwrap()];
@@ -3235,6 +3270,7 @@ mod tests {
         assert!(fleet.contains("fleetAlarmCard(f,true)"), "change log ALARMs stay on Fleet Control");
         assert!(!fleet.contains("fleetGraph(") && !fleet.contains("fleetAutoPing") && !fleet.contains("/api/fleet/ping"), "graphs and ping moved to Telemetry");
         assert!(PAGE_HTML.contains("'Shut down service'") && PAGE_HTML.contains("action:kind==='shutdown'?'ShutdownService':'RestartService'"));
+        assert!(PAGE_HTML.contains("${ic('power')}Power options</button>"), "Fleet Control button is Power options");
         assert!(PAGE_HTML.contains("show('telemetry')\">‹</button>"), "the graph page goes back to Telemetry");
         let routing = page("routing");
         assert!(!routing.contains("Assign radios to a group (DGNA)") && routing.contains("data-go=\"radioctl\""));

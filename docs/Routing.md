@@ -129,6 +129,16 @@ Two more pages of the new dashboard, both for admins:
   "2321" = "District North"
   ```
 
+  An ISSI's dialog also sets what the number is when it logs in as Terminal:
+  *Terminal* (an app or console, the default) or *Bridge*. Radios and
+  Stations & Cells list these numbers as **Terminals & bridges** with their
+  type. Only bridges are stored:
+
+  ```toml
+  [issi_kinds]
+  "2321100" = "bridge"
+  ```
+
   **Access** (Groups list) decides who may use a group: *Open* (no list),
   *Only these* (allow list: only the listed ISSIs) or *Block these* (everyone
   but the listed ISSIs). One list per group, the switch decides what it

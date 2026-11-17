@@ -19,9 +19,10 @@ Unreleased (dashboard cleanup) adds:
   restart, config) as **Change log alarms**, with their own badge.
   "Acknowledge all" on either page takes only that page's alarms
   (`POST /api/fleet/alarms/ack` `{"events": true|false}`).
-- **Restart and Shut down in one dialog on Fleet Control.** *Shut down
-  service* joins *Restart service* and *Reboot system*; stations without
-  `restart-v1` get the Restart button too (sent as the older station command).
+- **Power options on Fleet Control.** The station's Restart button is now
+  **Power options**: one dialog with *Restart service*, *Reboot system* and
+  the new *Shut down service*; stations without `restart-v1` get the button
+  too (restart sent as the older station command).
 - **Control is now DGNA & Radio actions.** The page takes the DGNA card from
   Routing and has one **Radio actions** card with a station picker (kick
   radio, clear emergency, live SDS, ambience listening) instead of one card
@@ -47,6 +48,23 @@ Unreleased (dashboard cleanup) adds:
   cell its station reports for the guest's home ISSI, and **Registered
   radios** falls back to the cell reported on another connection of the same
   station, or to the station's only cell.
+- **Registration log kept for `[storage] keep_days` (7 days by default).**
+  The Radios page's log no longer holds only the last 50 entries per station
+  in memory: every entry (stations and Brew channel) goes to its own file
+  `<storage path>.registrations` (JSON lines; the history store is not
+  touched, so an older server can still read it), survives a restart and is
+  trimmed with the hourly retention. The dashboard gets the newest 2000 and
+  shows 1000 in a scrolling list. Admins get **Clear**
+  (`POST /api/history/clear` `{"registrations": true}`).
+- **Terminals and bridges apart from radios.** The Radios page lists radios
+  (on a base station, or of another network) in **Registered radios** and
+  numbers logged in as Terminal in **Terminals & bridges**, with their type.
+  The Directory dialog of an ISSI sets the type for when it logs in as
+  Terminal: *Terminal* (app, console; the default) or *Bridge*
+  (`[issi_kinds]`, `GET /api/issi-kinds`, `POST /api/issi-kinds/set`
+  `{"issi","kind"}`). Stations & Cells shows the type in its
+  **Terminals & bridges** card, and the cell column says "— (bridge)" or
+  "— (terminal)".
 - **SMS Center: "n radios known" opens the list.** A popup shows the known
   radios with their names (radio directory or callsign list), with a filter.
   `GET /api/sms-center` now also returns `known` (the ISSIs).

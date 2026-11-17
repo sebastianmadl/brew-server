@@ -106,6 +106,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/networks/save", axum::routing::post(crate::routing_api::networks_put))
         .route("/api/accounts", get(crate::accounts::list).post(crate::accounts::upsert))
         .route("/api/issi-names/set", axum::routing::post(crate::issi_names::set))
+        .route("/api/issi-kinds/set", axum::routing::post(crate::issi_names::set_kind))
         .route("/api/issi-names/import", axum::routing::post(crate::issi_names::import))
         .route("/api/gssi-names/set", axum::routing::post(crate::issi_names::set_gssi))
         .route("/api/gssi-names/import", axum::routing::post(crate::issi_names::import_gssi))
@@ -134,6 +135,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/names", get(crate::accounts::names))
         .route("/api/network-names", get(crate::routing_api::network_names_get))
         .route("/api/issi-names", get(crate::issi_names::list))
+        .route("/api/issi-kinds", get(crate::issi_names::list_kinds))
         .route("/api/gssi-names", get(crate::issi_names::list_gssi))
         .route("/api/group-access", get(crate::group_access::list))
         .route("/api/talkgroups", get(crate::group_access::talkgroups))
@@ -292,7 +294,7 @@ enum Need {
 /// `dash_users::PAGES`). Routes not listed are for admins.
 fn need(path: &str) -> Need {
     const ANY: &[&str] = &[
-        "/", "/ui", "/api/whoami", "/api/live", "/api/names", "/api/network-names", "/api/issi-names", "/api/gssi-names", "/api/callsigns",
+        "/", "/ui", "/api/whoami", "/api/live", "/api/names", "/api/network-names", "/api/issi-names", "/api/issi-kinds", "/api/gssi-names", "/api/callsigns",
         "/api/callsign-db", "/api/talkgroups", "/api/pools", "/api/emergencies", "/api/ha", "/api/password",
     ];
     if ANY.contains(&path) {
@@ -955,15 +957,21 @@ pub async fn snapshot(State(state): State<Arc<AppState>>, axum::extract::Query(q
     Json(state.monitor.snapshot_n(counts.0,counts.1,counts.2,n(&q.calls),n(&q.sds)).await)
 }
 
-/// `POST /api/history/clear` (admins) `{"calls":bool,"sds":bool}`: drops
-/// every call / SDS from the history (the totals stay).
+/// `POST /api/history/clear` (admins) `{"calls":bool,"sds":bool,"registrations":bool}`:
+/// drops every call / SDS from the history (the totals stay), or the
+/// registration log of the Radios page.
 #[derive(Debug, serde::Deserialize)]
-pub struct ClearHistory { #[serde(default)] calls: bool, #[serde(default)] sds: bool }
+pub struct ClearHistory { #[serde(default)] calls: bool, #[serde(default)] sds: bool, #[serde(default)] registrations: bool }
 
 pub async fn history_clear(State(state): State<Arc<AppState>>, Json(req): Json<ClearHistory>) -> Json<serde_json::Value> {
-    tracing::warn!(calls = req.calls, sds = req.sds, "history cleared from the dashboard");
-    let d = crate::monitor::prune_history(&state, req.calls, req.sds).await;
-    Json(serde_json::json!({ "calls": d.calls, "sds": d.sds }))
+    tracing::warn!(calls = req.calls, sds = req.sds, registrations = req.registrations, "history cleared from the dashboard");
+    let regs = if req.registrations {
+        let mut t = state.telemetry.write().await;
+        t.flush_regs();
+        t.regs.prune(0, true, crate::telemetry::now_ms())
+    } else { 0 };
+    let d = if req.calls || req.sds { crate::monitor::prune_history(&state, req.calls, req.sds).await } else { Default::default() };
+    Json(serde_json::json!({ "calls": d.calls, "sds": d.sds, "registrations": regs }))
 }
 pub async fn live(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse { ws.on_upgrade(move |s| live_socket(state,s)) }
 async fn live_socket(state: Arc<AppState>, mut socket: WebSocket) { let mut rx=state.monitor.subscribe(); while let Ok(ev)=rx.recv().await { if socket.send(Message::Text(serde_json::to_string(&ev).unwrap().into())).await.is_err(){break;} } }

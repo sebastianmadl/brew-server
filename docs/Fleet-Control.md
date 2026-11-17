@@ -468,7 +468,7 @@ RF on!") without this flag.
 Answer `CommandResult`: `ok` (the station restarts its service, `host` false,
 or reboots the computer, `host` true, 5 s later), `busy` (an update is
 running), `call_active` (a call is in progress and `during_call` is false),
-`fleet_control_off`. **Restart** on a station opens a dialog: *Restart
+`fleet_control_off`. **Power options** on a station opens a dialog: *Restart
 service* / *Reboot system* / *Shut down service*, *Restart during call*, then
 a confirmation. *Shut down service*, and Restart on a station without
 `restart-v1`, go as the older station commands `ShutdownService` /

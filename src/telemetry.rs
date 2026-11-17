@@ -245,6 +245,10 @@ pub struct TelemetryCall {
 /// registered set (see `registrations_list`).
 #[derive(Debug, Clone, Serialize)]
 pub struct RegLogEntry {
+    /// Identifies the entry in the stored history (`RegHistory`), so a later
+    /// change (cell tagged, guest renamed) replaces it there.
+    #[serde(skip)]
+    pub id: u64,
     pub at_ms: u64,
     pub issi: u32,
     /// "register", "deregister", "timeout" (a silent drop after the
@@ -334,6 +338,10 @@ pub struct TelemetryBts {
     pub recent_regs: VecDeque<RegLogEntry>,
     /// Serialized view of `recent_regs` for the dashboard.
     pub recent_regs_out: Vec<RegLogEntry>,
+    /// Entries added or changed since the last `TelemetryState::flush_regs`
+    /// (they go to the stored registration history).
+    #[serde(skip)]
+    pub reg_changed: Vec<RegLogEntry>,
     /// Multi-cell stations only: cell each registered ISSI is on (0 = primary).
     #[serde(skip)]
     pub ms_cell: HashMap<u32, u8>,
@@ -432,6 +440,7 @@ impl TelemetryBts {
             registrations_list: Vec::new(),
             recent_regs: VecDeque::new(),
             recent_regs_out: Vec::new(),
+            reg_changed: Vec::new(),
             ms_cell: HashMap::new(),
             visitor_home: HashMap::new(),
             ms_cell_out: Vec::new(),
@@ -553,7 +562,7 @@ impl TelemetryBts {
     fn push_reg(&mut self, issi: u32, kind: &'static str) {
         let issi = self.visitor_home.get(&issi).copied().unwrap_or(issi);
         let (cell, carrier) = self.last_cell(issi);
-        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell, carrier });
+        self.push_reg_entry(RegLogEntry { id: next_reg_id(), at_ms: now_ms(), issi, kind, roamed_to: None, cell, carrier });
     }
 
     /// The cell `issi` was last logged on at this station (its newest entry with a cell):
@@ -580,6 +589,7 @@ impl TelemetryBts {
                     e.carrier = Some(*carrier);
                 }
             }
+            self.reg_changed.push(e.clone());
             changed = true;
         }
         if changed {
@@ -588,6 +598,7 @@ impl TelemetryBts {
     }
 
     fn push_reg_entry(&mut self, entry: RegLogEntry) {
+        self.reg_changed.push(entry.clone());
         self.recent_regs.push_front(entry);
         while self.recent_regs.len() > 50 {
             self.recent_regs.pop_back();
@@ -642,6 +653,9 @@ pub struct TelemetryState {
     /// The last DGNA answer per ISSI (`DgnaStatus`) and when it came (ms).
     pub dgna_status: HashMap<u32, (DgnaStatusInfo, u64)>,
     store: Option<Arc<crate::store::Store>>,
+    /// Registration log of every station and the Brew channel, kept for
+    /// `[storage] keep_days` in its own file (see `RegHistory`).
+    pub regs: RegHistory,
 }
 
 impl TelemetryState {
@@ -767,7 +781,9 @@ impl TelemetryState {
     /// registration log as Basestation telemetry registrations. `kind` is
     /// "register" or "deregister".
     pub fn record_brew_registration(&mut self, issi: u32, kind: &'static str) {
-        self.recent_brew_regs.push_front(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell: None, carrier: None });
+        let entry = RegLogEntry { id: next_reg_id(), at_ms: now_ms(), issi, kind, roamed_to: None, cell: None, carrier: None };
+        self.regs.upsert(RegHistRow::new("brew", &entry));
+        self.recent_brew_regs.push_front(entry);
         while self.recent_brew_regs.len() > 50 {
             self.recent_brew_regs.pop_back();
         }
@@ -790,9 +806,10 @@ impl TelemetryState {
             bts.ms_cell.remove(&issi);
             bts.sync_registrations();
             let (cell, carrier) = bts.last_cell(issi);
-            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()), cell, carrier });
+            bts.push_reg_entry(RegLogEntry { id: next_reg_id(), at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()), cell, carrier });
             old.push(id.clone());
         }
+        self.flush_regs();
         old.sort_unstable();
         old
     }
@@ -820,16 +837,33 @@ impl TelemetryState {
         if entry.kind != "register" || entry.cell.is_some() || now_ms.saturating_sub(at) > crate::carriers::CELL_MATCH_MS { return; }
         entry.cell = Some(name.to_string());
         entry.carrier = Some(carrier);
+        let changed = entry.clone();
+        bts.reg_changed.push(changed);
         bts.recent_regs_out = bts.recent_regs.iter().cloned().collect();
+        self.flush_regs();
+    }
+
+    /// Moves the entries the stations added or changed into the stored history.
+    pub fn flush_regs(&mut self) {
+        let mut rows = Vec::new();
+        for (id, b) in self.stations.iter_mut() {
+            rows.extend(b.reg_changed.drain(..).map(|e| RegHistRow::new(id, &e)));
+        }
+        for r in rows { self.regs.upsert(r); }
     }
 
     pub fn registration_log(&self) -> Vec<RegLogRow> {
-        let mut out: Vec<RegLogRow> = self.stations.values()
-            .flat_map(|s| s.recent_regs_out.iter().map(|e| RegLogRow { bts: s.id.clone(), entry: e.clone() }))
-            .chain(self.recent_brew_regs.iter().map(|e| RegLogRow { bts: "brew".to_string(), entry: e.clone() }))
+        // The stored history, with what the stations have not handed over yet on top.
+        let mut pending: HashMap<u64, RegLogRow> = HashMap::new();
+        for (id, b) in &self.stations {
+            for e in &b.reg_changed { pending.insert(e.id, RegLogRow { bts: id.clone(), entry: e.clone() }); }
+        }
+        let mut out: Vec<RegLogRow> = self.regs.rows.iter().take(REG_LOG_SERVED)
+            .map(|r| pending.remove(&r.id).unwrap_or_else(|| r.row()))
             .collect();
+        out.extend(pending.into_values());
         out.sort_unstable_by(|a, b| b.entry.at_ms.cmp(&a.entry.at_ms));
-        out.truncate(100);
+        out.truncate(REG_LOG_SERVED);
         out
     }
 }
@@ -843,6 +877,119 @@ pub struct RegLogRow {
     pub bts: String,
     #[serde(flatten)]
     pub entry: RegLogEntry,
+}
+
+/// At most this many registration log rows go to the dashboard.
+pub const REG_LOG_SERVED: usize = 2000;
+/// At most this many registration log entries are kept (besides `keep_days`).
+const REG_HISTORY_MAX: usize = 50_000;
+
+fn next_reg_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    now_ms() * 1000 + SEQ.fetch_add(1, Ordering::Relaxed) % 1000
+}
+
+/// One registration log entry as stored (`<storage path>.registrations`, one
+/// JSON object per line; a later line with the same `id` replaces it).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RegHistRow {
+    pub id: u64,
+    pub bts: String,
+    pub at_ms: u64,
+    pub issi: u32,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roamed_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<u16>,
+}
+
+impl RegHistRow {
+    fn new(bts: &str, e: &RegLogEntry) -> Self {
+        Self { id: e.id, bts: bts.to_string(), at_ms: e.at_ms, issi: e.issi, kind: e.kind.to_string(), roamed_to: e.roamed_to.clone(), cell: e.cell.clone(), carrier: e.carrier }
+    }
+    fn row(&self) -> RegLogRow {
+        let kind = match self.kind.as_str() { "deregister" => "deregister", "timeout" => "timeout", "roamed" => "roamed", _ => "register" };
+        RegLogRow { bts: self.bts.clone(), entry: RegLogEntry { id: self.id, at_ms: self.at_ms, issi: self.issi, kind, roamed_to: self.roamed_to.clone(), cell: self.cell.clone(), carrier: self.carrier } }
+    }
+}
+
+/// The registration log of the Radios page across restarts: newest first in
+/// memory, appended to its own file (not the history store, so an older
+/// server reading that store is not affected). Trimmed to `[storage]
+/// keep_days` with the hourly retention, emptied by an admin's Clear.
+#[derive(Debug, Default)]
+pub struct RegHistory {
+    path: Option<std::path::PathBuf>,
+    rows: VecDeque<RegHistRow>,
+}
+
+impl RegHistory {
+    pub fn path_for(storage: &std::path::Path) -> std::path::PathBuf {
+        let mut p = storage.as_os_str().to_owned();
+        p.push(".registrations");
+        p.into()
+    }
+
+    pub fn open(path: std::path::PathBuf) -> Self {
+        let mut h = Self { path: None, rows: VecDeque::new() };
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            for line in text.lines() {
+                if let Ok(r) = serde_json::from_str::<RegHistRow>(line) { h.put(r); }
+            }
+        }
+        info!(path = %path.display(), entries = h.rows.len(), "registration log loaded");
+        h.path = Some(path);
+        h
+    }
+
+    fn put(&mut self, r: RegHistRow) {
+        // A change comes seconds after the entry: look among the newest only.
+        if let Some(x) = self.rows.iter_mut().take(1000).find(|x| x.id == r.id) {
+            *x = r;
+            return;
+        }
+        let at = self.rows.iter().position(|x| x.at_ms <= r.at_ms).unwrap_or(self.rows.len());
+        self.rows.insert(at, r);
+        self.rows.truncate(REG_HISTORY_MAX);
+    }
+
+    pub fn upsert(&mut self, r: RegHistRow) {
+        if let Some(p) = &self.path {
+            use std::io::Write;
+            let line = serde_json::to_string(&r).unwrap_or_default();
+            let res = std::fs::OpenOptions::new().create(true).append(true).open(p).and_then(|mut f| writeln!(f, "{line}"));
+            if let Err(e) = res { warn!(error = %e, "cannot write the registration log"); }
+        }
+        self.put(r);
+    }
+
+    /// Drops entries older than `keep_days` (0 = no age limit), or all of them
+    /// with `clear`, and rewrites the file.
+    pub fn prune(&mut self, keep_days: u32, clear: bool, now_ms: u64) -> usize {
+        let before = self.rows.len();
+        if clear {
+            self.rows.clear();
+        } else if keep_days > 0 {
+            let cut = now_ms.saturating_sub(keep_days as u64 * 86_400_000);
+            self.rows.retain(|r| r.at_ms >= cut);
+        }
+        if let Some(p) = &self.path {
+            let mut text = String::new();
+            for r in self.rows.iter().rev() {
+                text.push_str(&serde_json::to_string(r).unwrap_or_default());
+                text.push('\n');
+            }
+            let tmp = p.with_extension("registrations.tmp");
+            if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, p)) {
+                warn!(error = %e, "cannot rewrite the registration log");
+            }
+        }
+        before - self.rows.len()
+    }
 }
 
 /// A position fix as served to the map, including which station reported it.
@@ -974,7 +1121,7 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
         TelemetryEvent::MsRegistration { issi } => {
             bts.registrations.insert(issi); bts.sync_registrations();
             let (cell, carrier) = reported_cell.map_or((None, None), |(name, carrier)| (Some(name), Some(carrier)));
-            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "register", roamed_to: None, cell, carrier });
+            bts.push_reg_entry(RegLogEntry { id: next_reg_id(), at_ms: now_ms(), issi, kind: "register", roamed_to: None, cell, carrier });
             registered = Some(issi);
         }
         TelemetryEvent::MsDeregistration { issi } => {
@@ -1063,6 +1210,7 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
             .filter(|p| p.at_ms == entry.at_ms)
             .map(|p| (p.issi, p.lat, p.lon, p.at_ms));
     }
+    t.flush_regs();
     // `[roaming] kick_old_issi`: the radio left whatever other Basestation
     // still lists it (radios never deregister from the cell they leave).
     if let Some(issi) = registered {
@@ -1482,7 +1630,7 @@ mod registration_log_tests {
     }
 
     #[test]
-    fn registration_log_caps_at_100_across_all_sources() {
+    fn registration_log_keeps_more_than_a_station_holds_and_caps_what_it_serves() {
         let mut t = TelemetryState::default();
         for i in 0..60u32 {
             t.record_brew_registration(i, "register");
@@ -1491,7 +1639,44 @@ mod registration_log_tests {
         for i in 0..60u32 {
             t.stations.get_mut("bts-1").unwrap().push_reg(i, "register");
         }
-        assert_eq!(t.registration_log().len(), 100);
+        assert_eq!(t.registration_log().len(), 120, "unflushed entries count too");
+        t.flush_regs();
+        assert_eq!(t.registration_log().len(), 120, "a station keeps 50, the history all of them");
+        for i in 0..REG_LOG_SERVED as u32 { t.record_brew_registration(i, "deregister"); }
+        assert_eq!(t.registration_log().len(), REG_LOG_SERVED);
+    }
+
+    /// The log survives a restart, a later change (cell, guest renamed)
+    /// replaces its entry, retention drops what is older than keep_days and
+    /// Clear empties it, the file included.
+    #[test]
+    fn registration_history_is_stored_updated_trimmed_and_cleared() {
+        let dir = std::env::temp_dir().join(format!("brew-reghist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = RegHistory::path_for(&dir.join("history.bin"));
+        let _ = std::fs::remove_file(&path);
+        let mut t = TelemetryState { regs: RegHistory::open(path.clone()), ..TelemetryState::default() };
+        t.stations.insert("bts-2".to_string(), TelemetryBts::new("bts-2".to_string(), None));
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.push_reg(15_728_641, "register");
+        let now = bts.recent_regs[0].at_ms;
+        t.flush_regs();
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.note_visitor(15_728_641, 2_320_972, now, Some(("1000002/0".into(), 1530)));
+        t.flush_regs();
+        let old = RegLogEntry { id: 1, at_ms: now - 8 * 86_400_000, issi: 9, kind: "timeout", roamed_to: None, cell: None, carrier: None };
+        t.regs.upsert(RegHistRow::new("bts-2", &old));
+
+        let back = RegHistory::open(path.clone());
+        let rows: Vec<_> = back.rows.iter().map(|r| (r.issi, r.kind.as_str(), r.cell.as_deref())).collect();
+        assert_eq!(rows, vec![(2_320_972, "register", Some("1000002/0")), (9, "timeout", None)], "renamed in place, newest first");
+
+        let mut back = back;
+        assert_eq!(back.prune(7, false, now), 1, "older than 7 days");
+        assert_eq!(RegHistory::open(path.clone()).rows.len(), 1, "the file is rewritten");
+        assert_eq!(back.prune(7, true, now), 1);
+        assert!(RegHistory::open(path.clone()).rows.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1559,9 +1744,9 @@ mod roaming_tests {
 
     #[test]
     fn roamed_entry_serializes_target_and_plain_entries_do_not() {
-        let roamed = RegLogEntry { at_ms: 1, issi: 7, kind: "roamed", roamed_to: Some("1000001".into()), cell: None, carrier: None };
+        let roamed = RegLogEntry { id: next_reg_id(), at_ms: 1, issi: 7, kind: "roamed", roamed_to: Some("1000001".into()), cell: None, carrier: None };
         assert!(serde_json::to_string(&roamed).unwrap().contains("\"roamed_to\":\"1000001\""));
-        let plain = RegLogEntry { at_ms: 1, issi: 7, kind: "register", roamed_to: None, cell: None, carrier: None };
+        let plain = RegLogEntry { id: next_reg_id(), at_ms: 1, issi: 7, kind: "register", roamed_to: None, cell: None, carrier: None };
         assert!(!serde_json::to_string(&plain).unwrap().contains("roamed_to"));
     }
 
