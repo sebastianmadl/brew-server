@@ -662,6 +662,8 @@ async function csLookup(){
   for(const n of ((D.nets&&D.nets.networks)||[]))for(const i of n.exported||[])add(i);
   for(const r of ((D.conn&&D.conn.roaming_log)||[]))add(r.issi);
   for(const r of (D.regs||[]))add(r.issi);
+  for(const i of ((D.smsc&&D.smsc.known)||[]))add(i);
+  for(const m of ((D.smsc&&D.smsc.messages)||[])){add(m.source_issi);add(m.destination);}
   const ask=[...want].filter(i=>!(D.issi||{})[i]&&!CS_ASKED.has(i)).slice(0,500);
   if(!ask.length)return;
   try{const m=await getJ('/api/callsigns?issi='+ask.join(','));ask.forEach(i=>CS_ASKED.add(i));D.cs=Object.assign(D.cs||{},m);}catch(e){}
@@ -2684,11 +2686,24 @@ R.sms=()=>{
   const d=D.smsc;if(!d)return loading;
   const adm=D.who.admin,list=(d.messages||[]).slice().sort((a,b)=>b.stored_at_ms-a.stored_at_ms);
   return `${!d.enabled?`<div class="card"><div class="note">${ic('info')}<div>The SMS Center is switched off (<code>[sms_center]</code> on the Config file page).</div></div></div>`:''}
-  <div class="card"><div class="ch"><h2>Stored messages</h2><span class="cnt">${list.length}</span>${helpBtn('smsc')}<span class="sp"></span><span class="mut" style="font-size:12.5px">${d.known_issis} radios known</span></div>${helpNote('smsc','SDS to a radio that is not reachable are kept here and delivered when it registers again, until they expire. <i>Delivering</i>: a delivery attempt is running. Admins can delete a stored message.')}
+  <div class="card"><div class="ch"><h2>Stored messages</h2><span class="cnt">${list.length}</span>${helpBtn('smsc')}<span class="sp"></span><button class="btn" style="font-size:12.5px" onclick="smsKnown()" title="Show the radios the SMS Center knows">${d.known_issis} radios known</button></div>${helpNote('smsc','SDS to a radio that is not reachable are kept here and delivered when it registers again, until they expire. <i>Delivering</i>: a delivery attempt is running. Admins can delete a stored message.')}
    <div class="tw"><table><thead><tr><th>Stored</th><th>From</th><th>To</th><th>Message</th><th>Status</th><th class="hide-s">Attempts</th><th class="hide-s">Expires</th>${adm?'<th></th>':''}</tr></thead><tbody>
    ${list.map(x=>`<tr><td class="m">${tmd(x.stored_at_ms)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${issiTxt(x.destination)}</td><td>${x.text?esc(x.text):`<span class="m mut">${esc(String(x.data_hex||'').slice(0,24))}</span>`}</td><td>${x.in_flight?'<span class="chip w">Delivering</span>':'<span class="chip">Waiting</span>'}</td><td class="num hide-s">${x.attempts}</td><td class="m hide-s">${tmd(x.expires_at_ms)}</td>${adm?`<td style="text-align:right"><button class="btn danger" onclick="smsDel('${esc(x.id)}')">Delete</button></td>`:''}</tr>`).join('')||`<tr><td colspan="8" class="mut">No stored messages</td></tr>`}
    </tbody></table></div>${msgDiv('sms-msg','padding:12px 18px')}</div>`;
 };
+// The radios the SMS Center has seen register, with their names where the server has one.
+function smsKnown(){
+  const d=D.smsc||{},l=(d.known||[]).slice().sort((a,b)=>{const na=nameOf(a)||'',nb=nameOf(b)||'';return na&&!nb?-1:nb&&!na?1:na.localeCompare(nb)||a-b;});
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Known radios</h3><span class="cnt">${l.length}</span></div><div class="sb">
+   <div class="mut" style="font-size:12.5px">Radios that registered at least once since the SMS Center keeps its file. Names come from the radio directory or the callsign list, where one is stored.</div>
+   <input class="f" id="smk-q" placeholder="Filter by ISSI or name" autocomplete="off" oninput="smsKnownFilter()">
+   <div class="tw" style="max-height:55vh;overflow:auto"><table><thead><tr><th>ISSI</th><th>Name</th></tr></thead><tbody id="smk-b">
+   ${l.map(i=>`<tr data-k="${esc((i+' '+(nameOf(i)||'')).toLowerCase())}"><td class="m">${i}</td><td>${nameOf(i)?esc(nameOf(i)):'<span class="mut">–</span>'}</td></tr>`).join('')||'<tr><td colspan="2" class="mut">No radios known yet</td></tr>'}
+   </tbody></table></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Close</button></div>`;
+  $('scrim').classList.add('on');setTimeout(()=>$('smk-q').focus(),30);
+}
+function smsKnownFilter(){const q=$('smk-q').value.trim().toLowerCase();document.querySelectorAll('#smk-b tr[data-k]').forEach(r=>{r.style.display=!q||r.dataset.k.includes(q)?'':'none';});}
 async function smsDel(id){if(!confirm('Delete this stored message? It will not be delivered.'))return;
   try{await api('/api/sms-center/'+id,{method:'DELETE'});setMsg('sms-msg','ok','Deleted.');}catch(e){setMsg('sms-msg','err',e.message);}loadPageData('sms',false);}
 
@@ -3151,6 +3166,13 @@ mod tests {
     /// UI cleanup: Telemetry watches (graphs, values, condition alarms, ping), Fleet Control
     /// manages (restart and shut down together), DGNA & Radio actions replaces Control and takes
     /// DGNA from Routing.
+    #[test]
+    fn sms_center_known_radios_open_a_named_list() {
+        assert!(PAGE_HTML.contains(r#"onclick="smsKnown()""#), "the count is a button");
+        assert!(PAGE_HTML.contains("function smsKnown(){"));
+        assert!(PAGE_HTML.contains("for(const i of ((D.smsc&&D.smsc.known)||[]))add(i);"), "call signs are looked up for them");
+    }
+
     #[test]
     fn pages_after_the_ui_cleanup() {
         let page = |name: &str| {

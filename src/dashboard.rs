@@ -992,8 +992,14 @@ pub async fn brew_rssi_snapshot(State(state): State<Arc<AppState>>) -> Json<Vec<
 /// The cell a registered subscriber is on, as its station reported it
 /// (`SERVICE_MS_CELL`): `{"name":"<login>/<cell>","cell":N,"carrier":N}`.
 fn ms_cell_json(inner: &crate::state::Inner, issi: u32, client: crate::state::ClientId) -> Option<serde_json::Value> {
-    let cell = inner.carriers.ms_cell(issi, client)?;
-    let station = crate::carriers::station_name(client, inner.clients.get(&client).and_then(|c| c.username.as_deref()));
+    let station_of = |c: crate::state::ClientId| crate::carriers::station_name(c, inner.clients.get(&c).and_then(|x| x.username.as_deref()));
+    let station = station_of(client);
+    // The cell this connection reported; else the one another connection of the same
+    // station reported (a station with cells in several networks, a Multi Network guest);
+    // else the station's only cell.
+    let cell = inner.carriers.ms_cell(issi, client)
+        .or_else(|| inner.carriers.ms_cell_any(issi).filter(|(other, _)| station_of(*other) == station).map(|(_, c)| c))
+        .or_else(|| inner.carriers.info(client).filter(|i| i.cells.len() == 1).map(|i| &i.cells[0]))?;
     Some(serde_json::json!({
         "name": crate::carriers::cell_name(&station, cell.cell),
         "cell": cell.cell,

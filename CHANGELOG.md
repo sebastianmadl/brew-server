@@ -35,6 +35,15 @@ Unreleased (dashboard cleanup) adds:
   to Infrastructure, under Telemetry.
 - `/api/control` (the list of control connections) is no longer open to
   everyone: it needs DGNA & Radio actions or Fleet Control visibility.
+- **Radios: the cell (global ID) no longer gets lost.** Deregistrations,
+  timeouts and "moved to another station" entries in the registration log
+  keep the cell the radio was last seen in, a guest's registration gets the
+  cell its station reports for the guest's home ISSI, and **Registered
+  radios** falls back to the cell reported on another connection of the same
+  station, or to the station's only cell.
+- **SMS Center: "n radios known" opens the list.** A popup shows the known
+  radios with their names (radio directory or callsign list), with a filter.
+  `GET /api/sms-center` now also returns `known` (the ISSIs).
 
 Version 1.21.2 adds:
 

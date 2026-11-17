@@ -552,12 +552,21 @@ impl TelemetryBts {
     /// first, capped at 50 like `recent_sds`).
     fn push_reg(&mut self, issi: u32, kind: &'static str) {
         let issi = self.visitor_home.get(&issi).copied().unwrap_or(issi);
-        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell: None, carrier: None });
+        let (cell, carrier) = self.last_cell(issi);
+        self.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind, roamed_to: None, cell, carrier });
+    }
+
+    /// The cell `issi` was last logged on at this station (its newest entry with a cell):
+    /// a deregistration, timeout or move away names the cell the radio left.
+    fn last_cell(&self, issi: u32) -> (Option<String>, Option<u16>) {
+        self.recent_regs.iter().find(|e| e.issi == issi && e.cell.is_some()).map_or((None, None), |e| (e.cell.clone(), e.carrier))
     }
 
     /// `MsVisitor`: later log entries of `vassi` name `home`, and so does its registration,
     /// which the Basestation reports just before.
-    fn note_visitor(&mut self, vassi: u32, home: u32, now_ms: u64) {
+    /// `cell`: where the server has the home ISSI (the station reports guests to Brew by
+    /// their home ISSI), for a renamed registration that has no cell yet.
+    fn note_visitor(&mut self, vassi: u32, home: u32, now_ms: u64, cell: Option<(String, u16)>) {
         if self.visitor_home.len() >= 4096 && !self.visitor_home.contains_key(&vassi) {
             self.visitor_home.clear();
         }
@@ -565,6 +574,12 @@ impl TelemetryBts {
         let mut changed = false;
         for e in self.recent_regs.iter_mut().filter(|e| e.issi == vassi && now_ms.saturating_sub(e.at_ms) <= VISITOR_NOTE_MS) {
             e.issi = home;
+            if e.kind == "register" && e.cell.is_none() {
+                if let Some((name, carrier)) = &cell {
+                    e.cell = Some(name.clone());
+                    e.carrier = Some(*carrier);
+                }
+            }
             changed = true;
         }
         if changed {
@@ -774,7 +789,8 @@ impl TelemetryState {
             if id == new_bts || !bts.registrations.remove(&issi) { continue; }
             bts.ms_cell.remove(&issi);
             bts.sync_registrations();
-            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()), cell: None, carrier: None });
+            let (cell, carrier) = bts.last_cell(issi);
+            bts.push_reg_entry(RegLogEntry { at_ms: now_ms(), issi, kind: "roamed", roamed_to: Some(new_bts.to_string()), cell, carrier });
             old.push(id.clone());
         }
         old.sort_unstable();
@@ -792,8 +808,12 @@ impl TelemetryState {
     /// registration; `MsRegistration` covers the other order with
     /// `carriers::recent_cell`.
     pub fn tag_cell(&mut self, issi: u32, name: &str, carrier: u16, now_ms: u64) {
+        // A guest's registration may still carry its (V)ASSI until `MsVisitor` renames it.
         let newest = self.stations.values_mut()
-            .filter_map(|b| b.recent_regs.iter().position(|e| e.issi == issi).map(|i| (b.recent_regs[i].at_ms, b, i)))
+            .filter_map(|b| {
+                let i = b.recent_regs.iter().position(|e| e.issi == issi || b.visitor_home.get(&e.issi) == Some(&issi))?;
+                Some((b.recent_regs[i].at_ms, b, i))
+            })
             .max_by_key(|(at, _, _)| *at);
         let Some((at, bts, i)) = newest else { return };
         let entry = &mut bts.recent_regs[i];
@@ -906,6 +926,7 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
     // registration log (read before the telemetry lock is taken).
     let reported_cell = match event {
         TelemetryEvent::MsRegistration { issi } => crate::carriers::recent_cell(&*state.inner.read().await, issi, now_ms()),
+        TelemetryEvent::MsVisitor { home_issi, .. } => crate::carriers::recent_cell(&*state.inner.read().await, home_issi, now_ms()),
         _ => None,
     };
 
@@ -979,7 +1000,7 @@ async fn handle_event(state: &Arc<AppState>, id: &str, data: &[u8]) {
             bts.registrations.remove(&issi); bts.sync_registrations();
             bts.push_reg(issi, "timeout");
         }
-        TelemetryEvent::MsVisitor { issi, home_issi, .. } => bts.note_visitor(issi, home_issi, now_ms()),
+        TelemetryEvent::MsVisitor { issi, home_issi, .. } => bts.note_visitor(issi, home_issi, now_ms(), reported_cell.clone()),
         TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, carrier_num, ts, priority } => {
             bts.active_calls.insert(call_id, TelemetryCall {
                 call_id, is_group: true, gssi_or_called: gssi, source_issi: caller_issi,
@@ -1999,6 +2020,49 @@ mod registration_cell_tests {
         brew_register(&state, id, 7).await;
         telemetry_register(&state, 7).await;
         assert_eq!(logged(&state).await, vec![(7, "register", Some("1000002/0".into()), Some(1530))]);
+    }
+
+    #[test]
+    fn deregistration_timeout_and_move_away_keep_the_cell_the_radio_left() {
+        let mut t = TelemetryState::default();
+        t.stations.insert("bts-2".into(), TelemetryBts::new("bts-2".into(), None));
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.registrations.insert(7);
+        bts.push_reg(7, "register");
+        let at = bts.recent_regs[0].at_ms;
+        t.tag_cell(7, "1000002/1", 1528, at);
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.push_reg(7, "timeout");
+        bts.push_reg(7, "register");
+        bts.push_reg(7, "deregister");
+        bts.push_reg(9, "deregister");
+        t.stations.get_mut("bts-2").unwrap().registrations.insert(7);
+        t.take_roamed(7, "bts-3");
+        let log = t.registration_log();
+        let cell = |issi: u32, kind: &str| log.iter().find(|r| r.entry.issi == issi && r.entry.kind == kind).and_then(|r| r.entry.cell.clone());
+        assert_eq!(cell(7, "timeout").as_deref(), Some("1000002/1"));
+        assert_eq!(cell(7, "deregister").as_deref(), Some("1000002/1"));
+        assert_eq!(cell(7, "roamed").as_deref(), Some("1000002/1"));
+        assert_eq!(cell(9, "deregister"), None, "no cell known, none made up");
+    }
+
+    #[test]
+    fn a_guest_registration_gets_the_cell_reported_for_its_home_issi() {
+        let mut t = TelemetryState::default();
+        t.stations.insert("bts-2".into(), TelemetryBts::new("bts-2".into(), None));
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        // Cell reported (by home ISSI) before the telemetry renamed the entry.
+        bts.push_reg(15_728_641, "register");
+        let now = bts.recent_regs[0].at_ms;
+        bts.note_visitor(15_728_641, 2_320_972, now, Some(("1000002/0".into(), 1530)));
+        assert_eq!(t.registration_log()[0].entry.cell.as_deref(), Some("1000002/0"));
+        // Cell reported after the rename, or for an entry still under the (V)ASSI.
+        let bts = t.stations.get_mut("bts-2").unwrap();
+        bts.push_reg(15_728_649, "register");
+        bts.visitor_home.insert(15_728_649, 2_320_973);
+        let at = bts.recent_regs[0].at_ms;
+        t.tag_cell(2_320_973, "1000002/1", 1528, at);
+        assert_eq!(t.registration_log()[0].entry.cell.as_deref(), Some("1000002/1"));
     }
 
     #[test]
