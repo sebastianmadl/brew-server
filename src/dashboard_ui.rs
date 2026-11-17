@@ -165,7 +165,13 @@ a.tile{color:inherit;cursor:pointer}
 @media (max-width:760px){.tgt col.g{width:24%}.tgt col.n{width:40%}.tgt col.a{width:36%}.tgt td.tga{white-space:normal}.tgt td.tga .btn{padding:0 9px}}
 @media (prefers-reduced-motion:reduce){.tgh .chev{transition:none}}
 .tw{overflow-x:auto;position:relative}
-.tw.fllog{max-height:452px;overflow-y:auto}.tw.fllog th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
+.tw.fllog{max-height:452px;overflow-y:auto}
+/* SDS page: network SDS and station telemetry SDS side by side on wide screens, each list scrolls */
+.sdsgrid{display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}.sdsgrid>.card{margin:0}
+@media (min-width:1280px){.sdsgrid.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.tw.sdsl{max-height:62vh;overflow-y:auto}.tw.sdsl th,.sheet.full .tw th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
+.sdsgrid.two .sdsdir{display:none}.sdsgrid.two .sdstx{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheet.full{width:min(1600px,100%);height:92vh;max-height:92vh;display:flex;flex-direction:column}.sheet.full .sb{flex:1;min-height:0}.sheet.full .tw{flex:1;min-height:0;overflow:auto}.tw.fllog th{position:sticky;top:0;z-index:1;background:linear-gradient(color-mix(in srgb,var(--text) 2.5%,transparent),color-mix(in srgb,var(--text) 2.5%,transparent)),var(--bg2)}
 .empty .tot{margin-top:6px;font-size:12.5px}.empty .tot b{font:600 15px var(--mono,ui-monospace,monospace);color:var(--text2)}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;font:600 11px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text3);padding:9px 18px;background:color-mix(in srgb,var(--text) 2.5%,transparent);white-space:nowrap}
@@ -479,12 +485,15 @@ const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Infrastructure'],['routing','Routing','routing','Infrastructure'],['roaming','Roaming','roam','Infrastructure'],['multinet','Multi Network','globe','Infrastructure',null,true],
- ['telemetry','Telemetry','tele','Infrastructure'],['tsds','Telemetry SDS','tsds','Infrastructure'],['radioctl','DGNA & Radio actions','ctl','Infrastructure'],['fleet','Fleet Control','fleet','Infrastructure'],['accounts','Accounts','key','Infrastructure'],
+ ['telemetry','Telemetry','tele','Infrastructure'],['radioctl','DGNA & Radio actions','ctl','Infrastructure'],['fleet','Fleet Control','fleet','Infrastructure'],['accounts','Accounts','key','Infrastructure'],
  ['sip','SIP / VoIP','sip','Integrations'],['sipcfg','SIP Config','sipcfg','Integrations'],
  ['sms','SMS Center','sms','Integrations'],
  ['ha','High Availability','ha','System'],['config','Config file','file','System',null,true],['settings','Server settings','set','System',null,true]
 ];
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
+// Telemetry SDS has no menu entry any more: it is the second list on the SDS page. The page id
+// stays as the right that shows that list (Server settings -> Users).
+PG.tsds=['tsds','Telemetry SDS','tsds','Monitor'];
 // Pages this login sees (Server settings -> Users): an admin all of them, any other login the ones
 // ticked for it, someone not logged in the Viewer pages. The server refuses the rest anyway.
 // The station config page (Fleet Control -> Edit) goes with the Fleet Control page.
@@ -578,11 +587,12 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('[data-tab]');if(t){if(t.dataset.tab==='more')document.body.classList.toggle('sbopen');else go(t.dataset.tab);return;}
   if(document.body.classList.contains('sbopen')&&!e.target.closest('#sb'))document.body.classList.remove('sbopen');
 });
-function go(p){if(p==='control')p='radioctl';if(!PG[p])p='overview';if(location.hash!=='#'+p)location.hash=p;else show(p);}
+function go(p){if(p==='control')p='radioctl';if(p==='tsds')p='sds';if(!PG[p])p='overview';if(location.hash!=='#'+p)location.hash=p;else show(p);}
 window.addEventListener('hashchange',()=>show(location.hash.slice(1)));
 const navKey=()=>JSON.stringify([D.who.admin,D.who.pages]);
 function show(p){
   if(p==='control')p='radioctl'; // the former Control page
+  if(p==='tsds')p='sds'; // Telemetry SDS is a list on the SDS page
   if(!PG[p])p='overview';
   // A page this login does not see: the first one it does (or the login window).
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
@@ -919,15 +929,42 @@ R.calls=()=>{
    ${rec.slice(0,showN('calls')==='all'?undefined:showN('calls')).map(c=>`<tr><td class="m">${tmd(c.started_at_ms)}</td><td>${c.kind==='group'?'<span class="chip a">Group</span>':'<span class="chip b">Individual</span>'}</td><td>${issiCell(c.source)}</td><td>${c.pool?`<span class="chip" title="Pool: one call heard on ${c.legs.length} groups">${ic('routing')} ${esc(c.pool)}</span><span class="sub">${c.legs.map(g=>g>16777215?tgTxt(g):String(g)).join(' · ')}</span>`:c.kind==='group'?`<span class="m">${c.destination>16777215?tgTxt(c.destination):c.destination}</span>${gName(c.destination)?`<span class="sub">${esc(gName(c.destination))}</span>`:''}`:issiCell(c.destination)}</td>${nc?`<td>${netChips(c)}</td>`:''}<td class="m">${c.ended_at_ms?dur(c.ended_at_ms-c.started_at_ms):'—'}</td><td class="num">${c.priority}</td><td class="num">${c.voice_frames}</td></tr>`).join('')||'<tr><td colspan="${nc?8:7}" class="mut">No calls yet</td></tr>'}
   </tbody></table></div></div>`;
 };
+// SDS: the network's SDS and, with the Telemetry SDS right, the SDS the stations report over their
+// telemetry link, side by side on wide screens. Each list scrolls; ⤢ shows it on the whole screen.
+function sdsNetList(){const st=D.status,q=UI.filter.sds||'';
+  return st.recent_sds.filter(s=>kindOk('sdsk',s.protocol_id)&&match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));}
+function sdsNetTable(list){const nc=hasNet(list);
+  return `<table><thead><tr><th>Time</th><th>Kind</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
+  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${sdsChip(s.protocol_id)||'<span class="mut">—</span>'}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||`<tr><td colspan="${nc?6:5}" class="mut">No SDS yet</td></tr>`}</tbody></table>`;}
+const sdsTeleOn=()=>can('tsds')&&Array.isArray(D.tele);
+function sdsTeleAll(){return D.tele.flatMap(s=>(s.recent_sds_out||[]).map(x=>({...x,bts:s.id}))).sort((a,b)=>b.at_ms-a.at_ms).slice(0,100);}
+function sdsTeleList(){const q=UI.filter.sds||'';
+  return sdsTeleAll().filter(x=>kindOk('tsdsk',x.protocol_id)&&match(q,x.source_issi,x.dest_issi,nameOf(x.source_issi),nameOf(x.dest_issi),x.bts,x.text));}
+function sdsTeleTable(list){
+  return `<table><thead><tr><th>Time</th><th>Kind</th><th>Station</th><th class="hide-s sdsdir">Direction</th><th>From</th><th>To</th><th>Text</th></tr></thead><tbody>
+   ${list.map(x=>`<tr><td class="m">${tmd(x.at_ms)}</td><td>${sdsChip(x.protocol_id)}</td><td><b>${esc(x.bts)}</b></td><td class="hide-s sdsdir">${esc(x.direction)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${x.is_group?'TG '+tgTxt(x.dest_issi):issiTxt(x.dest_issi)}</td><td><div class="sdstx" title="${esc(x.text||'')}">${x.protocol_id===10&&!(x.text||'').trim()?'<span class="mut">binary LIP (undecoded)</span>':esc(x.text)}</div></td></tr>`).join('')||'<tr><td colspan="7" class="mut">No telemetry SDS yet</td></tr>'}
+   </tbody></table>`;}
+const TSDS_HELP='The last SDS each station reports over its telemetry link (FlowStation <code>[telemetry]</code>), newest first, up to 100, with the text. <i>Kind</i> comes from the protocol identifier (ETSI TS 100 392-2 table 29.21; hover for the value): Text, Position (LIP, location system), WAP / data, Multi-part (concatenated), Security (OTAK, PIN, end-to-end encrypted), System (managed DMO, DOTAM, AGNSS), App (user application range) or Other. Binary LIP is shown as undecoded. The search above filters both lists.';
+const fullBtn=w=>`<button class="btn" onclick="sdsFull('${w}')" title="Show this list on the whole screen" aria-label="Full screen">⤢</button>`;
 R.sds=()=>{
   const st=D.status;if(!st)return '<div class="empty">Loading…</div>';
-  const q=UI.filter.sds||'';const list=st.recent_sds.filter(s=>kindOk('sdsk',s.protocol_id)&&match(q,s.source,s.destination,nameOf(s.source),nameOf(s.destination),s.from_network,(s.to_networks||[]).join(' ')));
-  const nc=hasNet(list);
-  return `<div class="bar">${searchBox('sds','ISSI…')}${kindSel('sdsk',st.recent_sds.map(s=>s.protocol_id))}<span class="sp"></span>${showSel('sds')}<span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('sds')">${ic('trash')}Clear all SDS</button>`:''}</div>
+  const list=sdsNetList(),tele=sdsTeleOn(),tl=tele?sdsTeleList():[];
+  if(UI.sdsFull)setTimeout(sdsFullFill,0);
+  return `<div class="bar">${searchBox('sds','ISSI, name, text…')}${kindSel('sdsk',st.recent_sds.map(s=>s.protocol_id))}<span class="sp"></span>${showSel('sds')}<span class="mut" style="font-size:12.5px">${st.total_sds} SDS in total</span>${D.who.admin?`<button class="btn danger" onclick="clearHistory('sds')">${ic('trash')}Clear all SDS</button>`:''}</div>
   ${msgDiv('sds-msg','padding:0 4px')}
-  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'sds')}</span></div><div class="tw"><table><thead><tr><th>Time</th><th>Kind</th><th>From</th><th>To</th>${nc?'<th>Network</th>':''}<th>Reports</th></tr></thead><tbody>
-  ${list.map(s=>`<tr><td class="m">${tmd(s.at_ms)}</td><td>${sdsChip(s.protocol_id)||'<span class="mut">—</span>'}</td><td>${issiCell(s.source)}</td><td>${issiCell(s.destination)}</td>${nc?`<td>${netChips(s)}</td>`:''}<td class="num">${s.reports}</td></tr>`).join('')||'<tr><td colspan="${nc?6:5}" class="mut">No SDS yet</td></tr>'}</tbody></table></div></div>`;
+  <div class="sdsgrid${tele?' two':''}">
+  <div class="card"><div class="ch"><h2>Recent SDS</h2><span class="cnt">${list.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${keptNote(st,'sds')}</span>${fullBtn('net')}</div><div class="tw sdsl">${sdsNetTable(list)}</div></div>
+  ${tele?`<div class="card"><div class="ch"><h2>Telemetry SDS</h2><span class="cnt">${tl.length}</span>${helpBtn('tsds')}<span class="sp"></span>${kindSel('tsdsk',sdsTeleAll().map(x=>x.protocol_id))}${fullBtn('tele')}</div>${helpNote('tsds',TSDS_HELP)}<div class="tw sdsl">${sdsTeleTable(tl)}</div></div>`:''}
+  </div>`;
 };
+// One list on the whole screen; it follows the live refresh while open.
+function sdsFull(w){UI.sdsFull=w;
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${w==='tele'?'Telemetry SDS':'Recent SDS'}</h3><span class="cnt" id="sdsf-n"></span></div><div class="sb"><div class="tw" id="sdsf-t"></div></div><div class="acts"><button class="btn" onclick="closeSheet()">Close</button></div>`;
+  $('sheet').classList.add('full');$('scrim').classList.add('on');sdsFullFill();}
+function sdsFullFill(){const w=UI.sdsFull,t=$('sdsf-t');if(!w||!t||!D.status)return;
+  const l=w==='tele'?(sdsTeleOn()?sdsTeleList():[]):sdsNetList();
+  const html=w==='tele'?sdsTeleTable(l):sdsNetTable(l);if(t.dataset.sig===html)return;
+  const y=t.scrollTop;t.innerHTML=html;t.dataset.sig=html;t.scrollTop=y;$('sdsf-n').textContent=l.length;}
 R.radios=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const q=UI.filter.radios||'';
@@ -2125,7 +2162,7 @@ function editPool(i){
   $('scrim').classList.add('on');setTimeout(()=>$('pe-name').focus(),30);
 }
 function setDir(b){document.querySelectorAll('#pe-dir button').forEach((x,j)=>{const on=(j===0)===b;x.setAttribute('aria-pressed',on);x.setAttribute('aria-checked',on);});}
-function closeSheet(){$('scrim').classList.remove('on');}
+function closeSheet(){$('scrim').classList.remove('on');$('sheet').classList.remove('full');UI.sdsFull=null;}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet();});
 async function savePool(i){
   const groups=$('pe-groups').value.split(/[\s,;]+/).filter(Boolean).map(Number);
@@ -2555,14 +2592,13 @@ async function waitRestart(){
   }
 }
 
-/* ---------- SIP, SMS Center, Telemetry SDS, High Availability, Server settings (native, were classic frames) ---------- */
+/* ---------- SIP, SMS Center, High Availability, Server settings (native, were classic frames) ---------- */
 // Page data that only these pages need: asked when the page opens and with the live refresh.
 function loadPageData(p,first){
   const t=[];const set=(k,u)=>t.push(getJ(u).then(v=>{D[k]=v;}).catch(e=>{D[k+'Err']=e.message;}));
   if(p==='sip')set('sip','/api/sip');
   if(p==='sipcfg'){set('sipc','/api/sip/config');if(first&&D.who.admin)set('sipFull','/api/config/sip/full');}
   if(p==='sms')set('smsc','/api/sms-center');
-  if(p==='tsds'&&first)set('tele','/api/telemetry');
   if(p==='ha'){set('ha','/api/ha');if(first&&D.who.admin)set('haCfg','/api/config/ha');}
   if(p==='settings'&&first&&D.who.admin){set('dusers','/api/dashboard-users');set('blk','/api/config/blacklist');set('allow','/api/config/allowlist');set('btsLocs','/api/bts-locations?config_only=1');}
   if(t.length)Promise.all(t).then(()=>{if(UI.page===p)render(first);});
@@ -2707,15 +2743,6 @@ function smsKnownFilter(){const q=$('smk-q').value.trim().toLowerCase();document
 async function smsDel(id){if(!confirm('Delete this stored message? It will not be delivered.'))return;
   try{await api('/api/sms-center/'+id,{method:'DELETE'});setMsg('sms-msg','ok','Deleted.');}catch(e){setMsg('sms-msg','err',e.message);}loadPageData('sms',false);}
 
-R.tsds=()=>{
-  const t=D.tele;if(!t)return loading;
-  const all=t.flatMap(s=>(s.recent_sds_out||[]).map(x=>({...x,bts:s.id}))).sort((a,b)=>b.at_ms-a.at_ms).slice(0,100);
-  const list=all.filter(x=>kindOk('tsdsk',x.protocol_id));
-  return `<div class="bar"><span class="sp"></span>${kindSel('tsdsk',all.map(x=>x.protocol_id))}</div><div class="card"><div class="ch"><h2>Telemetry SDS</h2><span class="cnt">${list.length}</span>${helpBtn('tsds')}</div>${helpNote('tsds','The last SDS each station reports over its telemetry link (FlowStation <code>[telemetry]</code>), newest first, up to 100. <i>Kind</i> comes from the protocol identifier (ETSI TS 100 392-2 table 29.21; hover for the value): Text, Position (LIP, location system), WAP / data, Multi-part (concatenated), Security (OTAK, PIN, end-to-end encrypted), System (managed DMO, DOTAM, AGNSS), App (user application range) or Other. Binary LIP is shown as undecoded.')}
-   <div class="tw"><table><thead><tr><th>Time</th><th>Kind</th><th>Station</th><th class="hide-s">Direction</th><th>From</th><th>To</th><th>Text</th></tr></thead><tbody>
-   ${list.map(x=>`<tr><td class="m">${tmd(x.at_ms)}</td><td>${sdsChip(x.protocol_id)}</td><td><b>${esc(x.bts)}</b></td><td class="hide-s">${esc(x.direction)}</td><td class="m">${issiTxt(x.source_issi)}</td><td class="m">${x.is_group?'TG '+tgTxt(x.dest_issi):issiTxt(x.dest_issi)}</td><td>${x.protocol_id===10&&!(x.text||'').trim()?'<span class="mut">binary LIP (undecoded)</span>':esc(x.text)}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No telemetry SDS yet</td></tr>'}
-   </tbody></table></div></div>`;
-};
 
 // High Availability: both nodes, controls and the [ha] settings (admin), role changes.
 const haRole=r=>{const m={active:'a',standby:'b',down:'d',starting:'w'};return `<span class="chip ${m[r]||'i'}">${esc(String(r||'unknown'))}</span>`;};
@@ -2839,7 +2866,7 @@ function editUser(i){
   const x=viewer?{name:'Viewer',admin:false,pages:u.viewer}:i>=0?u.users[i]:{name:'',admin:false,pages:u.viewer};
   const box=(id,label)=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" class="chk du-pg" value="${id}" ${x.admin||x.pages.includes(id)?'checked':''} ${x.admin?'disabled':''}> ${esc(label)}</label>`;
   // Fleet Control and DGNA & Radio actions: seeing the page, and acting there (includes seeing; not for Viewer).
-  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[0]==='radioctl'?'DGNA & Radio actions: view':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management')+box('radioctl_manage','DGNA & Radio actions: send'));
+  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[0]==='radioctl'?'DGNA & Radio actions: view':p[1])).join('')+box('tsds','Telemetry SDS (list on the SDS page)')+(viewer?'':box('fleet_manage','Fleet Control management')+box('radioctl_manage','DGNA & Radio actions: send'));
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${viewer?'Viewer (not logged in)':i>=0?'Edit user '+esc(x.name):'New user'}</h3></div><div class="sb">
    ${viewer?`<div class="mut" style="font-size:12.5px">What anyone sees without logging in${D.who.open?'':' once the dashboard is open (<code>[dashboard.ui] open = true</code>; it is closed now, so nobody sees anything without logging in)'}.</div>`:`
    <div><label class="l" for="du-name">User name</label><input class="f" id="du-name" value="${esc(x.name)}" ${i>=0?'disabled':''} placeholder="e.g. oe4sxm" autocomplete="off" spellcheck="false" autocapitalize="off"></div>
@@ -3076,11 +3103,11 @@ mod tests {
             assert!(PAGE_HTML.contains(&format!("{pid}:'{kind}'")), "pid {pid} is {kind}");
         }
         assert!(PAGE_HTML.contains("(p>=64&&p<=126)||(p>=192&&p<=254)?'app':'other'"), "user application ranges");
-        for page in ["R.sds=()=>{", "R.tsds=()=>{"] {
-            let body = &PAGE_HTML[PAGE_HTML.find(page).unwrap()..];
-            let body = &body[..body.find("\n};").unwrap()];
-            assert!(body.contains("sdsChip(") && body.contains("kindSel(") && body.contains("kindOk("), "{page} shows and filters the kind");
-        }
+        // The SDS page (network and station telemetry lists) shows and filters the kind.
+        let body = &PAGE_HTML[PAGE_HTML.find("function sdsNetList(){").unwrap()..];
+        let body = &body[..body.find("R.sds=()=>{").unwrap()];
+        assert_eq!(body.matches("sdsChip(").count(), 2, "both lists show the kind");
+        assert_eq!(body.matches("kindOk(").count(), 2, "both lists filter it");
         assert!(PAGE_HTML.contains("${sdsChip(s.protocol_id)?' '+sdsChip(s.protocol_id):''}"), "Overview shows the kind");
     }
 
@@ -3142,7 +3169,7 @@ mod tests {
     fn former_classic_pages_are_native() {
         let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
         let pages = &pages[..pages.find("];").unwrap()];
-        for id in ["sip", "sipcfg", "sms", "tsds", "ha", "settings"] {
+        for id in ["sip", "sipcfg", "sms", "ha", "settings"] {
             let entry = &pages[pages.find(&format!("['{id}',")).unwrap()..];
             let entry = &entry[..entry.find(']').unwrap()];
             assert!(!entry.contains("'/"), "{id} is not a frame any more: {entry}");
@@ -3167,6 +3194,23 @@ mod tests {
     /// manages (restart and shut down together), DGNA & Radio actions replaces Control and takes
     /// DGNA from Routing.
     #[test]
+    fn telemetry_sds_is_a_second_list_on_the_sds_page() {
+        let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
+        let pages = &pages[..pages.find("];").unwrap()];
+        assert!(!pages.contains("'tsds'"), "no menu entry of its own");
+        assert!(PAGE_HTML.contains("PG.tsds=['tsds','Telemetry SDS','tsds','Monitor'];"), "the right stays");
+        assert!(PAGE_HTML.contains("box('tsds','Telemetry SDS (list on the SDS page)')"), "and can be ticked");
+        assert!(PAGE_HTML.contains("if(p==='tsds')p='sds';"), "old links land on the SDS page");
+        assert!(!PAGE_HTML.contains("R.tsds=()=>{"));
+        let body = &PAGE_HTML[PAGE_HTML.find("R.sds=()=>{").unwrap()..];
+        let body = &body[..body.find("\n};").unwrap()];
+        assert!(body.contains("sdsTeleOn()") && body.contains("kindSel('tsdsk'"), "the station list with its own kind filter");
+        assert!(body.contains("fullBtn('net')") && body.contains("fullBtn('tele')"), "both lists open on the whole screen");
+        assert!(PAGE_HTML.contains("@media (min-width:1280px){.sdsgrid.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}"), "side by side on wide screens");
+        assert!(PAGE_HTML.contains(".tw.sdsl{max-height:62vh;overflow-y:auto}"), "each list scrolls");
+    }
+
+    #[test]
     fn sms_center_known_radios_open_a_named_list() {
         assert!(PAGE_HTML.contains(r#"onclick="smsKnown()""#), "the count is a button");
         assert!(PAGE_HTML.contains("function smsKnown(){"));
@@ -3183,7 +3227,7 @@ mod tests {
         let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
         let pages = &pages[..pages.find("];").unwrap()];
         assert!(!pages.contains("['control'"), "Control is gone");
-        assert!(pages.contains("['telemetry','Telemetry','tele','Infrastructure'],['tsds','Telemetry SDS','tsds','Infrastructure'],['radioctl','DGNA & Radio actions'"));
+        assert!(pages.contains("['telemetry','Telemetry','tele','Infrastructure'],['radioctl','DGNA & Radio actions'"));
         let tele = page("telemetry");
         assert!(tele.contains("fleetAlarmCard(f,false)") && tele.contains("tlmHeadFx(fx)") && tele.contains("tlmLatest(fx)") && tele.contains("fleetAutoPing"));
         assert!(PAGE_HTML.contains("onclick=\"fleetGraph('${esc(fx.id)}')\""), "graphs link at the telemetry card");

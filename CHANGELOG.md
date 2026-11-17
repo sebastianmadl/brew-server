@@ -31,8 +31,14 @@ Unreleased (dashboard cleanup) adds:
   Fleet Control keep Restart / Shut down on this page. `#control` links open
   the new page.
 - **Server settings: "Graphs and alarms"** (was "Fleet Control graphs and
-  alarms"), linking to Telemetry. **Telemetry SDS** moved from Integrations
-  to Infrastructure, under Telemetry.
+  alarms"), linking to Telemetry.
+- **Telemetry SDS is part of the SDS page.** Its menu entry is gone: the SDS
+  page shows Recent SDS and the stations' Telemetry SDS side by side on wide
+  screens (one above the other on narrow ones). Each list scrolls on its own,
+  the search filters both, Telemetry SDS keeps its Kind filter, and **⤢**
+  opens a list on the whole screen with all columns (it follows the live
+  refresh). The Telemetry SDS right stays in the users dialog and shows the
+  second list; old `#tsds` links open the SDS page.
 - `/api/control` (the list of control connections) is no longer open to
   everyone: it needs DGNA & Radio actions or Fleet Control visibility.
 - **Radios: the cell (global ID) no longer gets lost.** Deregistrations,
