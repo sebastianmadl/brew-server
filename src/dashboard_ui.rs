@@ -2092,7 +2092,7 @@ R.routing=()=>{
   const linkRows=links.map(([p,i])=>{const r=(p.remote||[])[0]||{network:'?',gssi:0};const g=p.groups[0];
    return `<tr class="${p.enabled?'':'off'}"><td><button class="tog" role="switch" aria-checked="${p.enabled}" aria-label="Link ${esc(p.name)} on" ${adm?'':'disabled'} onclick="togglePool(${i})"></button></td>
     <td>${p.name===autoLink(p)?'<span class="mut">—</span>':`<b>${esc(p.name)}</b>`}</td><td><span class="mut" style="font-size:12px">${esc(ownNet)}</span><br>${tgChip(g)}</td><td class="arrow" style="font-size:18px">⇄</td>
-    <td><span class="mut" style="font-size:12px">${esc(r.network)}</span><br><span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${r.gssi}</span></td>
+    <td><span class="mut" style="font-size:12px">${esc(r.network)}</span><br><span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${r.gssi}</span>${p.on_demand?' <span class="chip" title="Only while a radio here is in the talkgroup">on demand</span>':''}</td>
     <td>${live(p)}</td><td style="white-space:nowrap">${adm?`<button class="btn" onclick="editLink(${i})">Edit</button> <button class="btn danger" onclick="delPool(${i})">Delete</button>`:''}</td></tr>`;}).join('');
   const poolRows=pools.map((p,i)=>{if(p.linked)return '';const l=p.live;const mem=[...p.groups.map(g=>({t:tgChip(g,(l&&l.gssi===g)?' src':''),g})),...(p.remote||[]).map(r=>({t:`<span class="tg net" title="Group of the network ${esc(r.network)}">${ic('globe')} ${esc(r.network)}:${r.gssi}</span>`}))];
    const groups=mem.map((m,j)=>`${!p.both_ways&&j===0?m.t.replace('class="tg','class="tg src'):m.t}${j===0&&!p.both_ways?' <span class="arrow">→</span>':''}`).join(' ');
@@ -2130,7 +2130,7 @@ async function savePools(list,okText,box='pool-msg'){
 }
 // Name a link gets when its name field is left empty.
 const autoLink=p=>{const r=(p.remote||[])[0]||{};return `TG ${p.groups[0]} ⇄ ${r.network}:${r.gssi}`.slice(0,40);};
-const plain=p=>({name:p.name,enabled:p.enabled,both_ways:p.both_ways,groups:p.groups,remote:(p.remote||[]).map(r=>({network:r.network,gssi:r.gssi})),linked:!!p.linked});
+const plain=p=>({name:p.name,enabled:p.enabled,both_ways:p.both_ways,groups:p.groups,remote:(p.remote||[]).map(r=>({network:r.network,gssi:r.gssi})),linked:!!p.linked,on_demand:!!p.on_demand});
 // Editor of a linked talkgroup: one own group, one network, one group there.
 function editLink(i){
   const p=i>=0?plain(D.pools[i]):{name:'',enabled:true,both_ways:true,groups:[],remote:[],linked:true};
@@ -2141,6 +2141,7 @@ function editLink(i){
    <div><label class="l" for="le-own">Talkgroup of this server (GSSI)</label><input class="f" id="le-own" inputmode="numeric" value="${p.groups[0]??''}" placeholder="e.g. 9" autocomplete="off"></div>
    <div><label class="l" for="le-net">Linked network (Multi Network)</label>${nets.length?`<select class="f" id="le-net">${nets.map(n=>`<option ${n===r.network?'selected':''}>${esc(n)}</option>`).join('')}</select>`:`<input class="f" id="le-net" value="${esc(r.network)}" placeholder="network name as on the Multi Network page">`}</div>
    <div><label class="l" for="le-tg">Talkgroup in the linked network (GSSI)</label><input class="f" id="le-tg" inputmode="numeric" value="${r.gssi}" placeholder="e.g. 909" autocomplete="off"></div>
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="le-dyn" aria-checked="${!!p.on_demand}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Only on demand: the group of the other network comes only while a radio here is in this talkgroup (off: permanent, its calls always come)</span></label>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="le-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveLink(${i})">Save</button></div>`;
@@ -2152,7 +2153,7 @@ async function saveLink(i){
   if(!(Number.isInteger(own)&&own>=1&&own<=16777215))return bad('Enter the talkgroup of this server (1 to 16777215).');
   if(!net)return bad('Choose the linked network.');
   if(!(Number.isInteger(tg)&&tg>=1&&tg<=16777215))return bad('Enter the talkgroup in the linked network (1 to 16777215).');
-  const p={name:'',groups:[own],remote:[{network:net,gssi:tg}],both_ways:true,enabled:$('le-on').getAttribute('aria-checked')==='true',linked:true};
+  const p={name:'',groups:[own],remote:[{network:net,gssi:tg}],both_ways:true,enabled:$('le-on').getAttribute('aria-checked')==='true',linked:true,on_demand:$('le-dyn').getAttribute('aria-checked')==='true'};
   p.name=($('le-name').value.trim()||autoLink(p)).slice(0,40);
   if(D.pools.some((q,j)=>j!==i&&q.linked&&q.groups[0]===own&&q.remote[0]&&q.remote[0].network===net&&q.remote[0].gssi===tg))return bad('This link exists already.');
   const l=D.pools.map(plain);if(i>=0)l[i]=p;else l.push(p);
@@ -2169,6 +2170,7 @@ function editPool(i){
    <div><label class="l" for="pe-groups">Groups (GSSI), separated by commas or spaces</label><input class="f" id="pe-groups" value="${p.groups.join(', ')}" placeholder="2321, 2323, 2324, 264" autocomplete="off"></div>
    ${(D.nets&&D.nets.networks.length)||p.remote.length?`<div><label class="l" for="pe-remote">Groups of other networks (Multi Network), as network:GSSI</label><input class="f" id="pe-remote" value="${esc(p.remote.map(r=>r.network+':'+r.gssi).join(', '))}" placeholder="${esc(((D.nets&&D.nets.networks[0])||{name:'TetraPack'}).name)}:909" autocomplete="off"><div class="mut" style="font-size:12px;margin-top:4px">Makes the pool a bridge: a call on one of its groups is heard on the other network's groups and back, the talker's ISSI is passed on 1:1. ${D.nets?'Networks: '+D.nets.networks.map(n=>esc(n.name)).join(', '):''}</div></div>`:''}
    <div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Direction</span><div class="seg" role="radiogroup" id="pe-dir" style="margin-top:5px"><button role="radio" aria-pressed="${p.both_ways}" aria-checked="${p.both_ways}" onclick="setDir(true)">⇄ Both ways</button><button role="radio" aria-pressed="${!p.both_ways}" aria-checked="${!p.both_ways}" onclick="setDir(false)">→ One way, from the first group</button></div></div>
+   ${(D.nets&&D.nets.networks.length)||p.remote.length?`<label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="pe-dyn" aria-checked="${!!p.on_demand}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Only on demand: the groups of other networks come only while a radio here is in one of the groups above (off: permanent, their calls always come)</span></label>`:''}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="pe-on" aria-checked="${p.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Switched on</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="savePool(${i})">Save</button></div>`;
@@ -2183,7 +2185,7 @@ async function savePool(i){
   const remote=[];
   for(const t of ($('pe-remote')?$('pe-remote').value:'').split(/[,;]+/).map(x=>x.trim()).filter(Boolean)){const k=t.lastIndexOf(':'),g=+t.slice(k+1);
     if(k<1||!Number.isInteger(g)){$('sheet-msg').className='msg err';$('sheet-msg').textContent=`"${t}" is not network:GSSI.`;return;}remote.push({network:t.slice(0,k).trim(),gssi:g});}
-  const p={name:$('pe-name').value.trim(),groups,remote,both_ways:document.querySelector('#pe-dir button').getAttribute('aria-pressed')==='true',enabled:$('pe-on').getAttribute('aria-checked')==='true'};
+  const p={name:$('pe-name').value.trim(),groups,remote,both_ways:document.querySelector('#pe-dir button').getAttribute('aria-pressed')==='true',enabled:$('pe-on').getAttribute('aria-checked')==='true',on_demand:!!$('pe-dyn')&&$('pe-dyn').getAttribute('aria-checked')==='true'};
   const l=D.pools.map(plain);if(i>=0)l[i]=p;else l.push(p);
   const m=$('sheet-msg');m.className='msg mut';m.textContent='Saving…';
   try{await postJ('/api/pools/save',l);closeSheet();D.pools=await getJ('/api/pools');setMsg('pool-msg','ok',`${p.name} saved.`);render(true);}
@@ -2235,7 +2237,7 @@ function conflictCard(M){
    <div class="tw"><table><thead><tr><th>Time</th><th>Network</th><th>ISSI</th><th>What</th><th></th></tr></thead><tbody>${l.slice(0,100).map(c=>`<tr><td class="m">${tmd(c.at_ms)}</td><td>${esc(c.net)}</td><td>${issiCell(c.issi)}</td><td>${esc(c.what)}</td><td>${c.never?'<span class="mut">never exported</span>':`<button class="btn" onclick="neverNet(${c.i},${c.issi})">Never export</button>`}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 function neverNet(i,issi){const c=mnPlain();const n=c.networks[i];if(!n.never_export.includes(issi))n.never_export.push(issi);saveNets(c,`${issi} is never registered in ${n.name} now.`);}
-const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,register_talkers:n.register_talkers!==false,register_all:!!n.register_all,export_stations:[...(n.export_stations||[])],never_export:[...(n.never_export||[])],never_forward:[...(n.never_forward||[])],forward_unknown:!!n.forward_unknown,forward_lip:n.forward_lip!==false,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
+const netPlain=n=>({name:n.name,enabled:n.enabled,mcc:n.mcc,mnc:n.mnc,remote_host:n.remote_host,path:n.path,username:n.username,password:'',user_agent:n.user_agent,bridge_issi:n.bridge_issi,register_talkers:n.register_talkers!==false,register_all:!!n.register_all,export_stations:[...(n.export_stations||[])],never_export:[...(n.never_export||[])],never_forward:[...(n.never_forward||[])],forward_unknown:!!n.forward_unknown,forward_lip:n.forward_lip!==false,refresh_seconds:n.refresh_seconds??300,refresh_rejoin:!!n.refresh_rejoin,reconnect_interval_seconds:n.reconnect_interval_seconds,tls:n.tls,tls_server_name:n.tls_server_name,tls_ca_path:n.tls_ca_path,tls_pinned_cert_path:n.tls_pinned_cert_path});
 const mnPlain=()=>({enabled:D.nets.enabled,name:D.nets.name,mcc:D.nets.mcc,mnc:D.nets.mnc,networks:D.nets.networks.map(netPlain)});
 async function saveNets(cfg,okText,sheet){
   const m=sheet?$('sheet-msg'):null;if(m){m.className='msg mut';m.textContent='Saving…';}
@@ -2272,6 +2274,8 @@ function editNet(i){
    ${fld('ne-never','Never register these ISSIs there (comma separated)',n.never_export.join(', '),'autocomplete="off"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-fwd" aria-checked="${n.forward_unknown}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Forward unknown targets: an individual call or SDS nobody here takes goes to this network<span class="mut" style="display:block;font-size:12px;margin-top:2px">The SMS Center does not keep these: an SDS to a radio not registered here goes there instead of being stored and resent here.</span></span></label>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-lip" aria-checked="${n.forward_lip}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Forward LIP: position reports cross to and from this network<span class="mut" style="display:block;font-size:12px;margin-top:2px">Off: SDS with a location protocol identifier (0x03, 0x0A, 0x83) stay on this side; text and other SDS still pass.</span></span></label>
+   ${fld('ne-refresh','Send the registrations there again every … seconds (0 = never, at least 30)',n.refresh_seconds??300,'placeholder="300"')}
+   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-rejoin" aria-checked="${!!n.refresh_rejoin}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Rejoin groups on refresh: the bridge ISSI (else one radio at a time) leaves its groups there and joins them again, only while no call crosses the link; all others stay in (helps when that network stops sending a group's calls)</span></label>
    ${fld('ne-nofwd','Do not forward these ISSIs: no individual call or SDS to or from them crosses to this network (comma separated)',n.never_forward.join(', '),'autocomplete="off"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-tls" aria-checked="${n.tls}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> TLS (wss://)</label>
    ${fld('ne-sni','TLS server name (empty: host)',n.tls_server_name)}
@@ -2288,10 +2292,13 @@ function saveNet(i){
   const host=v('ne-host').trim().replace(/^(wss?|https?):\/\//,'').replace(/\/.*$/,''),port=v('ne-port').trim(),m=$('sheet-msg');
   if(host&&!(/^\d+$/.test(port)&&+port>=1&&+port<=65535)){m.className='msg err';m.textContent='Enter the port (1 to 65535), e.g. 443 with TLS or 9000.';$('ne-port').focus();return;}
   const remote_host=host?(host.includes(':')?'['+host+']':host)+':'+port:'';
+  const rs=v('ne-refresh').trim(),refresh_seconds=rs===''?300:+rs;
+  if(!(Number.isInteger(refresh_seconds)&&(refresh_seconds===0||(refresh_seconds>=30&&refresh_seconds<=86400)))){m.className='msg err';m.textContent='Refresh: 0 (never) or 30 to 86400 seconds.';$('ne-refresh').focus();return;}
   const c=mnPlain();const old=i>=0?c.networks[i]:{reconnect_interval_seconds:15,tls_ca_path:'/etc/ssl/certs/ca-certificates.crt'};
   const n=Object.assign({},old,{name:v('ne-name').trim(),mcc:+v('ne-mcc')||0,mnc:+v('ne-mnc')||0,remote_host,path:v('ne-path').trim()||'/brew',
     username:v('ne-user').trim(),password:v('ne-pw'),user_agent:v('ne-ua').trim(),bridge_issi:+v('ne-issi')||0,register_talkers:$('ne-reg').getAttribute('aria-checked')==='true',register_all:$('ne-all').getAttribute('aria-checked')==='true',
     export_stations:v('ne-exp').split(',').map(x=>x.trim()).filter(Boolean),never_export:v('ne-never').split(/[\s,]+/).filter(Boolean).map(Number),never_forward:v('ne-nofwd').split(/[\s,]+/).filter(Boolean).map(Number),forward_unknown:$('ne-fwd').getAttribute('aria-checked')==='true',forward_lip:$('ne-lip').getAttribute('aria-checked')==='true',
+    refresh_seconds,refresh_rejoin:$('ne-rejoin').getAttribute('aria-checked')==='true',
     tls:$('ne-tls').getAttribute('aria-checked')==='true',tls_server_name:v('ne-sni').trim(),tls_pinned_cert_path:v('ne-pin').trim(),
     enabled:$('ne-on').getAttribute('aria-checked')==='true'});
   if(i>=0)c.networks[i]=n;else c.networks.push(n);

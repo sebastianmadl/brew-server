@@ -2,6 +2,31 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased:
+
+- **Linked talkgroups and pools: groups of other networks on demand.** A new
+  switch *Only on demand* (`on_demand`, per pool or linked talkgroup, default
+  off = permanent): the bridge ISSI joins the group of the other network only
+  while a radio here is in one of the pool's own groups, and leaves it when
+  the last one has left, like a dynamic talkgroup. Permanent groups behave as
+  before (their calls always come). The list of linked talkgroups marks them
+  "on demand".
+- **Multi Network: the link sends registrations like a FlowStation.** Every
+  subscriber message to another network now carries the time (seconds and
+  nanoseconds since 1970), as a FlowStation sends it; it was 0 (1970). The
+  refresh sends a re-registration (REREGISTER) for radios already registered
+  there, as a FlowStation does when one of its radios registers again, instead
+  of a second REGISTER. Field 2026-11-15..17: TetraPack stopped sending TG 91's
+  calls after a while although the bridge ISSI stayed registered.
+- **Multi Network: registration refresh set per network.** Edit network has
+  *Send the registrations there again every … seconds* (`refresh_seconds`,
+  default 300, 0 = never, at least 30) and the switch *Rejoin groups on
+  refresh* (`refresh_rejoin`, default off): each refresh then lets one ISSI
+  (the bridge ISSI, else the radios in turn) leave its groups there and join
+  them again, only while no call crosses the link; all others stay in. Field
+  2026-11-16/17: TetraPack stopped sending TG 91's calls while the bridge
+  stayed affiliated; leaving and joining the group again brought them back.
+
 Version 1.21.3 (UI Cleanup) adds:
 
 - **Telemetry shows how the stations are doing.** For stations in Fleet
