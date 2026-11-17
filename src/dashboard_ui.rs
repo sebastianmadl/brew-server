@@ -2274,8 +2274,12 @@ function editNet(i){
    ${fld('ne-never','Never register these ISSIs there (comma separated)',n.never_export.join(', '),'autocomplete="off"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-fwd" aria-checked="${n.forward_unknown}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Forward unknown targets: an individual call or SDS nobody here takes goes to this network<span class="mut" style="display:block;font-size:12px;margin-top:2px">The SMS Center does not keep these: an SDS to a radio not registered here goes there instead of being stored and resent here.</span></span></label>
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-lip" aria-checked="${n.forward_lip}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Forward LIP: position reports cross to and from this network<span class="mut" style="display:block;font-size:12px;margin-top:2px">Off: SDS with a location protocol identifier (0x03, 0x0A, 0x83) stay on this side; text and other SDS still pass.</span></span></label>
-   ${fld('ne-refresh','Send the registrations there again every … seconds (0 = never, at least 30)',n.refresh_seconds??300,'placeholder="300"')}
-   <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-rejoin" aria-checked="${!!n.refresh_rejoin}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Rejoin groups on refresh: the bridge ISSI (else one radio at a time) leaves its groups there and joins them again, only while no call crosses the link; all others stay in (helps when that network stops sending a group's calls)</span></label>
+   <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <div style="font-size:13px;font-weight:600">Registration refresh</div>
+    <div class="mut" style="font-size:12px">Brew has no answer to a registration. So the registrations of the bridge ISSI and the radios are sent to that network again from time to time.</div>
+    <div style="display:flex;gap:8px;align-items:center"><label for="ne-refresh" style="font-size:13px">Every</label><input class="f" id="ne-refresh" style="width:90px" value="${n.refresh_seconds??300}" placeholder="300" oninput="neRefreshUi()"><span style="font-size:13px">seconds</span><span class="mut" style="font-size:12px">(0 = off, at least 30)</span></div>
+    <label id="ne-rejoin-row" style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-rejoin" aria-checked="${!!n.refresh_rejoin}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> <span>Also rejoin the groups<br><span class="mut" style="font-size:12px">At each refresh the bridge ISSI (without one: one radio at a time) leaves its groups there and joins them again, only while no call is running. All others stay in. Use it when that network stops sending a group's calls.</span></span></label>
+   </div>
    ${fld('ne-nofwd','Do not forward these ISSIs: no individual call or SDS to or from them crosses to this network (comma separated)',n.never_forward.join(', '),'autocomplete="off"')}
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-tls" aria-checked="${n.tls}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> TLS (wss://)</label>
    ${fld('ne-sni','TLS server name (empty: host)',n.tls_server_name)}
@@ -2283,8 +2287,10 @@ function editNet(i){
    <label style="display:flex;gap:10px;align-items:center"><button class="tog" role="switch" id="ne-on" aria-checked="${n.enabled}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Connect</label>
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveNet(${i})">Save</button></div>`;
-  $('scrim').classList.add('on');setTimeout(()=>$('ne-name').focus(),30);
+  $('scrim').classList.add('on');neRefreshUi();setTimeout(()=>$('ne-name').focus(),30);
 }
+// The rejoin switch only acts with a refresh: greyed out at 0.
+function neRefreshUi(){const off=v('ne-refresh').trim()==='0',r=$('ne-rejoin-row');if(!r)return;r.style.opacity=off?.45:1;$('ne-rejoin').disabled=off;}
 // "host:port", "[v6]:port" or a bare host -> {host, port}.
 function splitHost(h){h=h||'';const m=h.match(/^\[([^\]]*)\](?::(\d*))?$/);if(m)return {host:m[1],port:m[2]||''};
   const k=h.lastIndexOf(':');if(k>0&&h.indexOf(':')===k)return {host:h.slice(0,k),port:h.slice(k+1)};return {host:h,port:''};}
