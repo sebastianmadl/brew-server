@@ -2,7 +2,7 @@
 
 All notable changes to brew-server, newest first.
 
-Version 1.21.3 adds:
+Version 1.21.3 (UI Cleanup) adds:
 
 - **Telemetry shows how the stations are doing.** For stations in Fleet
   Control each telemetry card now has **Graphs →** (the graph page, its back
