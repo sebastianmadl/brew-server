@@ -2,6 +2,40 @@
 
 All notable changes to brew-server, newest first.
 
+Unreleased (dashboard cleanup) adds:
+
+- **Telemetry shows how the stations are doing.** For stations in Fleet
+  Control each telemetry card now has **Graphs →** (the graph page, its back
+  button returns to Telemetry), the latest CPU load, CPU and SDR temperatures
+  and ping, the station's active alarms as chips, and a **Ping** button. The
+  condition alarms (unreachable, SDR error, temperature, CPU load, missed
+  pings) with their history and the **Auto ping** switch moved here from Fleet
+  Control, and the Telemetry menu entry carries their badge. A Fleet Control
+  station without a telemetry connection gets a small card of its own. All of
+  this needs Fleet Control visibility (acknowledging and ping: management);
+  others see the cards as before.
+- **Fleet Control is for managing.** Graphs, latest values, Ping and Auto ping
+  are gone from its station list. It keeps the change log ALARMs (update,
+  restart, config) as **Change log alarms**, with their own badge.
+  "Acknowledge all" on either page takes only that page's alarms
+  (`POST /api/fleet/alarms/ack` `{"events": true|false}`).
+- **Restart and Shut down in one dialog on Fleet Control.** *Shut down
+  service* joins *Restart service* and *Reboot system*; stations without
+  `restart-v1` get the Restart button too (sent as the older station command).
+- **Control is now DGNA & Radio actions.** The page takes the DGNA card from
+  Routing and has one **Radio actions** card with a station picker (kick
+  radio, clear emergency, live SDS, ambience listening) instead of one card
+  per station. Two new rights in Server settings → Users: *DGNA & Radio
+  actions: view* and *DGNA & Radio actions: send* (includes view, never for
+  Viewer); before, Control and DGNA were for admins only. Stations outside
+  Fleet Control keep Restart / Shut down on this page. `#control` links open
+  the new page.
+- **Server settings: "Graphs and alarms"** (was "Fleet Control graphs and
+  alarms"), linking to Telemetry. **Telemetry SDS** moved from Integrations
+  to Infrastructure, under Telemetry.
+- `/api/control` (the list of control connections) is no longer open to
+  everyone: it needs DGNA & Radio actions or Fleet Control visibility.
+
 Version 1.21.2 adds:
 
 - **Multi Network: a restarted link no longer loses its registrations.**

@@ -479,9 +479,9 @@ const PAGES=[
  ['overview','Overview','home','Monitor'],['calls','Calls','call','Monitor'],['sds','SDS','sds','Monitor'],
  ['radios','Radios','radios','Monitor'],['issis','Directory','book','Monitor'],['map','Map','map','Monitor','/map'],
  ['stations','Stations & Cells','bts','Infrastructure'],['routing','Routing','routing','Infrastructure'],['roaming','Roaming','roam','Infrastructure'],['multinet','Multi Network','globe','Infrastructure',null,true],
- ['telemetry','Telemetry','tele','Infrastructure'],['control','Control','ctl','Infrastructure',null,true],['fleet','Fleet Control','fleet','Infrastructure'],['accounts','Accounts','key','Infrastructure'],
+ ['telemetry','Telemetry','tele','Infrastructure'],['tsds','Telemetry SDS','tsds','Infrastructure'],['radioctl','DGNA & Radio actions','ctl','Infrastructure'],['fleet','Fleet Control','fleet','Infrastructure'],['accounts','Accounts','key','Infrastructure'],
  ['sip','SIP / VoIP','sip','Integrations'],['sipcfg','SIP Config','sipcfg','Integrations'],
- ['sms','SMS Center','sms','Integrations'],['tsds','Telemetry SDS','tsds','Integrations'],
+ ['sms','SMS Center','sms','Integrations'],
  ['ha','High Availability','ha','System'],['config','Config file','file','System',null,true],['settings','Server settings','set','System',null,true]
 ];
 const PG=Object.fromEntries(PAGES.map(p=>[p[0],p]));
@@ -578,16 +578,17 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('[data-tab]');if(t){if(t.dataset.tab==='more')document.body.classList.toggle('sbopen');else go(t.dataset.tab);return;}
   if(document.body.classList.contains('sbopen')&&!e.target.closest('#sb'))document.body.classList.remove('sbopen');
 });
-function go(p){if(!PG[p])p='overview';if(location.hash!=='#'+p)location.hash=p;else show(p);}
+function go(p){if(p==='control')p='radioctl';if(!PG[p])p='overview';if(location.hash!=='#'+p)location.hash=p;else show(p);}
 window.addEventListener('hashchange',()=>show(location.hash.slice(1)));
 const navKey=()=>JSON.stringify([D.who.admin,D.who.pages]);
 function show(p){
+  if(p==='control')p='radioctl'; // the former Control page
   if(!PG[p])p='overview';
   // A page this login does not see: the first one it does (or the login window).
   if(D.whoLoaded&&!can(p)){const f=firstPage();if(f){if(PG[p][5]&&!D.who.admin&&D.who.can_login)openLogin(false);p=f;}}
   if(UI.navKey!==navKey())buildNav();
   UI.page=p;document.body.classList.remove('sbopen');
-  const navP=p==='fleetcfg'||p==='fleettpl'||p==='fleetgraph'?'fleet':p;
+  const navP=p==='fleetcfg'||p==='fleettpl'?'fleet':p==='fleetgraph'?'telemetry':p;
   document.querySelectorAll('.nv').forEach(n=>n.classList.toggle('on',n.dataset.go===navP));
   document.querySelectorAll('.tab').forEach(n=>n.classList.toggle('on',n.dataset.tab===navP));
   $('title').textContent=PG[p][1];
@@ -643,7 +644,7 @@ async function refreshSlow(){
   tasks.push(getJ('/api/group-access').then(v=>D.access=v).catch(()=>{}));
   tasks.push(getJ('/api/talkgroups').then(v=>D.tg=v).catch(()=>{}));
   tasks.push(getJ('/api/callsign-db').then(v=>{if(D.csdb&&(D.csdb.updated_ms!==v.updated_ms||D.csdb.enabled!==v.enabled)){D.cs={};CS_ASKED.clear();}D.csdb=v;}).catch(()=>{}));
-  if(D.who.admin)tasks.push(getJ('/api/control').then(v=>D.ctl=v).catch(()=>{}));
+  tasks.push(opt('/api/control',v=>D.ctl=v));
   tasks.push(opt('/api/fleet',v=>{D.fleet=v;fleetInfo();}));
   await Promise.allSettled(tasks);
   await csLookup();
@@ -1028,31 +1029,101 @@ function tlmCalls(s){
   return `<div class="tw"><table><thead><tr><th>Call</th><th>From</th><th>To</th>${multi?'<th>Cell (local / global ID)</th>':''}<th>Carrier / TS</th><th>Pri</th></tr></thead><tbody>${calls.map(c=>`<tr><td>${c.is_group?'Group':'Individual'}</td><td class="m">${esc(String(c.source_issi))}</td><td class="m">${esc(String(c.gssi_or_called))}</td>${multi?`<td>${cellOf[c.carrier_num]??'—'}${gcidOf(c.carrier_num)?` <span class="mut">(${esc(gcidOf(c.carrier_num))})</span>`:''}</td>`:''}<td class="m">${c.carrier_num} / TS${c.ts}</td><td class="num">${c.priority}</td></tr>`).join('')}</tbody></table></div>
    <div style="padding:4px 18px 14px">${grid}<div class="tsg" style="gap:12px;margin-top:8px"><span><span class="tss b" style="width:12px;height:12px"></span> busy</span><span><span class="tss" style="width:12px;height:12px"></span> available</span></div></div>`;
 }
+// The Fleet Control station behind a telemetry login (control login or its Brew login, as the
+// server's graph sampling matches them); only for logins with Fleet Control visibility.
+function tlmFleet(id){const f=D.fleet;if(!f||!can('fleet'))return null;return (f.stations||[]).find(x=>x.id===id)||(f.stations||[]).find(x=>x.brew_login===id)||null;}
+// Latest values of a Fleet Control station (CPU load, temperatures, ping) as key/value cells.
+function tlmLatest(fx){const f=D.fleet;const l=fx&&fx.online&&f.alarms&&f.alarms.latest&&f.alarms.latest[fx.id];if(!l)return '';const at=` title="Last report ${esc(tmd(l.at_ms))}"`;const h=[];
+  if(l.cpu_pct!=null)h.push(`<div${at}><span class="l">CPU load</span>${Math.round(l.cpu_pct)} %</div>`);
+  if(l.cpu_temp_c!=null)h.push(`<div${at}><span class="l">CPU temperature</span>${l.cpu_temp_c.toFixed(0)} °C</div>`);
+  const sdr=Object.entries(l.sdr||{});if(sdr.length)h.push(`<div${at}><span class="l">SDR temperature${sdr.length>1?' (per cell)':''}</span>${sdr.map(([c,t])=>(sdr.length>1?c+': ':'')+(+t).toFixed(0)+' °C').join(' · ')}</div>`);
+  const a=UI.aping&&UI.aping[fx.id];
+  if(a&&UI.apingOn)h.push(`<div><span class="l">Ping</span><span class="chip ${a.ok?'a':'d'}" title="Auto ping ${esc(tm(a.at))}">${a.ok?'⟳ '+a.ms+' ms':'⟳ no answer'}</span></div>`);
+  else if(l.ping_ms!=null)h.push(`<div${at}><span class="l">Ping</span>${l.ping_ms} ms</div>`);
+  return h.join('');}
+// Active condition alarms of one station, as chips in its card.
+function tlmAlarms(fx){const al=fx&&D.fleet.alarms;if(!al)return '';const act=(al.active||[]).filter(a=>a.station===fx.id&&!faEvent(a));
+  return act.map(a=>`<span class="chip ${a.severity==='alarm'?'d':'w'}" title="${esc(a.text)} · ${esc(tmd(a.raised_ms))}">${a.severity==='alarm'?'ALARM':'Warning'}: ${esc(FA_KIND[a.kind]||a.kind)}</span>`).join('');}
+// Head of a station card: graphs link and ping for Fleet Control stations.
+function tlmHeadFx(fx){if(!fx)return '';const sid='t_'+fx.id.replace(/[^a-zA-Z0-9_-]/g,'_');
+  return `${D.fleet.can_manage&&fx.online?`<button class="btn" style="padding:3px 9px;font-size:12px" onclick="tlmPing('${esc(fx.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:''}<button class="btn" style="padding:3px 9px;font-size:12px" onclick="fleetGraph('${esc(fx.id)}')" title="CPU load, temperatures and ping over time">Graphs →</button>`;}
+async function tlmPing(id,sid){setMsg(sid,'mut','Sending…');
+  try{const r=await postJ('/api/fleet/ping',{id});setMsg(sid,r.ok?'ok':'err',(r.ok?'Ping OK':r.code)+' · '+r.ms+' ms'+(r.ok?'':' · '+r.message));}catch(e){setMsg(sid,'err',e.message);}}
 R.telemetry=()=>{
-  const t=D.tele||[];
+  const t=D.tele||[];const f=can('fleet')?D.fleet:null;
   const lvl=l=>l==='ok'?'':l==='degraded'?' w':' d';
-  return t.length?`<div class="card"><div class="ch"><h2>Station telemetry</h2><span class="cnt">${t.length}</span>${helpBtn('tlm')}</div>${helpNote('tlm','One card per station with a telemetry connection, named by its telemetry login. <i>Cell (local / global ID)</i>: the number of the cell inside the station (local, 0 = primary) and in brackets its global cell ID <i>login/cell</i> as on the other pages. '+CELL_ID_HELP)}</div><div class="grid2" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))">${t.map(s=>{const h=s.health||{};
-  const nm=infoOf(s.id)||(s.site_name&&s.site_name!==s.id?s.site_name:'');
-  return `<div class="card tlm"><div class="ch"><h2>${esc(s.id)}</h2>${nm?`<span class="mut" style="font-size:13px">${esc(nm)}</span>`:''}<span class="sp"></span><span class="st${lvl(h.overall)}"><i></i>${esc(h.overall||'unknown')}</span></div>
+  // Fleet Control stations without a telemetry connection still have graphs and values.
+  const seen=new Set(t.map(s=>{const fx=tlmFleet(s.id);return fx&&fx.id;}).filter(Boolean));
+  const only=f?(f.stations||[]).filter(x=>!seen.has(x.id)):[];
+  const anyOnline=f&&(f.stations||[]).some(x=>x.online);
+  const aping=f&&f.can_manage?`<label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600" title="Ping every online Fleet Control station every 5 s while this page is open (not stored)"><button class="tog" role="switch" aria-checked="${!!UI.apingOn}" aria-label="Auto ping" ${anyOnline?'':'disabled'} onclick="fleetAutoPing(!UI.apingOn)"></button>Auto ping</label>`:'';
+  const head=`<div class="card"><div class="ch"><h2>Station telemetry</h2><span class="cnt">${t.length}</span>${helpBtn('tlm')}<span class="sp"></span>${aping}</div>${helpNote('tlm','One card per station with a telemetry connection, named by its telemetry login. <i>Cell (local / global ID)</i>: the number of the cell inside the station (local, 0 = primary) and in brackets its global cell ID <i>login/cell</i> as on the other pages. '+CELL_ID_HELP+(f?' Stations in Fleet Control also show their CPU load, temperatures and last ping, their active alarms and <b>Graphs →</b> (the values over time). <b>Auto ping</b> pings every online Fleet Control station every 5 s while this page is open. Graph and alarm settings: Server settings → <i>Graphs and alarms</i>.':''))}</div>`;
+  const card=(s)=>{const h=s.health||{};const fx=tlmFleet(s.id);const sid=fx?'t_'+fx.id.replace(/[^a-zA-Z0-9_-]/g,'_'):'';
+  const nm=infoOf(s.id)||(s.site_name&&s.site_name!==s.id?s.site_name:'');const al=tlmAlarms(fx);
+  return `<div class="card tlm"><div class="ch"><h2>${esc(s.id)}</h2>${nm?`<span class="mut" style="font-size:13px">${esc(nm)}</span>`:''}<span class="sp"></span>${tlmHeadFx(fx)}<span class="st${lvl(h.overall)}"><i></i>${esc(h.overall||'unknown')}</span></div>
+   ${fx?msgDiv(sid,'padding:0 18px'):''}
    <div class="kv tight" style="padding:12px 18px"><div><span class="l">Version</span>${esc(s.build||s.version||'—')}</div><div><span class="l">Address</span><span class="m">${esc(s.ip||'—')}</span></div><div><span class="l">Connected</span>${ago(s.connected_at_ms)}</div><div><span class="l">Backhaul</span>${s.backhaul_connected==null?'—':s.backhaul_connected?'connected':'down'}</div>
-    <div><span class="l">Radios</span>${s.registration_count}</div><div><span class="l">Calls</span>${Object.keys(s.active_calls||{}).length}</div><div><span class="l">TX EVM</span>${s.evm_pct!=null?s.evm_pct.toFixed(1)+' %':'—'}</div><div><span class="l">Emergencies</span>${(s.emergencies||[]).length||'none'}</div></div>
-   ${(h.domains||[]).length?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${h.domains.map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
-   <div class="tw"><table><thead><tr><th title="Local cell number in this station, global cell ID in brackets">Cell (local / global ID)</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${gcidOf(x.main_carrier)?` <span class="mut">(${esc(gcidOf(x.main_carrier))})</span>`:''}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area??'—'}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;}).join('')}</div>`
-  :'<div class="card"><div class="empty">No station telemetry connections. Stations report here with FlowStation <code>[telemetry]</code>.</div></div>';
+    <div><span class="l">Radios</span>${s.registration_count}</div><div><span class="l">Calls</span>${Object.keys(s.active_calls||{}).length}</div><div><span class="l">TX EVM</span>${s.evm_pct!=null?s.evm_pct.toFixed(1)+' %':'—'}</div><div><span class="l">Emergencies</span>${(s.emergencies||[]).length||'none'}</div>${tlmLatest(fx)}</div>
+   ${(h.domains||[]).length||al?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${al}${(h.domains||[]).map(d=>`<span class="chip ${d.level==='ok'?'a':d.level==='degraded'?'w':'d'}" title="${esc(d.detail)}">${esc(d.domain)}: ${esc(d.detail)}</span>`).join('')}</div>`:''}
+   <div class="tw"><table><thead><tr><th title="Local cell number in this station, global cell ID in brackets">Cell (local / global ID)</th><th>Carrier</th><th>LA</th><th>RF</th><th>Radios</th></tr></thead><tbody>${(s.cells||[]).map(x=>`<tr><td>${x.id}${gcidOf(x.main_carrier)?` <span class="mut">(${esc(gcidOf(x.main_carrier))})</span>`:''}${x.primary?' <span class="chip i">primary</span>':''}</td><td class="m">${x.main_carrier}${x.secondary_carrier?' + '+x.secondary_carrier:''}</td><td>${x.location_area??'—'}</td><td><span class="st${x.rf_state==='online'?'':' w'}" title="${esc(x.rf_detail||'')}"><i></i>${esc(x.rf_state||'—')}</span></td><td class="num">${x.registered_radios}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No cell report yet</td></tr>'}</tbody></table></div>${tlmCalls(s)}</div>`;};
+  // A Fleet Control station without telemetry: its values, alarms and graphs only.
+  const fcard=(fx)=>{const sid='t_'+fx.id.replace(/[^a-zA-Z0-9_-]/g,'_');const al=tlmAlarms(fx);
+  return `<div class="card tlm"><div class="ch"><h2>${esc(fx.label)}</h2>${fx.label!==fx.id?`<span class="mut m" style="font-size:12px">${esc(fx.id)}</span>`:''}<span class="sp"></span>${tlmHeadFx(fx)}${fx.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(fx.last_seen_ms)}</span>`}</div>
+   ${msgDiv(sid,'padding:0 18px')}
+   <div class="kv tight" style="padding:12px 18px"><div><span class="l">Version</span>${esc(fx.version||'—')}</div><div><span class="l">Telemetry</span><span class="mut">not connected</span></div>${tlmLatest(fx)}</div>
+   ${al?`<div class="chips" style="padding:0 18px 12px;display:flex;gap:6px;flex-wrap:wrap">${al}</div>`:''}</div>`;};
+  const alarms=f?fleetAlarmCard(f,false):'';
+  if(!t.length&&!only.length)return alarms+'<div class="card"><div class="empty">No station telemetry connections. Stations report here with FlowStation <code>[telemetry]</code>.</div></div>';
+  return `${alarms}${head}<div class="grid2" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))">${t.map(card).join('')}${only.map(fcard).join('')}</div>`;
 };
-R.control=()=>{
-  if(!D.who.admin)return `<div class="card"><div class="empty">Station control is for admins. ${D.who.can_login?'<button class="btn" onclick="doLogin()">Log in</button>':''}</div></div>`;
-  const ids=D.ctl||[];
-  if(!ids.length)return '<div class="card"><div class="empty">No station control connections. Stations connect here with FlowStation <code>[command]</code>.</div></div>';
-  return ids.map(id=>{const s=id.replace(/[^a-zA-Z0-9_-]/g,'_');return `<div class="card"><div class="ch"><h2>${esc(id)}</h2><span class="st"><i></i>Connected</span></div>
-   <div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px">
-    <div class="bar"><input class="f" id="${s}_kick" placeholder="ISSI" inputmode="numeric" style="width:120px"><button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'KickMs',issi:+v('${s}_kick')})">Kick radio</button>
-     <input class="f" id="${s}_clr" placeholder="ISSI (0 = all)" inputmode="numeric" style="width:130px"><button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'ClearEmergency',issi:+v('${s}_clr')})">Clear emergency</button></div>
+// DGNA to many radios (DGNA & Radio actions page; formerly on Routing). mr: may send.
+function dgnaCard(mr){
+  const q=UI.filter.dg||'';
+  const radios=D.radios.filter(r=>match(q,r.issi,nameOf(r.issi),r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' '),r.groups.map(gName).join(' ')));
+  for(const id of [...UI.sel])if(!D.radios.some(r=>r.issi===id&&r.radio))UI.sel.delete(id);
+  const sel=UI.sel.size;
+  const allSel=radios.filter(r=>r.radio).length>0&&radios.filter(r=>r.radio).every(r=>UI.sel.has(r.issi));
+  const dg=r=>{if(!r.dgna)return '<span class="mut">—</span>';const d=r.dgna;const age=r.dgna_at_ms?' · '+ago(r.dgna_at_ms)+' ago':'';
+    return `<span class="st${d.accepted?'':' w'}"><i></i>${d.accepted?(d.attach?'assigned ':'removed '):'rejected '}${tgTxt(d.gssi)}</span><span class="mut" style="font-size:12px">${age}</span>${d.accepted||!d.detail?'':`<div class="mut" style="font-size:12px">${esc(d.detail.replace(/^Rejected:\s*/,''))}</div>`}`;};
+  const groupsOf=r=>{const cat=new Map(r.catalog.map(g=>[g.gssi,g]));const all=[...new Set([...r.groups,...r.catalog.filter(g=>g.is_attached).map(g=>g.gssi)])].sort((a,b)=>a-b);
+    return all.map(g=>{const c=cat.get(g);const nm=c&&c.mnemonic?c.mnemonic:gName(g);return `<span class="tg" title="${esc(nm)}${c&&c.is_dynamic?' (DGNA)':''}">${g}${nm?' · '+esc(nm):''}${c&&c.is_dynamic?' ★':''}</span>`;}).join(' ')||'<span class="mut">—</span>';};
+  const f=UI.dgf||(UI.dgf={gssi:'',name:'',assign:true,mode:0});
+  return `<div class="card"><div class="ch"><h2>Assign radios to a group (DGNA)</h2>${helpBtn('dgna')}<span class="sp"></span>${searchBox('dg','ISSI, group or station…')}</div>
+   ${helpNote('dgna','Dynamic group number assignment (SS-DGNA, ETSI EN 300 392-12-22): the station tells the selected radios to add or remove a group, with an optional name the radio shows. Each command goes to the station the radio is registered on, over its control connection (FlowStation <code>[command]</code>). The answer of each radio shows under <i>Last DGNA</i>. ★ = group assigned by DGNA. Apps and other terminals cannot be reached.')}
+   <div class="tw"><table><thead><tr><th style="width:44px"><input type="checkbox" class="chk" aria-label="Select all" ${allSel?'checked':''} ${mr?'':'disabled'} onchange="selAll(this.checked)"></th><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups now</th><th>Last DGNA</th></tr></thead><tbody>
+   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${mr&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><b class="m">${esc(r.station||'—')}</b></td><td>${r.cell?`<span class="chip">${esc(r.cell)}</span>`:`<span class="mut">${r.radio?'—':'— (terminal)'}</span>`}</td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
+   </tbody></table></div>
+   ${mr?`<div class="selbar"><b>${sel} selected</b><span class="arrow">→</span>
+    ${dgSaved(f)}<input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
+    <input class="f" id="dg-name" placeholder="Name (optional)" maxlength="15" style="width:160px" value="${esc(f.name)}" oninput="UI.dgf.name=this.value">
+    <div class="seg" role="group" aria-label="Assign or remove"><button aria-pressed="${f.assign}" onclick="UI.dgf.assign=true;render(true)">Assign</button><button aria-pressed="${!f.assign}" onclick="UI.dgf.assign=false;render(true)">Remove</button></div>
+    <label class="mut" style="font-size:12.5px">Attachment <select class="f" id="dg-mode" style="max-width:220px" onchange="UI.dgf.mode=+this.value">${['0 · attached permanently','1 · attach on next ITSI attach','2 · not allowed on next ITSI attach','3 · attach on next location update','4 · not attached, radio may request','5 · not attached, radio may not request'].map((t,i)=>`<option value="${i}" ${f.mode===i?'selected':''}>${t}</option>`).join('')}</select></label>
+    <span class="sp"></span><button class="btn" onclick="UI.sel.clear();render(true)" ${sel?'':'disabled'}>Clear</button><button class="btn pri" onclick="sendDgna()" ${sel?'':'disabled'}>Send DGNA to ${sel} radio${sel===1?'':'s'}</button></div>
+    ${msgDiv('dg-msg')}`:'<div class="empty">Sending DGNA needs the right <i>DGNA &amp; Radio actions: send</i>.</div>'}
+  </div>`;
+}
+// DGNA & Radio actions (formerly Control): DGNA to many radios, and the station commands for one
+// radio. Seeing needs the page, sending the right "DGNA & Radio actions: send".
+const mayRadio=()=>D.who.admin||(!!D.who.username&&(D.who.pages||[]).includes('radioctl_manage'));
+R.radioctl=()=>{
+  const mr=mayRadio();const ids=D.ctl||[];
+  if(!UI.ra||!ids.includes(UI.ra))UI.ra=ids[0]||'';
+  const id=UI.ra,s='ra';
+  // Stations outside Fleet Control keep their Restart / Shut down here (Fleet Control has it for the others).
+  const inFleet=x=>D.fleet&&(D.fleet.stations||[]).some(f=>f.id===x);
+  const fm=D.who.admin||!!(D.fleet&&D.fleet.can_manage);
+  const actions=!ids.length?'<div class="empty">No station control connections. Stations connect here with FlowStation <code>[command]</code>.</div>'
+   :`<div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px">
+    <div class="bar"><label class="mut" style="font-size:12.5px">Station <select class="f" id="ra-st" aria-label="Station" onchange="UI.ra=this.value;render(true)">${ids.map(x=>`<option value="${esc(x)}" ${x===id?'selected':''}>${esc(infoOf(x)&&infoOf(x)!==x?x+' · '+infoOf(x):x)}</option>`).join('')}</select></label></div>
+    ${mr?`<div class="bar"><input class="f" id="${s}_kick" placeholder="ISSI" inputmode="numeric" style="width:120px"><button class="btn" onclick="ctl(UI.ra,'${s}',{action:'KickMs',issi:+v('${s}_kick')})">Kick radio</button>
+     <input class="f" id="${s}_clr" placeholder="ISSI (0 = all)" inputmode="numeric" style="width:130px"><button class="btn" onclick="ctl(UI.ra,'${s}',{action:'ClearEmergency',issi:+v('${s}_clr')})">Clear emergency</button></div>
     <div class="bar"><input class="f" id="${s}_sds" placeholder="Live SDS text" style="flex:1;min-width:160px"><input class="f" id="${s}_sdsi" placeholder="from ISSI" inputmode="numeric" style="width:110px"><input class="f" id="${s}_sdsr" placeholder="repeat" value="0" inputmode="numeric" style="width:80px">
-     <button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'AddLiveSds',text:v('${s}_sds'),protocol_id:0,source_issi:+v('${s}_sdsi'),repeat_count:+v('${s}_sdsr')})">Add live SDS</button><button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'ClearLiveSds'})">Clear live SDS</button></div>
-    <div class="bar"><input class="f" id="${s}_al" placeholder="ISSI" inputmode="numeric" style="width:120px"><button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'AmbienceListen',issi:+v('${s}_al'),enable:true})" title="The target radio keys its microphone (with indication on the radio). Needs station support.">Ambience listen</button><button class="btn" onclick="ctl('${esc(id)}','${s}',{action:'AmbienceListen',issi:+v('${s}_al'),enable:false})">Stop</button>
-     <span class="sp"></span><button class="btn danger" onclick="if(confirm('Restart the service on ${esc(id)}?'))ctl('${esc(id)}','${s}','RestartService')">Restart service</button><button class="btn danger" onclick="if(confirm('Shut the service down on ${esc(id)}? It does not come back by itself.'))ctl('${esc(id)}','${s}','ShutdownService')">Shut down</button></div>
-    ${msgDiv(s+'_res','padding:0')}<div class="mut" style="font-size:12px">DGNA for several radios at once: <a data-go="routing" href="#routing">Routing</a>.</div></div></div>`;}).join('');
+     <button class="btn" onclick="ctl(UI.ra,'${s}',{action:'AddLiveSds',text:v('${s}_sds'),protocol_id:0,source_issi:+v('${s}_sdsi'),repeat_count:+v('${s}_sdsr')})">Add live SDS</button><button class="btn" onclick="ctl(UI.ra,'${s}',{action:'ClearLiveSds'})">Clear live SDS</button></div>
+    <div class="bar"><input class="f" id="${s}_al" placeholder="ISSI" inputmode="numeric" style="width:120px"><button class="btn" onclick="ctl(UI.ra,'${s}',{action:'AmbienceListen',issi:+v('${s}_al'),enable:true})" title="The target radio keys its microphone (with indication on the radio). Needs station support.">Ambience listen</button><button class="btn" onclick="ctl(UI.ra,'${s}',{action:'AmbienceListen',issi:+v('${s}_al'),enable:false})">Stop</button></div>`
+     :'<div class="mut" style="font-size:12.5px">Sending needs the right <i>DGNA &amp; Radio actions: send</i>.</div>'}
+    ${fm&&!inFleet(id)?`<div class="bar"><span class="mut" style="font-size:12.5px">Not in Fleet Control:</span><button class="btn danger" onclick="if(confirm('Restart the service on '+UI.ra+'?'))ctl(UI.ra,'${s}','RestartService')">Restart service</button><button class="btn danger" onclick="if(confirm('Shut the service down on '+UI.ra+'? It does not come back by itself.'))ctl(UI.ra,'${s}','ShutdownService')">Shut down</button></div>`:''}
+    ${msgDiv(s+'_res','padding:0')}</div>`;
+  return dgnaCard(mr)+`<div class="card"><div class="ch"><h2>Radio actions</h2><span class="cnt">${ids.length}</span>${helpBtn('ract')}</div>${helpNote('ract','Commands for one radio, sent to the station you pick over its control connection (FlowStation <code>[command]</code>): <b>Kick radio</b> takes it off the station, <b>Clear emergency</b> ends its emergency (0 = every one on the station), <b>Live SDS</b> adds or clears the text the station sends out, <b>Ambience listen</b> makes the radio key its microphone (with indication on the radio; needs station support). Restart and shut down of a station: Fleet Control (here only for stations that do not use Fleet Control).')}${actions}</div>`;
 };
 const v=id=>($(id)||{}).value||'';
 
@@ -1106,23 +1177,22 @@ R.fleet=()=>{
   const acts=m?`<button class="btn" ${canCheck&&!live?'':'disabled'} onclick="fleetCheck()" title="Every station (ticked ones only, if any) checks its own update source">Check for updates</button>
      <button class="btn pri" ${canUpd&&!live?'':'disabled'} onclick="fleetUpdateDlg(null)" title="${canUpd?'':'Check for updates first: only stations with a newer version can be updated (or that can take a live update)'}">${sel.length?'Update ('+Math.max(target.length,liveT.length)+')':'Update all'}</button>
      ${live?'<button class="btn danger" onclick="fleetCancel(null)" title="No further station starts; a station that is updating finishes">Cancel all</button>':''}
-     <label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600" title="Ping every online station every 5 s while this page is open (not stored)"><button class="tog" role="switch" aria-checked="${!!UI.apingOn}" aria-label="Auto ping" ${st.some(x=>x.online)?'':'disabled'} onclick="fleetAutoPing(!UI.apingOn)"></button>Auto ping</label>
      <button class="btn" ${st.some(fleetCfgCap)&&!bulkOn(f)?'':'disabled'} onclick="fleetChangeCfg()" title="Apply a template or settings to every station (ticked ones only, if any)">${sel.length?'Change config ('+st.filter(x=>UI.fsel.has(x.id)&&fleetCfgCap(x)).length+')':'Change config…'}</button>`:'';
   const jobCard=job&&!fleetJobHidden(job,live)?(()=>{const n=k=>job.items.filter(i=>i.state.state===k).length;const o=job.options;
     return `<div class="card"><div class="ch"><h2>Update run</h2>${live?'<span class="chip b">running</span>':job.cancelled?'<span class="chip w">cancelled</span>':'<span class="chip a">finished</span>'}<span class="sp"></span><span class="mut" style="font-size:12px">${esc(tmd(job.started_ms))}${job.user?' · '+esc(job.user):''}</span></div>
      <div class="svc" style="font-size:13px"><b>${o.mode==='rolling'?'Rolling (one after another)':'Parallel (all at once)'}</b>${o.live?` · <b>Live update (RF on)</b> from <span class="m">${esc(o.live.repo)}</span> (${esc(o.live.branch)})`:''} · ${o.during_call?'update during call':'calls interrupted after '+o.interrupt_min+' min'} · ${n('done')} updated, ${n('failed')} failed, ${n('skipped')} skipped${live?', '+(job.items.length-n('done')-n('failed')-n('skipped'))+' to go':''}${job.finished_ms?' · ended '+esc(tmd(job.finished_ms)):''}</div>
      ${(()=>{const p=fleetJobPercent(job);const bad=n('failed')>0;return `<div class="svc" style="display:flex;align-items:center;gap:10px" title="Whole run: every station counts the same; the build counts up to 90 %, the restart up to 95 %"><div style="flex:1;height:8px;border-radius:4px;background:var(--bg4);overflow:hidden"><div style="height:8px;border-radius:4px;width:${p}%;background:var(${bad?'--danger':'--accent'});transition:width .6s"></div></div><b class="m" style="font-size:13px;min-width:42px;text-align:right">${p} %</b></div>`;})()}
      <div class="svc" style="display:flex;flex-wrap:wrap;gap:6px">${job.items.map((i,k)=>{const s=i.state.state;const c={done:'a',failed:'d',skipped:'w',running:'b',restarting:'b',starting:'b',waiting_call:'w'}[s]||'i';return `<span class="chip ${c}" title="${esc(i.state.reason||i.state.stage||s)}">${k+1}. ${esc(i.label)}</span>`;}).join('')}</div></div>`;})():'';
-  return fleetAlarmCard(f)+jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
-   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on); <b>Ping</b> is shown for online stations.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service or reboots its system (about 2 min off the air); a station not back after 10 min is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). <b>Graphs</b> shows a station's CPU load, temperatures and ping over time; the latest values are under its status. <b>Auto ping</b> pings every online station every 5 s while this page is open (shown at the station, not stored, not in the change log). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
+  return fleetAlarmCard(f,true)+jobCard+fleetBulkCard(f)+`<div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${st.length}</span>${helpBtn('fleet')}<span class="sp"></span>${acts}</div>
+   ${helpNote('fleet',`Stations that let this server manage them: FlowStation with the switch <b>Fleet Control</b> on (Infrastructure page). They connect over the control channel (<code>[control]</code>${f.offered?'':', <b>switched off on this server</b>: no station sees Fleet Control'}). A station stays here while it is offline and leaves the list when it switches Fleet Control off, at once while it is online, else at its next login. <b>Remove</b> (offline stations only) takes a station off the list (it comes back with its next login while its switch is on). Ping, the latest values, the condition alarms and the graphs of each station are on the Telemetry page.<br><br><b>Updates</b>: <b>Check for updates</b> lets every station (only the ticked ones, if any) check its own update source; only a station that found a newer version can be updated, and it fetches the newest version again when its turn comes. <b>Update all</b> (or <b>Update (n)</b> for the ticked stations, also for a single one) asks for <i>Parallel</i> (all at once) or <i>Rolling</i> (one after another: the next starts when the previous one is back with the new software, so the network is never fully off the air). The run goes on on the server with the browser closed and after a server restart. A station is off the air while it builds (10–20 min on a Raspberry Pi). Limits: ${f.limits.build_min} min to the restart, ${f.limits.return_min} min back after the restart; a station that fails is marked ALARM and skipped. A station offline at its turn moves to the end once, then it is skipped. A call delays the start until it ends, at most the interrupt time, or not at all with <i>Update during call</i>. <b>Live update (RF on)</b> (in the update dialog, stations with <code>update-live-v1</code>): the station installs the repository and branch of the <i>Updates repo</i> (Server settings) like the install command in a terminal, stays on the air while it builds and is off only for the service restart; no check is needed, and afterwards the station follows that source. <b>Maintenance</b> puts a red banner "work on this base station in progress" on every page of the station's own dashboard for the chosen time (it runs out by itself, also when the browser is closed; set again if the station restarts in between); a live update shows its own banner. <b>Restart</b> restarts the station's service, reboots its system (about 2 min off the air) or shuts the service down; a station not back after 10 min of a restart or reboot is marked ALARM. <b>Cancel all</b> starts no further station; one that is updating finishes. ⚠ marks a station whose update source differs from the <i>Updates repo</i> (Server settings). Rights: <i>Fleet Control visibility</i> sees this page, <i>Fleet Control management</i> may also use the buttons (Server settings → Users).`)}
    ${msgDiv('fl_top','padding:0 18px')}
    ${st.length?`<div class="tw"><table><thead><tr>${m?`<th style="width:28px"><input type="checkbox" class="chk" aria-label="Tick every station" ${sel.length&&sel.length===st.length?'checked':''} onclick="fleetSelAll(this.checked)"></th>`:''}<th>Station</th><th>Status</th><th>Software</th><th>Update</th><th>Network</th><th>Features</th>${m?'<th></th>':''}</tr></thead><tbody>${st.map(x=>{const sid=x.id.replace(/[^a-zA-Z0-9_-]/g,'_');const it=fleetItem(f,x.id);const cancelable=live&&it&&['pending','waiting_call'].includes(it.state.state);return `<tr>
      ${m?`<td><input type="checkbox" class="chk" aria-label="Tick ${esc(x.label)}" ${UI.fsel.has(x.id)?'checked':''} onclick="fleetSel('${esc(x.id)}',this.checked)"></td>`:''}
-     <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}<div><button class="btn" style="margin-top:4px;padding:3px 9px;font-size:12px" onclick="fleetGraph('${esc(x.id)}')" title="CPU load, temperatures and ping over time">Graphs</button></div></td>
-     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}${fleetLatest(f,x)}</td>
+     <td><b>${esc(x.label)}</b>${x.label!==x.id?` <span class="mut m" style="font-size:12px">${esc(x.id)}</span>`:''}</td>
+     <td>${x.online?'<span class="st"><i></i>Online</span>':`<span class="st d" title="Last seen ${esc(tmd(x.last_seen_ms))}"><i></i>Offline · ${ago(x.last_seen_ms)}</span>`}${fleetMaintChip(x)}${fleetCfgChip(x)}${x.restart?`<div><span class="chip b" title="Sent ${esc(tmd(x.restart.at_ms))}${x.restart.by?' by '+esc(x.restart.by):''}; ALARM if not back after 10 min">${x.restart.host?'Rebooting':'Restarting'} · ${ago(x.restart.at_ms)}</span></div>`:''}</td>
      <td>${fleetSw(f,x)}</td><td><div style="max-width:230px">${fleetUpd(f,x)}</div></td><td class="m">${x.mcc}/${x.mnc}</td>
      <td>${(x.capabilities||[]).map(c=>`<span class="chip">${esc(c)}</span>`).join(' ')||'<span class="mut">—</span>'}</td>
-     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${fleetHas(x,'restart-v1')&&!live?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart the service or reboot the system">Restart</button>`:''}${x.online?`<button class="btn" onclick="fleetPing('${esc(x.id)}','${sid}')" title="Round-trip check over the control channel">Ping</button>`:`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
+     ${m?`<td style="text-align:right"><div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;min-width:170px;max-width:330px;margin-left:auto">${cancelable?`<button class="btn" onclick="fleetCancel('${esc(x.id)}')" title="Take this station out of the run">Cancel</button>`:''}${fleetHas(x,'maintenance-v1')?(fleetMaintOn(x)?`<button class="btn danger" ${x.online?'':'disabled'} onclick="fleetMaintEnd('${esc(x.id)}','${esc(x.label)}')" title="Remove the red banner on the station">End maintenance</button>`:`<button class="btn" ${x.online?'':'disabled'} onclick="fleetMaintDlg('${esc(x.id)}')" title="Red banner on every page of the station's dashboard: work in progress">Maintenance</button>`):''}${fleetHas(x,'config-v1')?`<button class="btn" onclick="fleetEdit('${esc(x.id)}')" title="Read and change the station's config">${x.config&&x.config.drift?'Resolve…':'Edit'}</button>`:''}${!live&&(fleetHas(x,'restart-v1')||(D.ctl||[]).includes(x.id))?`<button class="btn" ${x.online?'':'disabled'} onclick="fleetRestartDlg('${esc(x.id)}')" title="Restart or shut down the service, or reboot the system">Restart</button>`:''}${x.online?'':`<button class="btn danger" onclick="fleetRemove('${esc(x.id)}','${esc(x.label)}')">${ic('trash')}Remove</button>`}</div><div>${msgDiv('fl_'+sid,'padding:0;font-size:12px')}</div></td>`:''}</tr>`;}).join('')}</tbody></table></div>`
    :`<div class="empty">No station uses Fleet Control yet. A FlowStation turns it on with the switch <b>Fleet Control</b> on its Infrastructure page${f.offered?'':' (this server offers it only while <code>[control]</code> is on)'}.</div>`}</div>
   ${fleetTplCard(f)}${fleetNbCard(f)}
   <div class="card"><div class="ch"><h2>Change log</h2><span class="cnt">${log.length}</span><span class="sp"></span><input class="f" placeholder="Search" aria-label="Search the change log" value="${esc(UI.filter.fleet||'')}" oninput="UI.filter.fleet=this.value;render(true);const e=document.querySelector('[aria-label=&quot;Search the change log&quot;]');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}" style="width:180px"><span class="mut" style="font-size:12px">kept 90 days</span>${f.is_admin?`<button class="btn danger" ${log.length?'':'disabled'} onclick="fleetClearLog()" title="Empty the change log (admins only)">${ic('trash')}Clear</button>`:''}</div>
@@ -1239,7 +1309,7 @@ function fcHeartbeat(on){
   beat();UI.fcBeat=setInterval(()=>{if(UI.page==='fleetcfg'&&UI.fc===fc)beat();},60000);
 }
 // Leaving the page (other page, closed tab) ends the edit session.
-{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';if(p==='fleetgraph'&&!UI.fg)p='fleet';return show0(p);};}
+{const show0=show;show=function(p){if(UI.page==='fleetcfg'&&p!=='fleetcfg'&&UI.fc){fcHeartbeat(false);}if(p==='fleetcfg'&&!UI.fc)p='fleet';if(p==='fleettpl'&&!UI.tp)p='fleet';if(p==='fleetgraph'&&!UI.fg)p='telemetry';return show0(p);};}
 window.addEventListener('pagehide',()=>{if(UI.page==='fleetcfg'&&UI.fc)fcHeartbeat(false);});
 // Follow a running change every 3 s.
 setInterval(()=>{const fc=UI.fc;if(UI.page==='fleetcfg'&&fc&&fc.data&&(fc.data.cfg.apply||(!fc.data.cfg.copy&&fc.data.online))&&!$('scrim').classList.contains('on'))fcLoad(false);},3000);
@@ -1614,8 +1684,6 @@ function fleetCfgChip(x){const c=x.config||{};
   return '';}
 // The Fleet Control page follows a running update every 3 s.
 setInterval(()=>{if(UI.page==='fleet'&&(fleetJobOn(D.fleet)||(D.fleet&&(D.fleet.stations||[]).some(x=>x.restart||fleetMaintOn(x))))&&!$('scrim').classList.contains('on'))fleetReload();},3000);
-async function fleetPing(id,sid){setMsg('fl_'+sid,'mut','Sending…');
-  try{const r=await postJ('/api/fleet/ping',{id});setMsg('fl_'+sid,r.ok?'ok':'err',(r.ok?'OK':r.code)+' · '+r.ms+' ms'+(r.ok?'':' · '+r.message));}catch(e){setMsg('fl_'+sid,'err',e.message);}}
 const fleetHas=(x,c)=>(x.capabilities||[]).includes(c);
 const fleetMaintOn=x=>!!(x.maintenance&&x.maintenance.until_ms>Date.now());
 function fleetMaintChip(x){
@@ -1640,21 +1708,31 @@ async function fleetMaintEnd(id,label){
   if(!confirm('End maintenance on '+label+'? The red banner on the station goes away.'))return;
   try{await postJ('/api/fleet/maintenance',{id,on:false});fleetReload();}catch(e){alert(e.message);}
 }
+// Restart / shut down (Fleet Control management): restart-v1 stations restart the service or reboot
+// over Fleet Control (refused during calls unless allowed); Shut down, and Restart for stations without
+// restart-v1, use the older station command (FlowStation [command]).
 function fleetRestartDlg(id){
   const x=(D.fleet.stations||[]).find(s=>s.id===id);if(!x)return;
-  const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fr-kind" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
+  const v1=fleetHas(x,'restart-v1'),cmd=(D.ctl||[]).includes(id);
+  const radio=(v,label,sub,on)=>`<label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer"><input type="radio" name="fr-kind" value="${v}" ${on?'checked':''} style="margin-top:3px;accent-color:var(--accent)" onchange="$('fr-callrow').hidden=this.value==='shutdown'||!${v1}"><span><b>${label}</b><span class="mut" style="display:block;font-size:12px">${sub}</span></span></label>`;
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Restart ${esc(x.label)}</h3></div><div class="sb">
-   <div style="display:grid;gap:10px">${radio('service','Restart service','Restarts FlowStation only (a few seconds to a minute off the air).',true)}${radio('host','Reboot system','Reboots the whole computer (about 2 min off the air).',false)}</div>
-   <label style="display:flex;gap:10px;align-items:center;font-size:13px"><button class="tog" role="switch" id="fr-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Restart during call <span class="mut" style="font-size:12px">(otherwise refused while a call is in progress)</span></label>
-   <div class="mut" style="font-size:12.5px">The station restarts 5 s after it accepts. Not back after 10 min: marked ALARM in the change log.</div>
+   <div style="display:grid;gap:10px">${radio('service','Restart service','Restarts FlowStation only (a few seconds to a minute off the air).',true)}${v1?radio('host','Reboot system','Reboots the whole computer (about 2 min off the air).',false):''}${cmd?radio('shutdown','Shut down service','Stops FlowStation. It does not come back by itself: someone has to start it on the station.',false):''}</div>
+   <label id="fr-callrow" style="display:flex;gap:10px;align-items:center;font-size:13px" ${v1?'':'hidden'}><button class="tog" role="switch" id="fr-call" aria-checked="false" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Restart during call <span class="mut" style="font-size:12px">(otherwise refused while a call is in progress)</span></label>
+   <div class="mut" style="font-size:12.5px">${v1?'The station restarts 5 s after it accepts. Not back after 10 min: marked ALARM in the change log.':'This station has no <code>restart-v1</code> (older FlowStation): the restart goes as a station command, without call protection and without an entry in the change log.'}</div>
    ${msgDiv('fr-msg','padding:0')}</div>
-   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn danger" onclick="fleetRestartGo('${esc(id)}')">Restart now</button></div>`;
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn danger" onclick="fleetRestartGo('${esc(id)}')">Send now</button></div>`;
   $('scrim').classList.add('on');
 }
 async function fleetRestartGo(id){
-  const k=document.querySelector('input[name=fr-kind]:checked');const host=!!k&&k.value==='host';
-  if(!confirm(host?'Really reboot the whole system of this station?':'Really restart the service of this station?'))return;
-  try{await postJ('/api/fleet/restart',{id,host,during_call:$('fr-call').getAttribute('aria-checked')==='true'});closeSheet();setMsg('fl_top','ok',host?'Reboot sent':'Service restart sent');fleetReload();}catch(e){setMsg('fr-msg','err',e.message);}
+  const x=(D.fleet.stations||[]).find(s=>s.id===id);const v1=!!x&&fleetHas(x,'restart-v1');
+  const k=document.querySelector('input[name=fr-kind]:checked');const kind=k?k.value:'service';
+  const ask={service:'Really restart the service of this station?',host:'Really reboot the whole system of this station?',shutdown:'Really shut the service of this station down? It does not come back by itself.'}[kind];
+  if(!confirm(ask))return;
+  try{
+    if(kind==='shutdown'||!v1)await postJ('/api/control/'+encodeURIComponent(id),{action:kind==='shutdown'?'ShutdownService':'RestartService'});
+    else await postJ('/api/fleet/restart',{id,host:kind==='host',during_call:$('fr-call').getAttribute('aria-checked')==='true'});
+    closeSheet();setMsg('fl_top','ok',{service:'Service restart sent',host:'Reboot sent',shutdown:'Shut down sent'}[kind]);fleetReload();
+  }catch(e){setMsg('fr-msg','err',e.message);}
 }
 async function fleetRemove(id,label){
   if(!confirm('Remove '+label+' from the Fleet Manager? It comes back with its next login while its Fleet Control switch is on.'))return;
@@ -1691,35 +1769,33 @@ function connGroups(list){const m=new Map();
 /* ---------- Fleet Control phase 7: alarms, graphs, auto ping ---------- */
 const FA_KIND={offline:'Unreachable',sdr_error:'SDR error',cpu_temp:'CPU temperature',sdr_temp:'SDR temperature',cpu_load:'CPU load',ping:'Ping',update_alarm:'Update',restart_alarm:'Restart',config_alarm:'Config'};
 const faOpen=a=>a.acked_ms==null;
+// A change log ALARM (update, restart, config), shown on Fleet Control; the others are condition alarms (Telemetry).
+const faEvent=a=>/_alarm$/.test(a.kind);
 const faSev=a=>a.severity==='alarm'?'<span class="chip d">ALARM</span>':'<span class="chip w">Warning</span>';
 // Sidebar badge: unacknowledged active alarms (red with an ALARM, else yellow).
-function fleetAlarmBadge(){const e=$('b-fleet');if(!e)return;const act=(D.fleet&&D.fleet.alarms&&D.fleet.alarms.active)||[];
-  const open=act.filter(faOpen);const red=open.some(a=>a.severity==='alarm');
-  e.textContent=open.length||'';e.classList.toggle('d',red);e.classList.toggle('w',open.length>0&&!red);e.title=open.length?open.length+' unacknowledged alarm'+(open.length===1?'':'s'):'';}
-function fleetAlarmCard(f){const al=f.alarms;if(!al)return '';const act=al.active||[];const hist=al.history||[];const m=f.can_manage;const open=act.filter(faOpen).length;
-  const row=a=>`<tr${a.severity==='alarm'&&faOpen(a)?' style="color:var(--danger);font-weight:600"':''}><td>${faSev(a)}</td><td class="m">${esc(tmd(a.raised_ms))}<div class="mut" style="font-weight:400;font-size:11.5px">${ago(a.raised_ms)}</div></td><td>${esc(a.label)}</td><td><span class="chip">${esc(FA_KIND[a.kind]||a.kind)}</span> ${esc(a.text)}</td><td style="font-size:12.5px;font-weight:400">${a.acked_by?`<span class="mut">Acknowledged by ${esc(a.acked_by)} · ${esc(tmd(a.acked_ms))}</span>`:'<span class="chip w">new</span>'}</td>${m?`<td style="text-align:right">${faOpen(a)?`<button class="btn" onclick="fleetAck(${a.id})">Acknowledge</button>`:''}</td>`:''}</tr>`;
+// Badges: condition alarms on Telemetry, change log ALARMs (update, restart, config) on Fleet Control.
+function fleetAlarmBadge(){const act=(D.fleet&&D.fleet.alarms&&D.fleet.alarms.active)||[];
+  for(const [page,ev] of [['telemetry',false],['fleet',true]]){const e=$('b-'+page);if(!e)continue;
+   const open=act.filter(a=>faOpen(a)&&faEvent(a)===ev);const red=open.some(a=>a.severity==='alarm');
+   e.textContent=open.length||'';e.classList.toggle('d',red);e.classList.toggle('w',open.length>0&&!red);e.title=open.length?open.length+' unacknowledged alarm'+(open.length===1?'':'s'):'';}}
+// ev true: the change log ALARMs (Fleet Control page), false: the condition alarms (Telemetry page).
+function fleetAlarmCard(f,ev){const al=f.alarms;if(!al)return '';const act=(al.active||[]).filter(a=>faEvent(a)===ev);const hist=(al.history||[]).filter(a=>faEvent(a)===ev);const m=f.can_manage;const open=act.filter(faOpen).length;const k=ev?'e':'c';
+  const row=a=>`<tr${a.severity==='alarm'&&faOpen(a)?' style="color:var(--danger);font-weight:600"':''}><td>${faSev(a)}</td><td class="m">${esc(tmd(a.raised_ms))}<div class="mut" style="font-weight:400;font-size:11.5px">${ago(a.raised_ms)}</div></td><td>${esc(a.label)}</td><td><span class="chip">${esc(FA_KIND[a.kind]||a.kind)}</span> ${esc(a.text)}</td><td style="font-size:12.5px;font-weight:400">${a.acked_by?`<span class="mut">Acknowledged by ${esc(a.acked_by)} · ${esc(tmd(a.acked_ms))}</span>`:'<span class="chip w">new</span>'}</td>${m?`<td style="text-align:right">${faOpen(a)?`<button class="btn" onclick="fleetAck(${a.id},${ev})">Acknowledge</button>`:''}</td>`:''}</tr>`;
   const hrow=a=>`<tr><td>${faSev(a)}</td><td class="m">${esc(tmd(a.raised_ms))}</td><td>${esc(a.label)}</td><td><span class="chip">${esc(FA_KIND[a.kind]||a.kind)}</span> ${esc(a.text)}</td><td style="font-size:12.5px"><span class="m">${esc(tmd(a.cleared_ms))}</span><div class="mut">${esc(a.clear_text||'')}${a.acked_by&&!(a.clear_text||'').startsWith('acknowledged')?' · acknowledged by '+esc(a.acked_by):''}</div></td></tr>`;
-  return `<div class="card"><div class="ch"><h2>Alarms</h2><span class="cnt">${act.length}</span>${helpBtn('falarm')}<span class="sp"></span>${m&&open?`<button class="btn" onclick="fleetAck(null)">Acknowledge all (${open})</button>`:''}<button class="btn" aria-expanded="${!!UI.faHist}" onclick="UI.faHist=!UI.faHist;render(true)">History (${hist.length})</button></div>
-   ${helpNote('falarm',`Alarms of the stations in Fleet Control. A condition alarm (unreachable, SDR error, temperature, CPU load, missed pings) stays here until its cause is gone; an ALARM from the change log (update, restart, config) stays until someone acknowledges it. <b>Acknowledge</b> (Fleet Control management) marks an alarm with your name; finished alarms go to the history, kept 90 days. Which alarms there are, their limits and whether they count as ALARM or warning: Server settings → <i>Fleet Control graphs and alarms</i> (admins). <b>Graphs</b> at a station shows its CPU load, temperatures and ping (and radios / calls, if switched on there) over the kept time; while a station is unreachable its graph has a gap.`)}
-   ${msgDiv('fa-msg','padding:0 18px')}
+  return `<div class="card"><div class="ch"><h2>${ev?'Change log alarms':'Alarms'}</h2><span class="cnt">${act.length}</span>${helpBtn('falarm'+k)}<span class="sp"></span>${m&&open?`<button class="btn" onclick="fleetAck(null,${ev})">Acknowledge all (${open})</button>`:''}<button class="btn" aria-expanded="${!!UI['faHist'+k]}" onclick="UI['faHist'+'${k}']=!UI['faHist'+'${k}'];render(true)">History (${hist.length})</button></div>
+   ${helpNote('falarm'+k,ev?`ALARMs from the change log of Fleet Control (an update, restart or config change that went wrong). They stay here until someone acknowledges them. <b>Acknowledge</b> (Fleet Control management) marks an alarm with your name and moves it to the history, kept 90 days. The condition alarms of the stations (unreachable, SDR error, temperature, CPU load, missed pings) are on the Telemetry page. Settings: Server settings → <i>Graphs and alarms</i> (admins).`:`Condition alarms of the stations in Fleet Control: unreachable, SDR error, temperature, CPU load, missed pings. An alarm stays here until its cause is gone. <b>Acknowledge</b> (Fleet Control management) marks it with your name; finished alarms go to the history, kept 90 days. ALARMs from the change log (update, restart, config) are on the Fleet Control page. Which alarms there are, their limits and whether they count as ALARM or warning: Server settings → <i>Graphs and alarms</i> (admins).`)}
+   ${msgDiv('fa-msg-'+k,'padding:0 18px')}
    ${act.length?`<div class="tw fllog"><table><thead><tr><th>Level</th><th>Since</th><th>Station</th><th>Alarm</th><th>State</th>${m?'<th></th>':''}</tr></thead><tbody>${act.map(row).join('')}</tbody></table></div>`:'<div class="empty">No active alarms.</div>'}
-   ${UI.faHist?(hist.length?`<div class="tw fllog" style="border-top:1px solid var(--border)"><table><thead><tr><th>Level</th><th>Raised</th><th>Station</th><th>Alarm</th><th>Finished</th></tr></thead><tbody>${hist.map(hrow).join('')}</tbody></table></div>`:'<div class="empty" style="border-top:1px solid var(--border)">No finished alarms in the last 90 days.</div>'):''}</div>`;}
-async function fleetAck(id){try{const r=await postJ('/api/fleet/alarms/ack',id==null?{}:{id});D.fleet=await getJ('/api/fleet');setMsg('fa-msg','ok',r.acknowledged+' acknowledged');fleetAlarmBadge();render(true);}catch(e){setMsg('fa-msg','err',e.message);}}
-// Latest values under the station's status (and the auto ping).
-function fleetLatest(f,x){const l=f.alarms&&f.alarms.latest&&f.alarms.latest[x.id];const a=UI.aping&&UI.aping[x.id];const p=[];
-  if(l&&x.online){if(l.cpu_pct!=null)p.push(`CPU ${Math.round(l.cpu_pct)} %`);if(l.cpu_temp_c!=null)p.push(`${l.cpu_temp_c.toFixed(0)} °C`);
-    const s=Object.entries(l.sdr||{});if(s.length)p.push('SDR '+s.map(([c,t])=>(s.length>1?c+': ':'')+(+t).toFixed(0)+' °C').join(', '));if(l.ping_ms!=null)p.push(`ping ${l.ping_ms} ms`);}
-  let h=p.length?`<div class="mut" style="font-size:12px;margin-top:3px" title="Last report ${esc(tmd(l.at_ms))}">${p.join(' · ')}</div>`:'';
-  if(a&&UI.apingOn&&x.online)h+=`<div style="font-size:12px;margin-top:2px"><span class="chip ${a.ok?'a':'d'}" title="Auto ping ${esc(tm(a.at))}">${a.ok?'⟳ '+a.ms+' ms':'⟳ no answer'}</span></div>`;
-  return h;}
-// Auto ping: every 5 s every online station, while the Fleet Control page is open (not stored).
+   ${UI['faHist'+k]?(hist.length?`<div class="tw fllog" style="border-top:1px solid var(--border)"><table><thead><tr><th>Level</th><th>Raised</th><th>Station</th><th>Alarm</th><th>Finished</th></tr></thead><tbody>${hist.map(hrow).join('')}</tbody></table></div>`:'<div class="empty" style="border-top:1px solid var(--border)">No finished alarms in the last 90 days.</div>'):''}</div>`;}
+async function fleetAck(id,ev){const box='fa-msg-'+(ev?'e':'c');try{const r=await postJ('/api/fleet/alarms/ack',id==null?{events:!!ev}:{id});D.fleet=await getJ('/api/fleet');setMsg(box,'ok',r.acknowledged+' acknowledged');fleetAlarmBadge();render(true);}catch(e){setMsg(box,'err',e.message);}}
+// Auto ping: every 5 s every online Fleet Control station, while the Telemetry page is open (not stored).
 function fleetAutoPing(on){UI.apingOn=on;UI.aping={};clearInterval(UI.apingT);
-  if(on){const run=()=>{if(UI.page!=='fleet'){fleetAutoPing(false);return;}
-    for(const x of (D.fleet.stations||[]).filter(x=>x.online))postJ('/api/fleet/ping',{id:x.id}).then(r=>{UI.aping[x.id]={ok:r.ok,ms:r.ms,at:Date.now()};}).catch(()=>{UI.aping[x.id]={ok:false,at:Date.now()};}).finally(()=>{if(UI.page==='fleet'&&UI.apingOn&&!$('scrim').classList.contains('on'))render(true);});};
+  if(on){const run=()=>{if(UI.page!=='telemetry'){fleetAutoPing(false);return;}
+    for(const x of (D.fleet.stations||[]).filter(x=>x.online))postJ('/api/fleet/ping',{id:x.id}).then(r=>{UI.aping[x.id]={ok:r.ok,ms:r.ms,at:Date.now()};}).catch(()=>{UI.aping[x.id]={ok:false,at:Date.now()};}).finally(()=>{if(UI.page==='telemetry'&&UI.apingOn&&!$('scrim').classList.contains('on'))render(true);});};
     run();UI.apingT=setInterval(run,5000);}
   render(true);}
 // The graph page of one station.
-PG.fleetgraph=['fleetgraph','Fleet Control','fleet','Infrastructure'];
+PG.fleetgraph=['fleetgraph','Telemetry','tele','Infrastructure'];
 function fleetGraph(id){UI.fg={id,hours:null,data:null,err:null,hover:{},series:{}};show('fleetgraph');fgLoad();}
 async function fgLoad(){const g=UI.fg;if(!g)return;
   try{const d=await getJ('/api/fleet/graph?id='+encodeURIComponent(g.id)+'&hours='+(g.hours||Math.min(24,(g.data&&g.data.keep_hours)||24)));if(UI.fg!==g)return;g.data=d;g.err=null;}catch(e){g.err=e.message;}
@@ -1755,15 +1831,15 @@ function fgRead(key){const g=UI.fg;const hv=g.hover[key];const c=g.series[key];i
 function fgHover(key,ev,el){const g=UI.fg;if(!g||!g.data)return;if(!ev)delete g.hover[key];else{const r=el.getBoundingClientRect();const f=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));g.hover[key]={t:g.data.from_ms+(g.data.now_ms-g.data.from_ms)*f};}
   const e=$('fgr-'+key);if(e)e.innerHTML=fgRead(key);}
 R.fleetgraph=()=>{const g=UI.fg;if(!g)return loading;const d=g.data;
-  const back=`<button class="btn ic" title="Back to Fleet Control" aria-label="Back to Fleet Control" onclick="show('fleet')">‹</button>`;
-  if(!d)return g.err?`<div class="card"><div class="empty">${esc(g.err)} <button class="btn" onclick="show('fleet')">Back</button></div></div>`:loading;
+  const back=`<button class="btn ic" title="Back to Telemetry" aria-label="Back to Telemetry" onclick="show('telemetry')">‹</button>`;
+  if(!d)return g.err?`<div class="card"><div class="empty">${esc(g.err)} <button class="btn" onclick="show('telemetry')">Back</button></div></div>`:loading;
   const step=d.sample_ms*1.5+5000,pgap=Math.max(d.ping_ms,60000)*1.5+5000;const P=d.points||[];
   const cells=[...new Set(P.flatMap(p=>Object.keys(p.s||{})))].sort((a,b)=>a-b);
   const hours=g.hours||Math.min(24,d.keep_hours);
   const ranges=[1,6,24,72,168,d.keep_hours].filter((h,i,a)=>h<=d.keep_hours&&a.indexOf(h)===i);
   const lbl=h=>h===d.keep_hours&&h>24?`All (${h>=48?Math.round(h/24)+' d':h+' h'})`:h>=48?Math.round(h/24)+' d':h+' h';
   const head=`<div class="card"><div class="ch">${back}<h2>Graphs · ${esc(d.label)}</h2>${d.online?'<span class="st"><i></i>Online</span>':`<span class="st d"><i></i>Offline · ${ago(d.last_seen_ms)}</span>`}<span class="sp"></span><div style="display:flex;gap:6px;flex-wrap:wrap" role="group" aria-label="Time range">${ranges.map(h=>`<button class="btn${h===hours?' pri':''}" aria-pressed="${h===hours}" onclick="fgRange(${h})">${lbl(h)}</button>`).join('')}</div></div>
-   <div class="svc mut" style="font-size:12.5px">One point every ${d.sample_ms/60000} min (CPU load: mean, temperatures and counts: highest), kept ${d.keep_hours} h, then overwritten. A gap means the station sent nothing (unreachable or switched off). ${d.metrics?'':'<b>This station has no <code>metrics-v1</code></b> (older FlowStation): temperatures, radios and calls come from its telemetry, the CPU load is missing until it is updated.'} Settings: Server settings → Fleet Control graphs and alarms.</div>
+   <div class="svc mut" style="font-size:12.5px">One point every ${d.sample_ms/60000} min (CPU load: mean, temperatures and counts: highest), kept ${d.keep_hours} h, then overwritten. A gap means the station sent nothing (unreachable or switched off). ${d.metrics?'':'<b>This station has no <code>metrics-v1</code></b> (older FlowStation): temperatures, radios and calls come from its telemetry, the CPU load is missing until it is updated.'} Settings: Server settings → Graphs and alarms.</div>
    ${(d.alarms||[]).length?`<div class="svc">${d.alarms.map(a=>`<div>${faSev(a)} ${esc(a.text)} <span class="mut" style="font-size:12px">· ${ago(a.raised_ms)}</span></div>`).join('')}</div>`:''}</div>`;
   let h=head;
   h+=fgChart('cpu','CPU load','%',[{name:'CPU',color:'var(--accent2)',pts:P.map(p=>[p.t,p.c??null]),gap:step}],{min:0,max:100,limit:d.cpu_load_limit});
@@ -1779,7 +1855,7 @@ const FM_RULES=[['offline','Station unreachable',null,'Minutes offline'],['sdr_e
 function fleetMonSettingsCard(){const f=D.fleet;const s=f&&f.alarms&&f.alarms.settings;if(!s)return '';const r=s.rules;
   const num=(id,val,min,max,step,w)=>`<input class="f" id="${id}" type="number" min="${min}" max="${max}" step="${step||1}" value="${val}" style="width:${w||90}px">`;
   const sw=(id,on,label)=>`<label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600"><button class="tog" role="switch" id="${id}" aria-checked="${!!on}" aria-label="${esc(label)}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button>${label}</label>`;
-  return `<div class="card"><div class="ch"><h2>Fleet Control graphs and alarms</h2>${helpBtn('fmon')}<span class="sp"></span><a data-go="fleet" href="#fleet">Fleet Control ›</a></div>${helpNote('fmon','Stations with <code>metrics-v1</code> send their CPU load, CPU and SDR temperatures, radios and calls every minute; older stations are sampled from their telemetry (no CPU load). <b>Sample interval</b>: one graph point per this many minutes. <b>Keep</b>: graphs are kept this long, then the oldest points are overwritten (at most 10 080 points per station, so more than 7 days need a longer sample interval). <b>Ping interval</b>: the server pings every online station this often for the ping graph (0 = off). <b>Alarms</b>: each rule can be switched off, counted as ALARM (red) or warning (yellow), and given its limit and how many minutes the condition must last (0 = at once). A rule switched off finishes its active alarms. The CPU load alarm is not raised while a station updates (the build takes the CPU) and for 5 min after.')}
+  return `<div class="card"><div class="ch"><h2>Graphs and alarms</h2>${helpBtn('fmon')}<span class="sp"></span><a data-go="telemetry" href="#telemetry">Telemetry ›</a></div>${helpNote('fmon','Stations with <code>metrics-v1</code> send their CPU load, CPU and SDR temperatures, radios and calls every minute; older stations are sampled from their telemetry (no CPU load). <b>Sample interval</b>: one graph point per this many minutes. <b>Keep</b>: graphs are kept this long, then the oldest points are overwritten (at most 10 080 points per station, so more than 7 days need a longer sample interval). <b>Ping interval</b>: the server pings every online station this often for the ping graph (0 = off). <b>Alarms</b>: each rule can be switched off, counted as ALARM (red) or warning (yellow), and given its limit and how many minutes the condition must last (0 = at once). A rule switched off finishes its active alarms. The CPU load alarm is not raised while a station updates (the build takes the CPU) and for 5 min after.')}
    <div class="svc" style="display:flex;gap:14px;align-items:end;flex-wrap:wrap">
     <div><label class="l" for="fm-sample">Sample interval (min)</label>${num('fm-sample',s.sample_min,1,60)}</div>
     <div><label class="l" for="fm-keep">Keep graphs (h)</label>${num('fm-keep',s.keep_hours,1,720)}</div>
@@ -1973,16 +2049,6 @@ R.routing=()=>{
     <div class="rm"><div class="rt">${esc(p.name)} <span class="chip ${p.enabled?'a':'i'}">${p.enabled?'on':'off'}</span><span class="chip">${p.both_ways?'⇄ both ways':'→ one way'}</span></div>
     <div class="flow">${p.both_ways?groups.replace(/<\/span> <span class="tg/,'</span> <span class="arrow">⇄</span> <span class="tg'):groups}</div><div class="rs" style="margin-top:6px">${state}</div></div>
     ${adm?`<button class="btn" onclick="editPool(${i})">Edit</button><button class="btn danger" onclick="delPool(${i})">Delete</button>`:''}</div>`;}).join('');
-  const q=UI.filter.dg||'';
-  const radios=D.radios.filter(r=>match(q,r.issi,nameOf(r.issi),r.station,r.cell,r.groups.join(' '),r.catalog.map(g=>g.gssi+' '+(g.mnemonic||'')).join(' '),r.groups.map(gName).join(' ')));
-  for(const id of [...UI.sel])if(!D.radios.some(r=>r.issi===id&&r.radio))UI.sel.delete(id);
-  const sel=UI.sel.size;
-  const allSel=radios.filter(r=>r.radio).length>0&&radios.filter(r=>r.radio).every(r=>UI.sel.has(r.issi));
-  const dg=r=>{if(!r.dgna)return '<span class="mut">—</span>';const d=r.dgna;const age=r.dgna_at_ms?' · '+ago(r.dgna_at_ms)+' ago':'';
-    return `<span class="st${d.accepted?'':' w'}"><i></i>${d.accepted?(d.attach?'assigned ':'removed '):'rejected '}${tgTxt(d.gssi)}</span><span class="mut" style="font-size:12px">${age}</span>${d.accepted||!d.detail?'':`<div class="mut" style="font-size:12px">${esc(d.detail.replace(/^Rejected:\s*/,''))}</div>`}`;};
-  const groupsOf=r=>{const cat=new Map(r.catalog.map(g=>[g.gssi,g]));const all=[...new Set([...r.groups,...r.catalog.filter(g=>g.is_attached).map(g=>g.gssi)])].sort((a,b)=>a-b);
-    return all.map(g=>{const c=cat.get(g);const nm=c&&c.mnemonic?c.mnemonic:gName(g);return `<span class="tg" title="${esc(nm)}${c&&c.is_dynamic?' (DGNA)':''}">${g}${nm?' · '+esc(nm):''}${c&&c.is_dynamic?' ★':''}</span>`;}).join(' ')||'<span class="mut">—</span>';};
-  const f=UI.dgf||(UI.dgf={gssi:'',name:'',assign:true,mode:0});
   return `<div class="card"><div class="ch"><h2>Linked talkgroups</h2><span class="cnt">${links.length}</span>${helpBtn('links')}<span class="sp"></span>${adm?`<button class="btn pri" onclick="editLink(-1)">${ic('plus')}New link</button>`:''}</div>
    ${helpNote('links','A linked talkgroup connects one group of this server with one group of another network (Multi Network link), both ways: a call on either group is heard on the other, the talker\'s ISSI is passed on 1:1. It works like a talkgroup pool with exactly these two groups and is saved as one (<code>[[talkgroup_pools]]</code> with <code>linked = true</code>). The other network must be set up on the Multi Network page. Changes apply at once, no restart.')}
    ${links.length?`<div class="tw"><table><thead><tr><th style="width:56px">On</th><th>Name</th><th>This server · TG</th><th style="width:30px"></th><th>Linked network · TG</th><th>Status</th><th></th></tr></thead><tbody>${linkRows}</tbody></table></div>`:'<div class="empty">No linked talkgroups yet. A link connects one group here with one group of another network.</div>'}
@@ -1992,19 +2058,7 @@ R.routing=()=>{
    ${helpNote('pools','A pool switches groups together inside this server. A call on a group of the pool is played 1:1 on the other groups, as an ordinary group call on each group\'s own GSSI, so the radios see nothing unusual. <i>Both ways</i>: every group of the pool reaches all others. <i>One way</i>: only the first group is copied, to the rest. A group that has a call of its own waits until that over has ended and then joins. Changes apply at once and are saved to the config file, no restart. Federation peers do not get the copies.')}
    ${msgDiv('pool-msg')}</div>
   ${tgCard(adm,pools)}
-  <div class="card"><div class="ch"><h2>Assign radios to a group (DGNA)</h2>${helpBtn('dgna')}<span class="sp"></span>${searchBox('dg','ISSI, group or station…')}</div>
-   ${helpNote('dgna','Dynamic group number assignment (SS-DGNA, ETSI EN 300 392-12-22): the station tells the selected radios to add or remove a group, with an optional name the radio shows. Each command goes to the station the radio is registered on, over its control connection (FlowStation <code>[command]</code>). The answer of each radio shows under <i>Last DGNA</i>. ★ = group assigned by DGNA. Apps and other terminals cannot be reached.')}
-   <div class="tw"><table><thead><tr><th style="width:44px"><input type="checkbox" class="chk" aria-label="Select all" ${allSel?'checked':''} ${adm?'':'disabled'} onchange="selAll(this.checked)"></th><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups now</th><th>Last DGNA</th></tr></thead><tbody>
-   ${radios.map(r=>`<tr${r.radio?'':' class="off"'}><td><input type="checkbox" class="chk" aria-label="Select ${r.issi}" ${UI.sel.has(r.issi)?'checked':''} ${adm&&r.radio?'':'disabled'} onchange="selOne(${r.issi},this.checked)"></td><td>${issiCell(r.issi,true)}</td><td><b class="m">${esc(r.station||'—')}</b></td><td>${r.cell?`<span class="chip">${esc(r.cell)}</span>`:`<span class="mut">${r.radio?'—':'— (terminal)'}</span>`}</td><td>${groupsOf(r)}</td><td>${r.radio?dg(r):'<span class="mut">not a radio, DGNA n/a</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
-   </tbody></table></div>
-   ${adm?`<div class="selbar"><b>${sel} selected</b><span class="arrow">→</span>
-    ${dgSaved(f)}<input class="f" id="dg-gssi" placeholder="GSSI" inputmode="numeric" style="width:110px" value="${esc(f.gssi)}" oninput="UI.dgf.gssi=this.value">
-    <input class="f" id="dg-name" placeholder="Name (optional)" maxlength="15" style="width:160px" value="${esc(f.name)}" oninput="UI.dgf.name=this.value">
-    <div class="seg" role="group" aria-label="Assign or remove"><button aria-pressed="${f.assign}" onclick="UI.dgf.assign=true;render(true)">Assign</button><button aria-pressed="${!f.assign}" onclick="UI.dgf.assign=false;render(true)">Remove</button></div>
-    <label class="mut" style="font-size:12.5px">Attachment <select class="f" id="dg-mode" style="max-width:220px" onchange="UI.dgf.mode=+this.value">${['0 · attached permanently','1 · attach on next ITSI attach','2 · not allowed on next ITSI attach','3 · attach on next location update','4 · not attached, radio may request','5 · not attached, radio may not request'].map((t,i)=>`<option value="${i}" ${f.mode===i?'selected':''}>${t}</option>`).join('')}</select></label>
-    <span class="sp"></span><button class="btn" onclick="UI.sel.clear();render(true)" ${sel?'':'disabled'}>Clear</button><button class="btn pri" onclick="sendDgna()" ${sel?'':'disabled'}>Send DGNA to ${sel} radio${sel===1?'':'s'}</button></div>
-    ${msgDiv('dg-msg')}`:'<div class="empty">Log in as an admin to send DGNA.</div>'}
-  </div>`;
+  <div class="card"><div class="svc mut" style="font-size:12.5px">DGNA (assign radios to a group) is on <a data-go="radioctl" href="#radioctl">DGNA &amp; Radio actions ›</a></div></div>`;
 };
 function selAll(on){D.radios.filter(r=>r.radio&&match(UI.filter.dg||'',r.issi,r.station,r.cell,r.groups.join(' '))).forEach(r=>on?UI.sel.add(r.issi):UI.sel.delete(r.issi));render(true);}
 function selOne(i,on){on?UI.sel.add(i):UI.sel.delete(i);render(true);}
@@ -2751,7 +2805,7 @@ async function saveUpdatesRepo(){
   try{await postJ('/api/fleet/settings',{repo:v('ur-repo').trim(),branch:v('ur-branch').trim()});D.fleet=await getJ('/api/fleet');setMsg('ur-msg','ok','Saved');render(true);}catch(e){setMsg('ur-msg','err',e.message);}
 }
 // Dashboard users (Server settings, admins): who logs in, who is admin, which pages each one sees.
-const pageName=id=>id==='fleet_manage'?'Fleet Control management':PG[id]?PG[id][1]:id;
+const pageName=id=>id==='fleet_manage'?'Fleet Control management':id==='radioctl_manage'?'DGNA & Radio actions: send':PG[id]?PG[id][1]:id;
 const pageChips=(list,all)=>all?'<span class="chip a">Every page · edits</span>':(list.length?list.map(p=>`<span class="chip">${esc(pageName(p))}</span>`).join(' '):'<span class="mut">no page</span>');
 function usersCard(){
   const u=D.dusers;if(!u)return loading;
@@ -2769,8 +2823,8 @@ function editUser(i){
   const u=D.dusers,viewer=i==='viewer';
   const x=viewer?{name:'Viewer',admin:false,pages:u.viewer}:i>=0?u.users[i]:{name:'',admin:false,pages:u.viewer};
   const box=(id,label)=>`<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" class="chk du-pg" value="${id}" ${x.admin||x.pages.includes(id)?'checked':''} ${x.admin?'disabled':''}> ${esc(label)}</label>`;
-  // Fleet Control: visibility (the page) and management (includes visibility; not for Viewer).
-  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management'));
+  // Fleet Control and DGNA & Radio actions: seeing the page, and acting there (includes seeing; not for Viewer).
+  const boxes=PAGES.filter(p=>!p[5]).map(p=>box(p[0],p[0]==='fleet'?'Fleet Control visibility':p[0]==='radioctl'?'DGNA & Radio actions: view':p[1])).join('')+(viewer?'':box('fleet_manage','Fleet Control management')+box('radioctl_manage','DGNA & Radio actions: send'));
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${viewer?'Viewer (not logged in)':i>=0?'Edit user '+esc(x.name):'New user'}</h3></div><div class="sb">
    ${viewer?`<div class="mut" style="font-size:12.5px">What anyone sees without logging in${D.who.open?'':' once the dashboard is open (<code>[dashboard.ui] open = true</code>; it is closed now, so nobody sees anything without logging in)'}.</div>`:`
    <div><label class="l" for="du-name">User name</label><input class="f" id="du-name" value="${esc(x.name)}" ${i>=0?'disabled':''} placeholder="e.g. oe4sxm" autocomplete="off" spellcheck="false" autocapitalize="off"></div>
@@ -3092,5 +3146,35 @@ mod tests {
         }
         // A table that scrolls sideways keeps its screen-reader text inside: no page-wide overflow on phones.
         assert!(PAGE_HTML.contains(".tw{overflow-x:auto;position:relative}"));
+    }
+
+    /// UI cleanup: Telemetry watches (graphs, values, condition alarms, ping), Fleet Control
+    /// manages (restart and shut down together), DGNA & Radio actions replaces Control and takes
+    /// DGNA from Routing.
+    #[test]
+    fn pages_after_the_ui_cleanup() {
+        let page = |name: &str| {
+            let a = PAGE_HTML.find(&format!("\nR.{name}=()=>{{")).unwrap_or_else(|| panic!("R.{name}"));
+            let rest = &PAGE_HTML[a + 1..];
+            &rest[..rest[1..].find("\nR.").map_or(rest.len(), |b| b + 1)]
+        };
+        let pages = &PAGE_HTML[PAGE_HTML.find("const PAGES=[").unwrap()..];
+        let pages = &pages[..pages.find("];").unwrap()];
+        assert!(!pages.contains("['control'"), "Control is gone");
+        assert!(pages.contains("['telemetry','Telemetry','tele','Infrastructure'],['tsds','Telemetry SDS','tsds','Infrastructure'],['radioctl','DGNA & Radio actions'"));
+        let tele = page("telemetry");
+        assert!(tele.contains("fleetAlarmCard(f,false)") && tele.contains("tlmHeadFx(fx)") && tele.contains("tlmLatest(fx)") && tele.contains("fleetAutoPing"));
+        assert!(PAGE_HTML.contains("onclick=\"fleetGraph('${esc(fx.id)}')\""), "graphs link at the telemetry card");
+        let fleet = page("fleet");
+        assert!(fleet.contains("fleetAlarmCard(f,true)"), "change log ALARMs stay on Fleet Control");
+        assert!(!fleet.contains("fleetGraph(") && !fleet.contains("fleetAutoPing") && !fleet.contains("/api/fleet/ping"), "graphs and ping moved to Telemetry");
+        assert!(PAGE_HTML.contains("'Shut down service'") && PAGE_HTML.contains("action:kind==='shutdown'?'ShutdownService':'RestartService'"));
+        assert!(PAGE_HTML.contains("show('telemetry')\">‹</button>"), "the graph page goes back to Telemetry");
+        let routing = page("routing");
+        assert!(!routing.contains("Assign radios to a group (DGNA)") && routing.contains("data-go=\"radioctl\""));
+        let radio = page("radioctl");
+        assert!(radio.contains("dgnaCard(mr)") && radio.contains("KickMs") && radio.contains("AmbienceListen") && radio.contains("mayRadio()"));
+        assert!(PAGE_HTML.contains("box('radioctl_manage','DGNA & Radio actions: send')"), "own right to send");
+        assert!(PAGE_HTML.contains("<h2>Graphs and alarms</h2>") && !PAGE_HTML.contains("Fleet Control graphs and alarms"));
     }
 }

@@ -30,10 +30,12 @@ servername = "Tetra Network Monitor"
 ## Dashboard
 
 The dashboard (port 9003) has a sidebar layout that follows the system's light
-or dark mode (or a fixed one, from the account menu). Its **Routing** page
-sends DGNA to several radios at once and manages talkgroup pools, which
-connect talkgroups inside the server without a restart
-([docs/Routing.md](docs/Routing.md)). **Accounts** adds the logins of
+or dark mode (or a fixed one, from the account menu). Its **DGNA & Radio actions** page
+sends DGNA to several radios at once (and kick, emergency clear, live SDS,
+ambience listening to one radio), and **Routing** manages talkgroup pools,
+which connect talkgroups inside the server without a restart
+([docs/Routing.md](docs/Routing.md)). **Telemetry** shows each station's
+state, with graphs, latest values and alarms for Fleet Control stations. **Accounts** adds the logins of
 Basestations and terminals (Brew, telemetry, control) without a restart, with
 an info text and position per login, the **Directory** keeps names for ISSIs
 and groups (`[issi_names]`, `[gssi_names]`) and who may use a group (allow or

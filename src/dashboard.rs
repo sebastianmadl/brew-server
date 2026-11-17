@@ -87,7 +87,6 @@ fn app(state: Arc<AppState>) -> Router {
     // and then bounces back to wherever Login was pressed.
     let settings_routes = Router::new()
         .route("/login", get(login))
-        .route("/api/control/{id}", axum::routing::post(control_command))
         .route("/settings", get(settings_page))
         .route("/api/config/raw", get(config_raw_get).put(config_raw_put))
         .route("/api/config/sip/full", get(sip_config_full))
@@ -102,7 +101,6 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/config/allowlist/enabled", axum::routing::put(allowlist_set_enabled))
         .route("/api/config/allowlist/{issi}", axum::routing::post(allowlist_add).delete(allowlist_remove))
         .route("/api/sms-center/{id}", axum::routing::delete(sms_center_delete))
-        .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
         .route("/api/pools/save", axum::routing::post(crate::routing_api::pools_put))
         .route("/api/networks", get(crate::routing_api::networks_get))
         .route("/api/networks/save", axum::routing::post(crate::routing_api::networks_put))
@@ -159,6 +157,10 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/positions", get(positions_snapshot))
         .route("/api/bts-locations", get(bts_locations_snapshot))
         .route("/api/control", get(control_list))
+        // DGNA & Radio actions (and the old Restart / Shut down for Fleet
+        // Control): the handlers check the right per command.
+        .route("/api/control/{id}", axum::routing::post(control_command))
+        .route("/api/dgna", axum::routing::post(crate::routing_api::dgna))
         .route("/api/fleet", get(crate::fleet::api_list))
         .route("/api/fleet/remove", axum::routing::post(crate::fleet::api_remove))
         .route("/api/fleet/ping", axum::routing::post(crate::fleet::api_ping))
@@ -296,6 +298,10 @@ fn need(path: &str) -> Need {
     if ANY.contains(&path) {
         return Need::Any;
     }
+    // A station command: radio actions or Restart / Shut down (see `control_command`).
+    if path.starts_with("/api/control/") {
+        return Need::Pages(&["radioctl_manage", "fleet_manage"]);
+    }
     Need::Pages(match path {
         "/api/status" => &["overview", "calls", "sds", "routing"],
         "/calls" => &["calls"],
@@ -304,7 +310,9 @@ fn need(path: &str) -> Need {
         "/api/connections" | "/connections" => &["overview", "stations", "radios", "roaming", "routing", "map", "telemetry", "issis"],
         "/api/telemetry" => &["overview", "stations", "telemetry", "tsds", "map"],
         "/telemetry-sds" => &["tsds"],
-        "/api/radios" => &["overview", "radios", "routing", "issis", "roaming"],
+        "/api/radios" => &["overview", "radios", "routing", "issis", "roaming", "radioctl"],
+        "/api/control" => &["radioctl", "fleet"],
+        "/api/dgna" => &["radioctl_manage"],
         "/api/rssi" | "/api/ms-cells" => &["overview", "stations", "radios", "roaming", "map"],
         "/api/registrations" | "/registrations" => &["radios"],
         "/api/positions" | "/api/bts-locations" | "/map" => &["map", "stations", "overview"],
@@ -1528,11 +1536,32 @@ pub async fn control_list(State(state): State<Arc<AppState>>) -> Json<Vec<String
     Json(state.control.read().await.connected_ids())
 }
 
+/// Who may send a station command from the dashboard: the radio actions need
+/// "DGNA & Radio actions" sending, Restart / Shut down "Fleet Control
+/// management", everything else (raw SDS, Fleet Control internals) an admin.
+fn may_send(a: &crate::dash_users::Access, command: &ControlCommand) -> bool {
+    match command {
+        ControlCommand::KickMs { .. }
+        | ControlCommand::ClearEmergency { .. }
+        | ControlCommand::AddLiveSds { .. }
+        | ControlCommand::DeleteLiveSds { .. }
+        | ControlCommand::ClearLiveSds
+        | ControlCommand::AmbienceListen { .. }
+        | ControlCommand::Dgna { .. } => a.manages_radios(),
+        ControlCommand::RestartService | ControlCommand::ShutdownService => a.manages_fleet(),
+        _ => a.admin,
+    }
+}
+
 pub async fn control_command(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(command): Json<ControlCommand>,
 ) -> Response {
+    if !may_send(&access(&state, &headers), &command) {
+        return (StatusCode::FORBIDDEN, "Forbidden: this command needs another right of the dashboard\n").into_response();
+    }
     match control::send_command(&state, &id, command).await {
         Ok(response) => Json(serde_json::json!({"sent": true, "response": response})).into_response(),
         Err(SendError::NotConnected) => (StatusCode::NOT_FOUND, "control BTS not connected").into_response(),
@@ -2669,5 +2698,26 @@ mod tests {
         assert_eq!(need("/api/fleet/monitor/settings"), Need::Admin, "alarm rules are server settings");
         let looker = crate::dash_users::Access { user: Some("eve".into()), admin: false, pages: ["fleet".to_string()].into(), auth: true };
         assert!(allowed(&looker, need("/api/fleet")) && !allowed(&looker, need("/api/fleet/remove")));
+    }
+
+    #[test]
+    fn radio_action_routes_need_their_rights() {
+        assert_eq!(need("/api/control"), Need::Pages(&["radioctl", "fleet"]), "station list: not open to everyone any more");
+        assert_eq!(need("/api/dgna"), Need::Pages(&["radioctl_manage"]));
+        assert_eq!(need("/api/control/bs1"), Need::Pages(&["radioctl_manage", "fleet_manage"]));
+        assert!(match need("/api/radios") { Need::Pages(p) => p.contains(&"radioctl"), _ => false }, "the DGNA list of radios");
+        let user = |pages: &[&str]| crate::dash_users::Access { user: Some("bob".into()), admin: false, pages: pages.iter().map(|p| p.to_string()).collect(), auth: true };
+        let kick = ControlCommand::KickMs { issi: 4013 };
+        let radio = user(&["radioctl", "radioctl_manage"]);
+        assert!(may_send(&radio, &kick) && may_send(&radio, &ControlCommand::ClearLiveSds));
+        assert!(!may_send(&radio, &ControlCommand::ShutdownService), "shut down belongs to Fleet Control");
+        let fleet = user(&["fleet", "fleet_manage"]);
+        assert!(may_send(&fleet, &ControlCommand::RestartService) && may_send(&fleet, &ControlCommand::ShutdownService));
+        assert!(!may_send(&fleet, &kick));
+        assert!(!may_send(&user(&["radioctl"]), &kick), "seeing the page is not sending");
+        let raw = ControlCommand::CommandA { handle: 0, parameter: 1 };
+        assert!(!may_send(&radio, &raw) && !may_send(&fleet, &raw), "other commands stay for admins");
+        let admin = crate::dash_users::Access { user: Some("root".into()), admin: true, pages: Default::default(), auth: true };
+        assert!(may_send(&admin, &raw) && may_send(&admin, &kick));
     }
 }
