@@ -704,7 +704,7 @@ async function csNow(){
 }
 function chrome(){
   const c=D.conn,st=D.status;
-  const bs=c?new Set(c.brew_clients.filter(x=>x.mode==='Basestation').map(x=>x.station)).size:0;
+  const bs=c?new Set(c.brew_clients.filter(x=>x.mode==='Basestation'&&!asTerm(x.mode,x.station)).map(x=>x.station)).size:0;
   $('hw-brew').textContent=c?`${bs} station${bs===1?'':'s'}`:'…';
   $('hw-brew-dot').className='dot'+(ok?(bs?'':' w'):' d');
   const ha=D.ha;
@@ -863,7 +863,7 @@ function stationsList(){
   for(const x of c.cells||[]){(byStation[x.station]=byStation[x.station]||{name:x.station,cells:[],online:false,regs:0,addr:'',since:0,gone:0}).cells.push(x);
     const s=byStation[x.station];if(x.online!==false){s.online=true;s.regs=x.registered_issis;s.addr=x.remote_addr;s.since=x.connected_at_ms;}else s.gone=x.last_seen_ms;}
   // A station with cells in several networks has one connection per network: add up its radios.
-  for(const b of c.brew_clients.filter(b=>b.mode==='Basestation')){const s=byStation[b.station]||(byStation[b.station]={name:b.station,cells:[],online:true,regs:b.registered_issis,addr:b.remote_addr,since:b.connected_at_ms,gone:0});s.online=true;s.regs=(s.conns?s.regs:0)+b.registered_issis;s.conns=(s.conns||0)+1;s.since=b.connected_at_ms;s.addr=s.addr||b.remote_addr;s.ver=b.version;}
+  for(const b of c.brew_clients.filter(b=>b.mode==='Basestation'&&!asTerm(b.mode,b.station))){const s=byStation[b.station]||(byStation[b.station]={name:b.station,cells:[],online:true,regs:b.registered_issis,addr:b.remote_addr,since:b.connected_at_ms,gone:0});s.online=true;s.regs=(s.conns?s.regs:0)+b.registered_issis;s.conns=(s.conns||0)+1;s.since=b.connected_at_ms;s.addr=s.addr||b.remote_addr;s.ver=b.version;}
   for(const t of D.tele){const m=Object.values(byStation).find(s=>s.addr&&t.ip&&s.addr.startsWith(t.ip+':')&&!s.tele);if(m&&Object.values(byStation).filter(s=>s.addr&&s.addr.startsWith(t.ip+':')).length===1)m.tele=t;}
   return Object.values(byStation).sort((a,b)=>(b.online-a.online)||a.name.localeCompare(b.name));
 }
@@ -976,13 +976,13 @@ R.radios=()=>{
   const q=UI.filter.radios||'';
   const ms=c.mobile_stations.filter(m=>match(q,m.issi,nameOf(m.issi),m.basestation_name,(m.groups||[]).join(' '),(m.groups||[]).map(gName).join(' '),m.cell&&m.cell.name));
   const regs=(D.regs||[]).filter(r=>match(q,r.issi,r.bts));
-  ms.sort((a,b)=>a.issi-b.issi);const radios=ms.filter(m=>m.mode!=='Terminal'),terms=ms.filter(m=>m.mode==='Terminal');
+  ms.sort((a,b)=>a.issi-b.issi);const isT=m=>asTerm(m.mode,m.basestation_name),radios=ms.filter(m=>!isT(m)),terms=ms.filter(isT);
   return `<div class="bar">${searchBox('radios','ISSI, group or station…')}</div>
   <div class="card"><div class="ch"><h2>Registered radios</h2><span class="cnt">${radios.length}</span>${helpBtn('radios')}</div>${helpNote('radios',CELL_ID_HELP+' <i>Station</i> is the Brew login the radio is registered through. <i>Cell</i> is shown when the station reports cells (<code>bts-info</code>, <code>ms-cell</code>); a station without these extensions is shown without a cell. Numbers logged in as Terminal (apps, consoles, bridges) are listed in their own card below.')}<div class="tw"><table><thead><tr><th>ISSI</th><th>Station</th><th>Cell (global ID)</th><th>Groups</th><th>Via</th><th>Station address</th></tr></thead><tbody>
   ${radios.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${cellCell(m.cell&&m.cell.name,m.mode)}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td>${esc(m.mode)}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No radios registered</td></tr>'}
   </tbody></table></div></div>
-  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${terms.length}</span>${helpBtn('rterms')}</div>${helpNote('rterms','Numbers registered in Terminal mode: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>). Which one a number is, is set on the Directory page (default Terminal). They have no cells.')}<div class="tw"><table><thead><tr><th>Number</th><th>Type</th><th>Login</th><th>Groups</th><th>Address</th></tr></thead><tbody>
-  ${terms.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${tKindChip(m.issi,m.basestation_name)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No terminals or bridges registered</td></tr>'}
+  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${terms.length}</span>${helpBtn('rterms')}</div>${helpNote('rterms','Numbers registered in Terminal mode: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>), plus the radios of a Basestation login whose type is set to Terminal or Bridge. The type is set on the Accounts, Stations &amp; Cells or Directory page (Auto: as it logs in). They have no cells.')}<div class="tw"><table><thead><tr><th>Number</th><th>Type</th><th>Login</th><th>Groups</th><th>Address</th></tr></thead><tbody>
+  ${terms.map(m=>`<tr><td>${issiCell(m.issi,true)}</td><td>${tKindChip(m.basestation_name,m.issi)}</td><td><b class="m">${esc(m.basestation_name||'—')}</b>${infoOf(m.basestation_name)?`<span class="sub">${esc(infoOf(m.basestation_name))}</span>`:''}</td><td>${(m.groups||[]).map(g=>tgChip(g)).join(' ')||'<span class="mut">—</span>'}</td><td class="m mut">${esc(m.basestation_addr||'')}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No terminals or bridges registered</td></tr>'}
   </tbody></table></div></div>
   <div class="card"><div class="ch"><h2>Registration log</h2><span class="cnt">${regs.length}</span><span class="sp"></span><span class="mut" style="font-size:12px">${D.status&&D.status.keep_days?`kept up to ${D.status.keep_days} days`:'kept across restarts'}${regs.length>1000?' · newest 1000 shown, search for older':''}</span>${D.who.admin?`<button class="btn danger" onclick="clearRegLog()">${ic('trash')}Clear</button>`:''}</div>${msgDiv('reg-msg','padding:0 18px')}<div class="tw sdsl"><table><thead><tr><th>Time</th><th>ISSI</th><th>Event</th><th>Station</th><th>Cell (global ID)</th></tr></thead><tbody>
   ${regs.slice(0,1000).map(r=>`<tr><td class="m">${tmd(r.at_ms)}</td><td>${issiCell(r.issi)}</td><td>${r.kind==='register'?'<span class="chip a">register</span>':r.kind==='timeout'?'<span class="chip w">timeout</span>':`<span class="chip i">${esc(r.kind)}</span>`}</td><td>${esc(r.bts||'')}</td><td>${r.cell?'<span class="chip">'+esc(r.cell)+'</span>':'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">No registrations yet</td></tr>'}
@@ -1012,9 +1012,36 @@ const infoOf=login=>(D.names||{})[login]||nameOf(login);
 // FlowStation name for Brew and the dashboard, not an ETSI identity.
 const CELL_ID_HELP='<b>Station</b> = a base station (FlowStation) connected in Basestation mode, named by its Brew login. <b>Global cell ID</b> = <i>login/cell</i>: the Brew login of the station and the number of the cell inside the station (local cell number, 0 = primary), e.g. 1000002/1. The global cell ID is defined by brew-server and FlowStation for Brew and this dashboard; it is not an ETSI identity. On the air interface a cell is identified by MCC, MNC, main carrier and band plan; the location area (LA) is shown separately.';
 // The cell column of a radio: its global cell ID, or why there is none.
-// A number that logs in as Terminal: "bridge" when the Directory says so ([issi_kinds]), else "terminal".
-const tKind=(...ns)=>ns.some(n=>(D.ikind||{})[String(n)]==='bridge')?'bridge':'terminal';
+// Type of a login or number ([issi_kinds], set on Accounts, Stations and Directory): 'terminal', 'bridge' or
+// '' for Auto (as it logs in: Basestation mode = station, Terminal mode = terminal).
+const kindOver=n=>{const v=(D.ikind||{})[String(n)];return v==='bridge'||v==='terminal'?v:'';};
+// Listed with the terminals and bridges: Terminal mode, or a Basestation login set to Terminal or Bridge.
+const asTerm=(mode,login)=>mode==='Terminal'||(mode==='Basestation'&&!!kindOver(login));
+// Terminal or bridge: the first of the numbers (login, own number) with a type set, else "terminal".
+const tKind=(...ns)=>{for(const n of ns){const v=kindOver(n);if(v)return v;}return 'terminal';};
 const tKindChip=(...ns)=>tKind(...ns)==='bridge'?'<span class="chip b">Bridge</span>':'<span class="chip i">Terminal</span>';
+// Type column of a login on Stations & Cells: what it is listed as, "set" when overridden, and (admins) Change.
+const KIND_LABEL={auto:'Auto',terminal:'Terminal',bridge:'Bridge'};
+const kindCell=(login,mode)=>{const o=kindOver(login);
+  const chip=asTerm(mode,login)?tKindChip(login):'<span class="chip a">Base station</span>';
+  return chip+(o&&mode==='Basestation'?`<span class="sub">set, logs in as Basestation</span>`:'')+(D.who.admin&&/^\d{1,12}$/.test(String(login))?` <button class="btn" style="min-height:26px;padding:0 8px;font-size:12px" onclick="editKind('${esc(login)}','${esc(mode)}')" title="Auto, Terminal or Bridge">Change</button>`:'');};
+// The Auto / Terminal / Bridge choice in a dialog (Accounts, Stations, Directory).
+const kindSeg=n=>{const cur=kindOver(n)||'auto';
+  return `<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Type</span><div class="seg" role="radiogroup" id="in-kind" style="margin-top:5px">${['auto','terminal','bridge'].map(v=>`<button type="button" role="radio" data-v="${v}" aria-pressed="${cur===v}" aria-checked="${cur===v}" onclick="document.querySelectorAll('#in-kind button').forEach(b=>{const on=b===this;b.setAttribute('aria-pressed',on);b.setAttribute('aria-checked',on);})">${KIND_LABEL[v]}</button>`).join('')}</div><div class="mut" style="font-size:12px;margin-top:4px"><i>Auto</i>: as it logs in (Basestation = station, Terminal = terminal). <i>Terminal</i> or <i>Bridge</i>: listed under Terminals &amp; bridges on Radios and Stations &amp; Cells, even when it logs in as Basestation. Only changes how the dashboard lists it.</div></div>`;};
+const kindPicked=()=>{const b=document.querySelector('#in-kind button[aria-pressed="true"]');return b?b.dataset.v:null;};
+// Type of a login from the Stations page.
+function editKind(login,mode){
+  $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">Type of ${esc(login)}</h3></div><div class="sb">
+   <div class="mut" style="font-size:12.5px">Logs in as <b>${esc(mode)}</b>${infoOf(login)?' · '+esc(infoOf(login)):''}.</div>
+   ${kindSeg(login)}
+   <div class="msg" id="sheet-msg" style="padding:0"></div></div>
+   <div class="acts"><button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveKind('${esc(login)}')">Save</button></div>`;
+  $('scrim').classList.add('on');
+}
+async function saveKind(login){const m=$('sheet-msg'),kind=kindPicked();
+  if(!kind||kind===(kindOver(login)||'auto')){closeSheet();return;}
+  m.className='msg mut';m.textContent='Saving…';
+  try{D.ikind=await postJ('/api/issi-kinds/set',{issi:login,kind});closeSheet();render(true);}catch(e){m.className='msg err';m.textContent=e.message;}}
 const cellCell=(name,mode,...ns)=>name?`<span class="chip">${esc(name)}</span>`:mode==='Terminal'?`<span class="mut" title="Terminals and bridges have no cells">— (${tKind(...ns)})</span>`:'<span class="mut" title="The station reports no cells">—</span>';
 // Global cell ID of a station cell seen in telemetry, by its carrier (unique in a network).
 const gcidOf=carrier=>{const c=((D.conn&&D.conn.cells)||[]).find(x=>x.online!==false&&x.carrier===carrier);return c?c.name:'';};
@@ -1023,18 +1050,18 @@ function software(a){if(!a)return '<span class="mut">—</span>';const m=/^(.+?)
 R.stations=()=>{
   const c=D.conn;if(!c)return '<div class="empty">Loading…</div>';
   const conns=connGroups(c.brew_clients);
-  const bs=conns.filter(b=>b.mode==='Basestation'),term=conns.filter(b=>b.mode==='Terminal'),netl=conns.filter(b=>b.mode!=='Basestation'&&b.mode!=='Terminal');
+  const bs=conns.filter(b=>b.mode==='Basestation'&&!asTerm(b.mode,b.station)),term=conns.filter(b=>asTerm(b.mode,b.station)),netl=conns.filter(b=>b.mode!=='Basestation'&&b.mode!=='Terminal');
   const f=UI.filter.cellf||'all';
   const cells=(c.cells||[]).filter(x=>f==='all'||(f==='on')===(x.online!==false));
   const dups=c.duplicate_carriers||[];
   const caps=x=>(x.capabilities||[]).map(k=>`<span class="chip">${esc(k)}</span>`).join(' ')||'<span class="mut">—</span>';
   return `<div class="bar">${seg('cellf',[['all','All'],['on','Online'],['off','Offline']])}</div>
   ${dups.length?`<div class="card"><div class="note">${ic('alert')}<div><b>Duplicate carriers:</b> ${dups.map(d=>esc(JSON.stringify(d))).join(', ')}. The newest announcement serves.</div></div></div>`:''}
-  <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${bs.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Base stations connected in Basestation mode, by login. A station that opens several connections (one per cell or per network) is listed once, with all its cells, the radios summed and every remote address. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
-  ${bs.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${b.cells.sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true})).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No stations connected</td></tr>'}
+  <div class="card"><div class="ch"><h2>Stations</h2><span class="cnt">${bs.length}</span>${helpBtn('conns')}</div>${helpNote('conns','Base stations connected in Basestation mode, by login. A login whose type is set to Terminal or Bridge (<i>Change</i>, or on the Accounts page) is listed under Terminals &amp; bridges instead. A station that opens several connections (one per cell or per network) is listed once, with all its cells, the radios summed and every remote address. A station without the <code>bts-info</code> extension shows no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Type</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th><th>Cells (global ID)</th></tr></thead><tbody>
+  ${bs.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${kindCell(b.station,b.mode)}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td><td>${b.cells.sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true})).map(x=>`<span class="chip" title="Carrier ${x.carrier}, ${x.mcc}/${x.mnc}">${esc(x.name)}</span>`).join(' ')||'<span class="mut">—</span>'}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">No stations connected</td></tr>'}
   </tbody></table></div></div>
-  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${term.length}</span>${helpBtn('sterms')}</div>${helpNote('sterms','Logins in Terminal mode with their own number: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>), as set on the Directory page (default Terminal). They have no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Type</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
-  ${term.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${tKindChip(b.station)}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No terminals or bridges connected</td></tr>'}
+  <div class="card"><div class="ch"><h2>Terminals &amp; bridges</h2><span class="cnt">${term.length}</span>${helpBtn('sterms')}</div>${helpNote('sterms','Logins in Terminal mode with their own number: apps and consoles (<i>Terminal</i>) and bridges to other systems (<i>Bridge</i>), and Basestation logins whose type is set to Terminal or Bridge. <i>Change</i> sets the type (Auto: as it logs in), also on the Accounts page. They have no cells.')}<div class="tw"><table><thead><tr><th>Login</th><th>Type</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
+  ${term.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${kindCell(b.station,b.mode)}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="6" class="mut">No terminals or bridges connected</td></tr>'}
   </tbody></table></div></div>
   ${netl.length?`<div class="card"><div class="ch"><h2>Network links</h2><span class="cnt">${netl.length}</span></div><div class="tw"><table><thead><tr><th>Login</th><th>Software</th><th>Remote address</th><th>Connected</th><th>Radios</th></tr></thead><tbody>
   ${netl.map(b=>`<tr><td><b>${esc(b.station)}</b>${infoOf(b.station)?`<span class="sub">${esc(infoOf(b.station))}</span>`:''}${b.n>1?`<span class="sub">${b.n} connections</span>`:''}</td><td>${[...new Set(b.agents)].map(software).join('<br>')}<span class="sub">Brew v${[...new Set(b.versions)].join(', v')}</span></td><td class="m">${[...new Set(b.addrs)].map(esc).join('<br>')||'—'}</td><td>${ago(b.connected_at_ms)}</td><td class="num">${b.registered_issis}</td></tr>`).join('')||'<tr><td colspan="5" class="mut">—</td></tr>'}
@@ -2330,7 +2357,8 @@ R.accounts=()=>{
    <div class="svc">${svcChip('Brew',a.brew)}${svcChip('Telemetry',a.telemetry)}${svcChip('Control',a.control)}</div>
    <div class="tw acc"><table><thead><tr><th>${byInfo?'Info':'Login'}</th><th>Brew</th><th>Telemetry</th><th>Control</th><th class="hide-s">Position</th><th></th></tr></thead><tbody>
    ${rows.map(x=>{const i=a.accounts.indexOf(x);const first=byInfo&&x.info?`<b>${esc(x.info)}</b>`:`<b class="m">${esc(x.username)}</b>`;
-     return `<tr><td>${first}${byInfo?(x.info?`<span class="sub m">${esc(x.username)}</span>`:'<span class="sub">no info</span>'):''}</td><td>${yn(x.brew)}</td><td>${yn(x.telemetry)}</td><td>${yn(x.control)}</td><td class="hide-s">${x.lat!=null?`<span class="m" style="font-size:12px">${x.lat.toFixed(4)}, ${x.lon.toFixed(4)}</span>`:'<span class="no">—</span>'}</td>
+     const ko=kindOver(x.username);
+     return `<tr><td>${first}${ko?` ${tKindChip(x.username)}`:''}${byInfo?(x.info?`<span class="sub m">${esc(x.username)}</span>`:'<span class="sub">no info</span>'):''}</td><td>${yn(x.brew)}</td><td>${yn(x.telemetry)}</td><td>${yn(x.control)}</td><td class="hide-s">${x.lat!=null?`<span class="m" style="font-size:12px">${x.lat.toFixed(4)}, ${x.lon.toFixed(4)}</span>`:'<span class="no">—</span>'}</td>
      <td style="text-align:right;white-space:nowrap">${adm?`<button class="btn" onclick="editAcc(${i})">Edit</button> <button class="btn danger hide-s" onclick="delAcc(${i})">Delete</button>`:''}</td></tr>`;}).join('')||'<tr><td colspan="6" class="mut">No logins</td></tr>'}
    </tbody></table></div>${msgDiv('acc-msg','padding:12px 18px')}</div>`;
 };
@@ -2346,6 +2374,7 @@ function editAcc(i){
    ${sw('ac-t',x.telemetry,'Telemetry','FlowStation status reports')}
    ${sw('ac-c',x.control,'Control','Commands to the station: DGNA, kick, restart')}
    <div class="mut" style="font-size:12px">Applies to the next connection at once, no restart.</div>
+   ${kindSeg(x.username)}
    <div class="msg" id="sheet-msg" style="padding:0"></div></div>
    <div class="acts">${i>=0?`<button class="btn danger" style="margin-right:auto" onclick="closeSheet();delAcc(${i})">${ic('trash')}Delete</button>`:''}<button class="btn" onclick="closeSheet()">Cancel</button><button class="btn pri" onclick="saveAcc(${i})">Save</button></div>`;
   $('scrim').classList.add('on');setTimeout(()=>(i>=0?$('ac-pw'):$('ac-user')).focus(),30);
@@ -2386,7 +2415,12 @@ async function saveAcc(i){
   const pos=$('ac-pos').value.trim();let lat=null,lon=null;
   if(pos){const n=pos.split(/[\s,;]+/).filter(Boolean).map(Number);if(n.length!==2||n.some(v=>!isFinite(v))){m.className='msg err';m.textContent='Position: two numbers, latitude and longitude, e.g. 48.2082, 16.3738.';return;}[lat,lon]=n;}
   const body={username:$('ac-user').value.trim(),password:$('ac-pw').value,brew:on('ac-b'),telemetry:on('ac-t'),control:on('ac-c'),info:$('ac-info').value.trim(),lat,lon};m.className='msg mut';m.textContent='Saving…';
-  try{D.acc=await postJ('/api/accounts',body);closeSheet();setMsg('acc-msg','ok',`${body.username} saved. It works for the next connection.`);render(true);}
+  // The type (Auto / Terminal / Bridge) is a dashboard setting of the number ([issi_kinds]), saved after the login.
+  const kind=kindPicked(),kindChanged=!!kind&&kind!==(kindOver(body.username)||'auto');
+  if(kindChanged&&!/^\d{1,12}$/.test(body.username)){m.className='msg err';m.textContent='Type: only for a numeric login (up to 12 digits). Leave it on Auto.';return;}
+  try{D.acc=await postJ('/api/accounts',body);
+    if(kindChanged)D.ikind=await postJ('/api/issi-kinds/set',{issi:body.username,kind});
+    closeSheet();setMsg('acc-msg','ok',`${body.username} saved. It works for the next connection.`);render(true);}
   catch(e){m.className='msg err';m.textContent=e.message;}
 }
 async function setBrewAuth(on){
@@ -2428,7 +2462,7 @@ R.issis=()=>{
   const plain=k=>!names[k]&&!acc[k];
   const rows=keys.filter(k=>(f==='hidden'?hid.has(k):!(hid.has(k)&&plain(k)))&&(f==='all'||f==='hidden'||(f==='named'&&names[k])||(f==='unnamed'&&!names[k])||(f==='limited'&&acc[k]))&&match(q,k,names[k],...((acc[k]||{}).issis||[])));
   const accCell=k=>accChips(acc[k])||'<span class="mut">Open</span>';
-  const where=K==='issi'?((m,k)=>(m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')+((m&&m.mode==='Terminal')||tKind(k)==='bridge'?' '+tKindChip(k):''))
+  const where=K==='issi'?((m,k)=>(m?`<span class="st"><i></i>${esc(m.cell?m.cell.name:(m.basestation_name||'registered'))}</span>`:'<span class="st i"><i></i>not registered</span>')+((m&&m.mode==='Terminal')||kindOver(k)?' '+tKindChip(k):''))
     :(n=>n===undefined?'<span class="st i"><i></i>no radios</span>':`<span class="st"><i></i>${n?n+' radio'+(n===1?'':'s'):'call running'}</span>`);
   const help=K==='issi'?'Names for ISSIs, for example the call sign and first name of a radio\'s user. They show next to the ISSI on Overview, Calls, SDS, Radios, Roaming and Routing. The login of a bridge (Brew login in Network mode, up to 12 digits, for example a link to another network) can be named here too; the name shows under the login on Stations &amp; Cells. Terminals (apps) and base stations are named on the Accounts page. Radios registered right now are listed too, so you can name them. Changes apply at once, without a restart, and are written to the config file (<code>[issi_names]</code>).'
     :'Names for groups (GSSI), for example the area or the purpose of a talkgroup. They show next to the group on Overview, Calls, Radios and Routing (a name a radio reports for its group comes first). Groups radios are on right now are listed too, so you can name them.<br><br><b>Access</b> decides who may use a group: <i>Open</i> (everyone), <i>Only these</i> (an allow list: only the listed ISSIs) or <i>Block these</i> (everyone but the listed ISSIs). <b>RX only</b> makes radios listeners: all of them with an empty list, or the listed ones (with <i>Only these</i>, listed listeners missing from the allow list are added to it on save); who may talk is then who is admitted and not listen-only. The server records an affiliation only for an admitted radio and drops a group call from a radio that may not talk (emergency calls always pass). A Basestation that supports it (FlowStation with <code>group-access</code>) gets the lists and refuses the attachment or the request to talk on the air itself; on other Basestations the radio can still attach and talk locally, but not across the network. <br><br>Which groups may be used at all (<b>managed talkgroups</b>) is set on the Routing page; naming a group here does not allow it, but a group with <i>Only these</i> counts as allowed there.<br><br><b>✕</b> hides a group without a name from this page while radios are on it (display only); the filter <i>Hidden</i> shows it again. Changes apply at once, without a restart, and are written to the config file (<code>[gssi_names]</code>, <code>[group_access]</code>, <code>[talkgroups]</code>).';
@@ -2449,7 +2483,7 @@ function editName(k,kind){
   $('sheet').innerHTML=`<div class="ch"><h3 id="sheet-title">${K==='gssi'?(k?'Group '+k:'Add group'):(k?(n?'Edit name':'Name for '+k):'Add name')}</h3></div><div class="sb">
    <div><label class="l" for="in-issi">${d.what}</label><input class="f" id="in-issi" value="${k}" ${k?'disabled':''} inputmode="numeric" placeholder="e.g. ${d.ex}"></div>
    <div><label class="l" for="in-name">Name${K==='gssi'?' (optional)':''}</label><input class="f" id="in-name" maxlength="60" value="${esc(n)}" placeholder="e.g. ${esc(d.exn)}"></div>
-   ${K==='issi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">When it logs in as Terminal</span><div class="seg" role="radiogroup" id="in-kind" style="margin-top:5px">${[['terminal','Terminal (app, console)'],['bridge','Bridge']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${tKind(k)===v}" aria-checked="${tKind(k)===v}" onclick="document.querySelectorAll('#in-kind button').forEach(b=>{const on=b===this;b.setAttribute('aria-pressed',on);b.setAttribute('aria-checked',on);})">${l}</button>`).join('')}</div><div class="mut" style="font-size:12px;margin-top:4px">Shown on Radios and Stations &amp; Cells. Radios on a base station are not affected.</div></div>`:''}
+   ${K==='issi'?kindSeg(k):''}
    ${K==='gssi'?`<div><span class="l" style="display:block;font-size:12px;font-weight:600;color:var(--text2)">Access</span><div class="seg" role="radiogroup" id="in-acc" style="margin-top:5px">${[['open','Open'],['allow','Only these'],['block','Block these']].map(([v,l])=>`<button role="radio" data-v="${v}" aria-pressed="${am===v}" aria-checked="${am===v}" onclick="setAcc('${v}')">${l}</button>`).join('')}</div></div>
    <div id="in-acc-box" ${am==='open'?'hidden':''}><label class="l" for="in-acc-list" id="in-acc-l">${am==='block'?'ISSIs that may not use the group':'ISSIs that may use the group (no one else)'}</label>
    <textarea class="f" id="in-acc-list" rows="4" style="width:100%;height:auto;padding:10px;font:13px var(--mono,ui-monospace,monospace)" placeholder="2320972, 2321100">${a?a.issis.join(', '):''}</textarea>
@@ -2475,7 +2509,7 @@ async function saveName(){
     if(v==='allow'&&rx){const sp=t=>t.split(/[\s,;]+/).filter(Boolean),have=sp(acc.issis),miss=sp(acc.rx_only_issis).filter(i=>!have.includes(i));
       if(miss.length){acc.issis=have.concat(miss).join(', ');added=miss;}}}
   const had=(D[K]||{})[issi]||'';
-  const kb=K==='issi'&&document.querySelector('#in-kind button[aria-pressed="true"]'),kind=kb?kb.dataset.v:null,kindChanged=!!kind&&kind!==tKind(issi);
+  const kind=K==='issi'?kindPicked():null,kindChanged=!!kind&&kind!==(kindOver(issi)||'auto');
   if(!name&&kindChanged&&!had){m.className='msg mut';m.textContent='Saving…';
     try{D.ikind=await postJ('/api/issi-kinds/set',{issi,kind});closeSheet();setMsg('issi-msg','ok',`${issi}: ${kind}.`);render(true);}catch(e){m.className='msg err';m.textContent=e.message;}return;}
   if(!name&&!(K==='gssi'&&(had||acc.issis.trim()||acc.rx_only||(D.access||{})[issi]))){m.className='msg err';m.textContent='Enter a name (or delete it in the list).';return;}
@@ -3226,12 +3260,31 @@ mod tests {
     /// DGNA from Routing.
     #[test]
     fn terminals_and_bridges_are_told_apart() {
-        assert!(PAGE_HTML.contains("const radios=ms.filter(m=>m.mode!=='Terminal'),terms=ms.filter(m=>m.mode==='Terminal');"), "Radios page: two lists");
+        assert!(PAGE_HTML.contains("const isT=m=>asTerm(m.mode,m.basestation_name),radios=ms.filter(m=>!isT(m)),terms=ms.filter(isT);"), "Radios page: two lists");
         assert!(PAGE_HTML.contains("<h2>Terminals &amp; bridges</h2><span class=\"cnt\">${terms.length}"));
-        assert!(PAGE_HTML.contains("${tKindChip(b.station)}"), "Stations & Cells shows the type");
+        assert!(PAGE_HTML.contains("<td>${kindCell(b.station,b.mode)}</td>"), "Stations & Cells shows the type");
         assert!(PAGE_HTML.contains("— (${tKind(...ns)})"), "the cell column names it");
         assert!(PAGE_HTML.contains("postJ('/api/issi-kinds/set',{issi,kind})"), "set in the Directory dialog");
         assert!(PAGE_HTML.contains("getJ('/api/issi-kinds')"));
+    }
+
+    /// Type per login: Auto (as it logs in), Terminal or Bridge. A Basestation login set to
+    /// Terminal or Bridge leaves the station list (Stations, header count, map) and is listed,
+    /// with its radios, under Terminals & bridges. Set on Accounts, Stations and Directory.
+    #[test]
+    fn a_login_type_overrides_where_it_is_listed() {
+        assert!(PAGE_HTML.contains("const asTerm=(mode,login)=>mode==='Terminal'||(mode==='Basestation'&&!!kindOver(login));"));
+        assert!(PAGE_HTML.contains("return v==='bridge'||v==='terminal'?v:'';"), "anything else is Auto");
+        assert!(PAGE_HTML.contains("const bs=conns.filter(b=>b.mode==='Basestation'&&!asTerm(b.mode,b.station)),term=conns.filter(b=>asTerm(b.mode,b.station)),netl="), "Stations page");
+        assert!(PAGE_HTML.contains("c.brew_clients.filter(x=>x.mode==='Basestation'&&!asTerm(x.mode,x.station))"), "header count");
+        assert!(PAGE_HTML.contains("c.brew_clients.filter(b=>b.mode==='Basestation'&&!asTerm(b.mode,b.station))"), "map and overview stations");
+        assert!(PAGE_HTML.contains("['auto','terminal','bridge'].map(v=>"), "three choices");
+        assert!(PAGE_HTML.contains("   ${kindSeg(x.username)}"), "Accounts dialog");
+        assert!(PAGE_HTML.contains("if(kindChanged)D.ikind=await postJ('/api/issi-kinds/set',{issi:body.username,kind});"), "saved with the login");
+        assert!(PAGE_HTML.contains("onclick=\"editKind('${esc(login)}','${esc(mode)}')\""), "Change on the Stations page");
+        assert!(PAGE_HTML.contains("D.ikind=await postJ('/api/issi-kinds/set',{issi:login,kind})"));
+        assert!(PAGE_HTML.contains("   ${K==='issi'?kindSeg(k):''}"), "Directory dialog");
+        assert!(!PAGE_HTML.contains("When it logs in as Terminal"));
     }
 
     #[test]

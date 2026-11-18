@@ -63,10 +63,12 @@ pub struct Config {
     /// `[issi_names]`: ISSI -> name ("2320972" = "OE4SXM Sebastian"), shown
     /// next to the ISSI on the dashboard. Edited live on its Directory page.
     pub issi_names: std::collections::BTreeMap<String, String>,
-    /// `[issi_kinds]`: what a number that logs in as Terminal is, ISSI ->
-    /// "bridge" ("2321100" = "bridge"); not listed = "terminal" (an app or
-    /// console). Only for the dashboard (Radios, Stations & Cells); set on
-    /// the Directory page.
+    /// `[issi_kinds]`: the type a login or number is listed as, login ->
+    /// "bridge" or "terminal" ("9100232" = "bridge"). Not listed = Auto: as
+    /// it logs in (Basestation mode = station, Terminal mode = terminal). A
+    /// Basestation login set to "terminal" or "bridge" is listed with the
+    /// terminals and bridges, its radios too. Only for the dashboard (Radios,
+    /// Stations & Cells); set on the Accounts, Stations and Directory pages.
     pub issi_kinds: std::collections::BTreeMap<String, String>,
     /// `[gssi_names]`: GSSI -> name ("2321" = "District North"), shown next to the
     /// group on the dashboard. Edited live on the same directory page.

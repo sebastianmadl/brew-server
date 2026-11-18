@@ -4,6 +4,17 @@ All notable changes to brew-server, newest first.
 
 Unreleased:
 
+- **Type per login: Auto, Terminal or Bridge.** The login's dialog on the
+  Accounts page, *Change* in the new Type column of Stations & Cells and the
+  ISSI dialog of the Directory set how the dashboard lists a login: *Auto*
+  (default, as before: Basestation mode = station, Terminal mode = terminal),
+  *Terminal* or *Bridge*. A login that connects in Basestation mode but is a
+  bridge (e.g. 9100232) can now be listed under Terminals & bridges; it and
+  its radios leave the station lists (Stations, header count, map). Stored in
+  `[issi_kinds]` (`"terminal"` is stored now too, Auto removes the entry;
+  `POST /api/issi-kinds/set` takes `auto`, `terminal`, `bridge`). Dashboard
+  only, the server handles the connection as before.
+
 - **Linked talkgroups and pools: groups of other networks on demand.** A new
   switch *Only on demand* (`on_demand`, per pool or linked talkgroup, default
   off = permanent): the bridge ISSI joins the group of the other network only
