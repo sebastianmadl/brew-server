@@ -2,7 +2,7 @@
 
 All notable changes to brew-server, newest first.
 
-Unreleased:
+Version 1.21.5 (Login type: Auto, Terminal or Bridge) adds:
 
 - **Type per login: Auto, Terminal or Bridge.** The login's dialog on the
   Accounts page, *Change* in the new Type column of Stations & Cells and the
