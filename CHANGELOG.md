@@ -15,6 +15,8 @@ Unreleased:
   `POST /api/issi-kinds/set` takes `auto`, `terminal`, `bridge`). Dashboard
   only, the server handles the connection as before.
 
+Version 1.21.4 (Linked networks: Brew like a FlowStation) adds:
+
 - **Linked talkgroups and pools: groups of other networks on demand.** A new
   switch *Only on demand* (`on_demand`, per pool or linked talkgroup, default
   off = permanent): the bridge ISSI joins the group of the other network only
@@ -28,11 +30,13 @@ Unreleased:
   refresh sends a re-registration (REREGISTER) for radios already registered
   there, as a FlowStation does when one of its radios registers again, instead
   of a second REGISTER. Field 2026-11-15..17: TetraPack stopped sending TG 91's
-  calls after a while although the bridge ISSI stayed registered.
+  calls after a while although the bridge ISSI stayed registered. With this
+  change (refresh 300 s, rejoin off) TG 91's calls came all night
+  (2026-11-17/18, about 2100 calls).
 - **Multi Network: registration refresh set per network.** Edit network has
-  *Send the registrations there again every … seconds* (`refresh_seconds`,
-  default 300, 0 = never, at least 30) and the switch *Rejoin groups on
-  refresh* (`refresh_rejoin`, default off): each refresh then lets one ISSI
+  a *Registration refresh* box: *Every … seconds* (`refresh_seconds`,
+  default 300, 0 = off, at least 30) and the switch *Also rejoin the groups*
+  (`refresh_rejoin`, default off, greyed out at 0): each refresh then lets one ISSI
   (the bridge ISSI, else the radios in turn) leave its groups there and join
   them again, only while no call crosses the link; all others stay in. Field
   2026-11-16/17: TetraPack stopped sending TG 91's calls while the bridge
