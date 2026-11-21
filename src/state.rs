@@ -390,6 +390,8 @@ pub struct AppState {
     pub talkgroups: std::sync::RwLock<crate::config::TalkgroupsConfig>,
     /// `[callsign_db]` as it is right now, and the loaded list.
     pub callsign_cfg: std::sync::RwLock<crate::config::CallsignDbConfig>,
+    /// Groups given to radios by DGNA, kept across a restart (`dgna_registry`).
+    pub dgna: std::sync::Mutex<crate::dgna_registry::DgnaRegistry>,
     pub callsign_db: crate::callsign_db::Db,
     /// Groups managed talkgroups refused since the start, with the ISSIs that
     /// tried (in memory only, for the Routing page).
@@ -657,6 +659,7 @@ impl AppState {
         // Fleet Control file next to the history log (memory only in tests and without storage).
         let fleet_path = (config.storage.enabled && !cfg!(test)).then(|| crate::fleet::Fleet::path_for(&config.storage.path));
         // Graphs and alarms next to it.
+        let dgna = crate::dgna_registry::DgnaRegistry::load((config.storage.enabled && !cfg!(test)).then_some(config.storage.path.as_path()));
         let fleet_monitor = crate::fleet_monitor::FleetMonitor::load((config.storage.enabled && !cfg!(test)).then_some(config.storage.path.as_path()), crate::fleet::now_ms());
         let ha = crate::ha::HaHandle::new(&config.ha, config_hash, crate::ha::config_sections(&config, false));
         (
@@ -687,6 +690,7 @@ impl AppState {
                 group_access: std::sync::RwLock::new(group_access),
                 talkgroups: std::sync::RwLock::new(talkgroups),
                 callsign_cfg: std::sync::RwLock::new(callsign_cfg),
+                dgna: std::sync::Mutex::new(dgna),
                 callsign_db,
                 refused_groups: std::sync::RwLock::new(std::collections::BTreeMap::new()),
                 allowlist: std::sync::RwLock::new(allowlist),
