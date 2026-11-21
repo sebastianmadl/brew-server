@@ -160,6 +160,8 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/api/map", get(crate::map_track::api_snapshot))
         .route("/api/map/track", get(crate::map_track::api_track))
         .route("/api/map/settings", axum::routing::post(crate::map_track::api_settings))
+        .route("/api/parrot", get(crate::parrot::api_get))
+        .route("/api/parrot/set", axum::routing::post(crate::parrot::api_set))
         .route("/api/map/clear", axum::routing::post(crate::map_track::api_clear))
         .route("/api/bts-locations", get(bts_locations_snapshot))
         .route("/api/control", get(control_list))

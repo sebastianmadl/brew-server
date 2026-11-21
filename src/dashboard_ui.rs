@@ -2666,7 +2666,7 @@ function loadPageData(p,first){
   if(p==='sipcfg'){set('sipc','/api/sip/config');if(first&&D.who.admin)set('sipFull','/api/config/sip/full');}
   if(p==='sms')set('smsc','/api/sms-center');
   if(p==='ha'){set('ha','/api/ha');if(first&&D.who.admin)set('haCfg','/api/config/ha');}
-  if(p==='settings'&&first&&D.who.admin){set('dusers','/api/dashboard-users');set('blk','/api/config/blacklist');set('allow','/api/config/allowlist');set('btsLocs','/api/bts-locations?config_only=1');set('mapSet','/api/map');}
+  if(p==='settings'&&first&&D.who.admin){set('dusers','/api/dashboard-users');set('blk','/api/config/blacklist');set('allow','/api/config/allowlist');set('btsLocs','/api/bts-locations?config_only=1');set('mapSet','/api/map');set('parrot','/api/parrot');}
   if(t.length)Promise.all(t).then(()=>{if(UI.page===p)render(first);});
 }
 const adminOnly=what=>`<div class="card"><div class="empty">${what} is for admins. <button class="btn" onclick="openLogin(false)">Log in</button></div></div>`;
@@ -2894,6 +2894,7 @@ R.settings=()=>{
     ${l.map(x=>`<tr><td class="m"><b>${esc(x.username)}</b></td><td>${esc(x.name)}</td><td class="m" style="font-size:12px">${(+x.lat).toFixed(4)}, ${(+x.lon).toFixed(4)}</td><td style="text-align:right"><button class="btn danger" onclick="btsLocDel('${esc(x.username)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="4" class="mut">No static station positions</td></tr>'}
     </tbody></table></div>${msgDiv('btsl-msg','padding:12px 18px')}</div>
    ${mapSettingsCard()}
+   ${parrotCard()}
    ${updatesRepoCard()}
    ${fleetCfgSettingsCard()}
    ${fleetMonSettingsCard()}
@@ -2909,6 +2910,27 @@ function mapSettingsCard(){
     <button class="btn pri" onclick="saveMapSettings()">Save</button></div>
    <div class="svc"><label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600"><button class="tog" role="switch" id="map-guest" aria-checked="${c.guests_see_track!==false}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button> Guests see tracks</label><span class="mut" style="font-size:12px">Visitors who are not signed in</span></div>
    <div class="svc"><button class="btn danger" onclick="clearMapTracks()">Clear all tracks</button></div>${msgDiv('map-msg','padding:0 18px 12px')}</div>`;
+}
+// Server settings: the parrot ([parrot], live, no restart).
+function parrotCard(){
+  const p=D.parrot;if(!p)return '';
+  const tg=(id,on,lbl,extra)=>`<label style="display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600"><button class="tog" role="switch" id="${id}" aria-checked="${!!on}" onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true');${extra||''}"></button> ${lbl}</label>`;
+  return `<div class="card"><div class="ch"><h2>Parrot</h2>${helpBtn('parrot')}<span class="sp"></span>${tg('par-on',p.enabled,'On')}</div>${helpNote('parrot','A number radios call to test themselves. <i>Individual call</i> to the ISSI: the server answers; in a simplex call each over comes back after the delay, in a duplex call everything comes back after the delay (an echo) and the call ends after the maximum length. <i>Group</i>: an over on the parrot group is played back on the group, as the parrot ISSI, so every radio in the group hears it. The group has the same number as the ISSI unless <i>Separate GSSI</i> is on (GSSI empty or 0 = no group). An over is recorded for at most the maximum length. On saving, the group is added to the allowed talkgroups and both numbers are named Parrot in the Directory (an existing name stays). Stations need nothing new: the group must be routed to Brew on them like any network group. Applies at once, no restart (<code>[parrot]</code>).')}
+   <div class="svc" style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));align-items:end">
+    <div><label class="l" for="par-issi">ISSI</label><input class="f" id="par-issi" type="number" min="1" max="16777215" inputmode="numeric" value="${p.issi||''}" placeholder="e.g. 9990" style="width:100%"></div>
+    <div><label class="l" for="par-gssi">GSSI</label><input class="f" id="par-gssi" type="number" min="0" max="16777215" inputmode="numeric" value="${p.separate_gssi?(p.gssi||''):''}" placeholder="${p.separate_gssi?'0 = no group':'same as ISSI'}" ${p.separate_gssi?'':'disabled'} style="width:100%"></div>
+    <div><label class="l" for="par-delay">Delay (ms)</label><input class="f" id="par-delay" type="number" min="0" max="60000" step="100" value="${p.delay_ms}" style="width:100%"></div>
+    <div><label class="l" for="par-max">Maximum length (s)</label><input class="f" id="par-max" type="number" min="1" max="600" value="${p.max_secs}" style="width:100%"></div>
+   </div>
+   <div class="svc" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">${tg('par-sep',p.separate_gssi,'Separate GSSI',"parrotSep()")}<span class="sp" style="flex:1"></span><button class="btn pri" onclick="saveParrot()">Save</button></div>${msgDiv('par-msg','padding:0 18px 12px')}</div>`;
+}
+function parrotSep(){
+  const on=$('par-sep').getAttribute('aria-checked')==='true',g=$('par-gssi');
+  g.disabled=!on;g.placeholder=on?'0 = no group':'same as ISSI';if(!on)g.value='';
+}
+async function saveParrot(){
+  const on=x=>$(x).getAttribute('aria-checked')==='true';
+  try{const c=await postJ('/api/parrot/set',{enabled:on('par-on'),issi:Number(v('par-issi'))||0,separate_gssi:on('par-sep'),gssi:Number(v('par-gssi'))||0,delay_ms:Number(v('par-delay')),max_secs:Number(v('par-max'))});D.parrot=c;setMsg('par-msg','ok','Saved');render(true);}catch(e){setMsg('par-msg','err',e.message);}
 }
 async function saveMapSettings(){
   try{const c=await postJ('/api/map/settings',{track_points:Number(v('map-pts')),dock_after_min:Number(v('map-dock')),guests_see_track:$('map-guest').getAttribute('aria-checked')==='true'});D.mapSet={...D.mapSet,settings:c};setMsg('map-msg','ok','Saved');render(true);}catch(e){setMsg('map-msg','err',e.message);}
@@ -3037,6 +3059,7 @@ mod tests {
         assert!(edit.contains("id=\"ac-icon\"") && edit.contains("['tbs','Tower (TBS)']") && edit.contains("['terminal','Terminal']"));
         assert!(PAGE_HTML.contains("lat,lon,icon:$('ac-icon').value}"), "saved with the login");
         assert!(PAGE_HTML.contains("function mapSettingsCard(") && PAGE_HTML.contains("/api/map/settings"));
+        assert!(PAGE_HTML.contains("function parrotCard(") && PAGE_HTML.contains("/api/parrot/set") && PAGE_HTML.contains("Separate GSSI"));
         assert!(PAGE_HTML.contains("id=\"map-guest\"") && PAGE_HTML.contains("guests_see_track:$('map-guest')"), "guests see tracks: a switch");
     }
 
