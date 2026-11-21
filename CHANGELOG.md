@@ -2,6 +2,13 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.21.11 (Terminals on the map) adds:
+
+- **Map: terminals are drawn as terminals.** A number registered over a
+  Terminal connection (app, console) gets the terminal marker instead of the
+  radio, and "(Terminal)" in its popup. Radios behind a login set to
+  *Bridge* stay radios; a number set to *Terminal* is a terminal.
+
 Version 1.21.10 (Parrot tail) adds:
 
 - **Parrot: the end of a playback is no longer cut.** The parrot released
