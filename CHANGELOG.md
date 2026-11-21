@@ -2,6 +2,17 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.21.12 (Map: terminals and offline radios) adds:
+
+- **A terminal stays a terminal on the map after it leaves.** An app often
+  registers only to send its position and deregisters seconds later; its
+  position was then drawn as a radio. Each stored position now notes
+  whether it came from a terminal, and a number not registered here is drawn
+  as it was when it sent the position shown.
+- **Radios registered nowhere are drawn offline** on the map (grey with a
+  dashed ring, "Offline (not registered)" in the popup), at their last
+  position.
+
 Version 1.21.11 (Terminals on the map) adds:
 
 - **Map: terminals are drawn as terminals.** A number registered over a
