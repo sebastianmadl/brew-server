@@ -2,7 +2,7 @@
 
 All notable changes to brew-server, newest first.
 
-Version 1.21.12 (Map: terminals and offline radios) adds:
+Version 1.22.1 (Map: terminals and offline radios) adds:
 
 - **A terminal stays a terminal on the map after it leaves.** An app often
   registers only to send its position and deregisters seconds later; its
@@ -13,21 +13,17 @@ Version 1.21.12 (Map: terminals and offline radios) adds:
   dashed ring, "Offline (not registered)" in the popup), at their last
   position.
 
-Version 1.21.11 (Terminals on the map) adds:
+Version 1.22.0 (Parrot, DGNA list, Map rework) rolls up 1.21.4 to 1.21.9.
+No functional changes since 1.21.9. In short:
 
-- **Map: terminals are drawn as terminals.** A number registered over a
-  Terminal connection (app, console) gets the terminal marker instead of the
-  radio, and "(Terminal)" in its popup. Radios behind a login set to
-  *Bridge* stay radios; a number set to *Terminal* is a terminal.
-
-Version 1.21.10 (Parrot tail) adds:
-
-- **Parrot: the end of a playback is no longer cut.** The parrot released
-  the floor (or ended its group call) 60 ms after the last frame, while the
-  station was still playing out its buffer. New setting *Tail (ms)*
-  (`[parrot] tail_ms`, 0 to 5000, default 500): how long the floor stays
-  with the parrot after the last played frame. Details:
-  [docs/Parrot.md](docs/Parrot.md).
+- **Parrot** to test a radio (1.21.8): [docs/Parrot.md](docs/Parrot.md).
+- **Assigned by DGNA** list, with Remove and Forget, kept across a restart
+  (1.21.9): [docs/Routing.md](docs/Routing.md).
+- **Map rework** (1.21.7), with terminals drawn as terminals (1.21.9):
+  [docs/Basestation-Locations.md](docs/Basestation-Locations.md).
+- **Login type** Auto, Terminal or Bridge, and linked networks that speak
+  Brew like a FlowStation (1.21.4, 1.21.5):
+  [docs/Multi-Network.md](docs/Multi-Network.md).
 
 Version 1.21.9 (DGNA list) adds:
 
@@ -42,6 +38,10 @@ Version 1.21.9 (DGNA list) adds:
   FlowStation v0.5.19 or newer), also those made on the station's own
   dashboard, and send what they know after each connect. Details:
   [docs/Routing.md](docs/Routing.md).
+- **Map: terminals are drawn as terminals.** A number registered over a
+  Terminal connection (app, console) gets the terminal marker instead of the
+  radio, and "(Terminal)" in its popup. Radios behind a login set to
+  *Bridge* stay radios; a number set to *Terminal* is a terminal.
 
 Version 1.21.8 (Parrot) adds:
 
@@ -54,7 +54,9 @@ Version 1.21.8 (Parrot) adds:
   on the group as the parrot ISSI, so every radio in the group hears it. The
   group has the same number as the ISSI unless *Separate GSSI* is set
   (`separate_gssi`, `gssi`; 0 = no group). Overs are recorded for at most
-  `max_secs` (default 60). Saving adds the group to the allowed talkgroups
+  `max_secs` (default 60). The floor stays with the parrot for `tail_ms`
+  (default 500) after the last played frame, so the station plays out its
+  buffer before the end. Saving adds the group to the allowed talkgroups
   and names both numbers "Parrot" in the Directory (an existing name stays).
   Works from every station, nothing new needed on the stations; only calls
   from this server's own connections are answered. Details:
@@ -78,7 +80,6 @@ Version 1.21.7 (Map rework) adds:
   default on): off, visitors who are not signed in get no tracks.
 - **The first map view covers the stations** with a static position, also
   before any radio sent one.
-
 Version 1.21.5 (Login type: Auto, Terminal or Bridge) adds:
 
 - **Type per login: Auto, Terminal or Bridge.** The login's dialog on the
