@@ -2,6 +2,15 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.21.10 (Parrot tail) adds:
+
+- **Parrot: the end of a playback is no longer cut.** The parrot released
+  the floor (or ended its group call) 60 ms after the last frame, while the
+  station was still playing out its buffer. New setting *Tail (ms)*
+  (`[parrot] tail_ms`, 0 to 5000, default 500): how long the floor stays
+  with the parrot after the last played frame. Details:
+  [docs/Parrot.md](docs/Parrot.md).
+
 Version 1.21.9 (DGNA list) adds:
 
 - **The server remembers the groups given by DGNA**, so they can be taken
