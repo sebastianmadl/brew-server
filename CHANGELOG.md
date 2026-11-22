@@ -11,6 +11,10 @@ Version 1.22.4 (brew-server logo) adds:
   and the browser tab shows it as favicon (`/favicon.svg`). The README starts
   with the logo too. Logo by Sebastian OE4SXM; the files are in
   `assets/logo/`.
+- **Dashboard colours from the logo.** The accent colour (buttons, links,
+  the active menu item, highlights) is the logo blue instead of teal:
+  #1f4fe0 with the darker #1236a8 in light mode, #4d86ff in dark mode.
+  Status colours (green ok, red alarm) stay as they were.
 
 Version 1.22.3 (Map: Clear map resets everything) adds:
 

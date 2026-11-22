@@ -236,9 +236,9 @@ async fn require_basic(State(state): State<Arc<AppState>>, request: Request, nex
     let a = access(&state, request.headers());
     let path = request.uri().path().to_owned();
     if a.auth && a.user.is_none() && !cfg.ui.open {
-        // The new dashboard's page and `whoami` load without a login: the page
-        // then opens its own login window.
-        if path == "/ui" || path == "/api/whoami" || (path == "/" && !cfg.legacy_ui) {
+        // The new dashboard's page, `whoami` and the favicon load without a
+        // login: the page then opens its own login window (showing the logo).
+        if path == "/ui" || path == "/api/whoami" || path == "/favicon.svg" || (path == "/" && !cfg.legacy_ui) {
             return next.run(request).await;
         }
         if crate::dashboard_auth::from_ui(request.headers()) {
@@ -303,7 +303,7 @@ enum Need {
 /// `dash_users::PAGES`). Routes not listed are for admins.
 fn need(path: &str) -> Need {
     const ANY: &[&str] = &[
-        "/", "/ui", "/api/whoami", "/api/live", "/api/names", "/api/network-names", "/api/issi-names", "/api/issi-kinds", "/api/gssi-names", "/api/callsigns",
+        "/", "/ui", "/favicon.svg", "/api/whoami", "/api/live", "/api/names", "/api/network-names", "/api/issi-names", "/api/issi-kinds", "/api/gssi-names", "/api/callsigns",
         "/api/callsign-db", "/api/talkgroups", "/api/pools", "/api/emergencies", "/api/ha", "/api/password",
     ];
     if ANY.contains(&path) {
@@ -2778,6 +2778,8 @@ mod tests {
 
         // The new page and whoami load without a login; whoami asks for one.
         assert!(http(addr, get("/", "")).await.starts_with("HTTP/1.1 200"));
+        let icon = http(addr, get("/favicon.svg", "")).await;
+        assert!(icon.starts_with("HTTP/1.1 200") && icon.contains("image/svg+xml"), "the favicon needs no login: {icon}");
         let who = http(addr, get("/api/whoami", "")).await;
         assert!(who.contains("\"need_login\":true"), "{who}");
         // Data needs a login: the browser's dialog for classic pages, a plain 401 for the new page.
