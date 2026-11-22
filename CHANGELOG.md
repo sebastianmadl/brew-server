@@ -2,6 +2,17 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.22.5 (Logo colours) adds:
+
+- **Dashboard colours from the logo.** The accent colour (buttons, links,
+  the active menu item, highlights) is the logo blue instead of teal:
+  #1f4fe0 with the darker #1236a8 in light mode, #4d86ff with the lighter
+  #8fb0ff in dark mode (a darker blue is hard to read there). Status colours
+  (green ok, red alarm) stay as they were.
+- **The favicon shows before signing in.** `/favicon.svg` needed a login, so
+  on a server with dashboard users the tab icon and the mug in the sign-in
+  window stayed empty until signed in. It now loads without a login.
+
 Version 1.22.4 (brew-server logo) adds:
 
 - **The brew-server logo.** The dashboard sidebar starts with the logo (the
@@ -11,10 +22,6 @@ Version 1.22.4 (brew-server logo) adds:
   and the browser tab shows it as favicon (`/favicon.svg`). The README starts
   with the logo too. Logo by Sebastian OE4SXM; the files are in
   `assets/logo/`.
-- **Dashboard colours from the logo.** The accent colour (buttons, links,
-  the active menu item, highlights) is the logo blue instead of teal:
-  #1f4fe0 with the darker #1236a8 in light mode, #4d86ff in dark mode.
-  Status colours (green ok, red alarm) stay as they were.
 
 Version 1.22.3 (Map: Clear map resets everything) adds:
 
@@ -47,6 +54,8 @@ Version 1.22.1 (Map: terminals and offline radios) adds:
 - **Radios registered nowhere are drawn offline** on the map (grey with a
   dashed ring, "Offline (not registered)" in the popup), at their last
   position.
+- **Dashboard loads again.** A missing brace after the map settings card
+  (since 1.21.8) stopped the whole dashboard script.
 
 Version 1.22.0 (Parrot, DGNA list, Map rework) rolls up 1.21.4 to 1.21.9.
 No functional changes since 1.21.9. In short:
