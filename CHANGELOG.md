@@ -12,6 +12,10 @@ Version 1.22.5 (Logo colours) adds:
 - **The favicon shows before signing in.** `/favicon.svg` needed a login, so
   on a server with dashboard users the tab icon and the mug in the sign-in
   window stayed empty until signed in. It now loads without a login.
+- **Add to home screen.** The dashboard has a web app manifest and app icons
+  (the favicon on a dark background, 192, 512 and 180 px for iOS), so a phone
+  can add it as an app named "brew-server" (renamable when adding). The manifest and
+  icons load without a login.
 
 Version 1.22.4 (brew-server logo) adds:
 
