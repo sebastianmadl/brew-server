@@ -2,6 +2,15 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.22.14 (RSSI per radio) adds:
+
+- **RSSI per radio.** The Radios page has an RSSI column and the map popup
+  shows it: the uplink level (dBFS at the station's SDR, not dBm) the station
+  the radio is registered on now last measured, with its age. From
+  `SERVICE_RSSI` (FlowStation `[brew] feature_rssi_export`) or the station's
+  telemetry link; a reading of a station the radio left is never shown, even
+  when that station still reports it. Plain Brew (TetraPack) has no RSSI.
+
 Version 1.22.13 (App as a Basestation) adds:
 
 - **Group access for Basestation logins without cells.** The empty

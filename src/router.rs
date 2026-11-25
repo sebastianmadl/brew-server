@@ -168,7 +168,7 @@ pub async fn handle_packet(state: Arc<AppState>, source: ClientId, raw: Vec<u8>)
         BrewMessage::Service(svc) if svc.service_type == protocol::SERVICE_RSSI => {
             match serde_json::from_str::<RssiReport>(&svc.json_data) {
                 Ok(r) => {
-                    state.telemetry.write().await.record_brew_rssi(r.issi, r.rssi_dbfs);
+                    state.telemetry.write().await.record_brew_rssi(r.issi, r.rssi_dbfs, source.to_string());
                 }
                 Err(e) => warn!(%source, error = %e, json = %svc.json_data, "malformed RSSI service message"),
             }
