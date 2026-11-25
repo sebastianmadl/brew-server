@@ -300,6 +300,18 @@ fn brew_offer(mni_on: bool, control_on: bool) -> String {
     offer
 }
 
+/// Extensions offered to a Terminal-mode login.
+fn terminal_offer(mni_on: bool) -> String {
+    if mni_on { crate::visitors::CAPABILITY.to_owned() } else { String::new() }
+}
+
+#[cfg(test)]
+#[test]
+fn terminal_gets_mni_only_with_multi_network_on() {
+    assert_eq!(terminal_offer(false), "");
+    assert_eq!(terminal_offer(true), "mni");
+}
+
 #[cfg(test)]
 #[test]
 fn fleet_control_offered_only_with_the_control_channel() {
@@ -342,6 +354,14 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
                 let mni_on = state_mn_enabled;
                 let offer = brew_offer(mni_on, control_on);
                 if let Ok(v) = HeaderValue::from_str(&offer) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
+            } else if mode == ClientMode::Terminal {
+                // A terminal app gets `mni` while Multi Network is on, so it
+                // can name its home network (docs/Brew-Extensions.md 12b.6).
+                // The Basestation extensions need a station.
+                let offer = terminal_offer(state_mn_enabled);
+                if !offer.is_empty() {
+                    if let Ok(v) = HeaderValue::from_str(&offer) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
+                }
             }
             if fed_neighbour.is_some() {
                 // Accepting: the dialling side only switches to loop-safe mode

@@ -138,7 +138,8 @@ Rules for all messages:
   is logged and dropped without an answer. Every exchange has a timeout on
   the side that waits, so a drop is safe.
 - Only Basestation-mode connections are heard; the same message from a
-  Terminal or Peer connection is ignored.
+  Terminal or Peer connection is ignored (exception: `mni` from a terminal
+  that took up the offer, section 12b.6).
 - Numbers are JSON integers.
 
 | Field | Range | Meaning |
@@ -1100,6 +1101,34 @@ the parties, each only where it is not the server's own network:
   app) it registered in the visitor's network, are delivered here. The far
   server would send the call back over the same connection, which a Brew
   server does not do.
+
+### 12b.6 Terminals (apps)
+
+A Terminal-mode login (one subscriber, e.g. the TETRA app) can use the same
+messages for its own ISSI, so an app of another network is a visitor here and
+an app of this network can join groups of a linked network.
+
+- brew-server offers `mni` on the 101 of a Terminal upgrade too, while Multi
+  Network is on (`X-Brew-Extensions: mni`). A terminal that sees
+  no `mni` sends none of these messages (TetraPack, older servers).
+- A terminal has no `SERVICE_BTS_INFO`. It takes up the offer by sending
+  `SERVICE_MS_NETWORK` for its own ISSI right after connecting, before its
+  `SUB_REGISTER`, with its home network; `"mcc":0,"mnc":0` means the server's
+  own network. From then on the server treats the connection like a
+  Basestation with the `mni` capability: it answers with `SERVICE_NETWORKS`
+  (and sends it again on every change), takes `SERVICE_GROUP_NETWORK` and
+  `SERVICE_CALL_NETWORK` from it, and sends it `SERVICE_CALL_NETWORK` before
+  a call of another network's group or an individual call / SDS across
+  networks.
+- A visitor app is registered in its home network and its groups go there
+  (without `SERVICE_GROUP_NETWORK` a group is in its home network). An app of
+  this network names a group of a linked network with
+  `SERVICE_GROUP_NETWORK`; that network's calls on it reach the app with
+  `SERVICE_CALL_NETWORK` first.
+- When the connection closes, its visitor leaves its home network, as with a
+  Basestation that goes away.
+- A terminal that never sent `SERVICE_MS_NETWORK` gets none of these messages,
+  and its `SERVICE_GROUP_NETWORK` / `SERVICE_CALL_NETWORK` are ignored.
 
 ## 12c. Fleet Control (`fleet-control`)
 

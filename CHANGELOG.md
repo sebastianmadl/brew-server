@@ -2,6 +2,16 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.22.11 (Multi Network for apps) adds:
+
+- **Multi Network for terminal apps.** While Multi Network is on, a
+  Terminal-mode login is offered `mni` too. An app that names its home
+  network with `SERVICE_MS_NETWORK` is handled like a radio on a station with
+  the extension: an app of another network is a visitor here and registered
+  at home, an app of this network can listen and talk in groups of a linked
+  network. Apps that do not use it work as before.
+  Spec: `docs/Brew-Extensions.md` 12b.6.
+
 Version 1.22.10 (Config changes applied live) adds:
 
 - **Fleet Control: config changes applied live.** A station with
