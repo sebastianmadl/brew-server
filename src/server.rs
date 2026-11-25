@@ -302,14 +302,16 @@ fn brew_offer(mni_on: bool, control_on: bool) -> String {
 
 /// Extensions offered to a Terminal-mode login.
 fn terminal_offer(mni_on: bool) -> String {
-    if mni_on { crate::visitors::CAPABILITY.to_owned() } else { String::new() }
+    let mut offer = vec![crate::group_access::CAPABILITY];
+    if mni_on { offer.push(crate::visitors::CAPABILITY); }
+    offer.join(", ")
 }
 
 #[cfg(test)]
 #[test]
 fn terminal_gets_mni_only_with_multi_network_on() {
-    assert_eq!(terminal_offer(false), "");
-    assert_eq!(terminal_offer(true), "mni");
+    assert_eq!(terminal_offer(false), "group-access");
+    assert_eq!(terminal_offer(true), "group-access, mni");
 }
 
 #[cfg(test)]
@@ -355,13 +357,11 @@ async fn upgrade_from_parts(state: Arc<AppState>, parts: &mut axum::http::reques
                 let offer = brew_offer(mni_on, control_on);
                 if let Ok(v) = HeaderValue::from_str(&offer) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
             } else if mode == ClientMode::Terminal {
-                // A terminal app gets `mni` while Multi Network is on, so it
-                // can name its home network (docs/Brew-Extensions.md 12b.6).
-                // The Basestation extensions need a station.
-                let offer = terminal_offer(state_mn_enabled);
-                if !offer.is_empty() {
-                    if let Ok(v) = HeaderValue::from_str(&offer) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
-                }
+                // A terminal app can ask for its group access (`group-access`,
+                // docs/Brew-Extensions.md 12.3) and, while Multi Network is
+                // on, name its home network (`mni`, 12b.6). The other
+                // Basestation extensions need a station.
+                if let Ok(v) = HeaderValue::from_str(&terminal_offer(state_mn_enabled)) { response.headers_mut().insert(crate::carriers::X_BREW_EXTENSIONS, v); }
             }
             if fed_neighbour.is_some() {
                 // Accepting: the dialling side only switches to loop-safe mode
@@ -661,8 +661,9 @@ mod tests {
         assert_eq!(resp.headers()["X-Brew-Extensions"], "bts-info, handover-v1, ms-cell, ms-moved, ms-reselection, call-restore, call-handoff, cell-directory, group-access, issi-check");
         let (_peer, resp) = upgrade(Some("Peer")).await.unwrap();
         assert!(!resp.headers().contains_key("X-Brew-Extensions"));
+        // A Terminal (an app) gets `group-access`.
         let (_terminal, resp) = upgrade(Some("Terminal")).await.unwrap();
-        assert!(!resp.headers().contains_key("X-Brew-Extensions"));
+        assert_eq!(resp.headers()["X-Brew-Extensions"], "group-access");
     }
 
     #[test]

@@ -2,6 +2,14 @@
 
 All notable changes to brew-server, newest first.
 
+Version 1.22.12 (Group access for apps) adds:
+
+- **Group access for terminal apps.** Terminal-mode logins are offered
+  `group-access`. An app that asks with an empty `SERVICE_GROUP_ACCESS` gets
+  the access table for its own ISSI (other ISSIs left out of the lists), now
+  and on every change, and can grey out groups it may not join or only listen
+  to. Apps that do not ask work as before. Spec: `docs/Brew-Extensions.md` 12.3.
+
 Version 1.22.11 (Multi Network for apps) adds:
 
 - **Multi Network for terminal apps.** While Multi Network is on, a

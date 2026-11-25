@@ -104,7 +104,7 @@ to a Basestation that named the capability in its last `SERVICE_BTS_INFO`
 | `0x1C` | `SERVICE_CALL_NOT_RESTORED` | B → server | `call-restore` | B: `call-restore` |
 | `0x1D` | `SERVICE_CELL_DIRECTORY` | server → Basestation | `cell-directory` | `cell-directory` |
 | `0x1E` | `SERVICE_CALL_HANDOFF` | server → A → server | `call-handoff` | A: `call-handoff` |
-| `0x1F` | `SERVICE_GROUP_ACCESS` | server → Basestation | `group-access` | `group-access` |
+| `0x1F` | `SERVICE_GROUP_ACCESS` | server → Basestation; Terminal → server → Terminal (12.3) | `group-access` | `group-access` |
 | `0x20` | `SERVICE_NETWORKS` | server → Basestation | `mni` | `mni` |
 | `0x21` | `SERVICE_MS_NETWORK` | Basestation → server | `mni` | `mni` |
 | `0x22` | `SERVICE_GROUP_NETWORK` | Basestation → server | `mni` | `mni` |
@@ -938,6 +938,35 @@ Basestation:
   14.8.43, table 14.81) and does not grant it the floor.
 - The rules are per group, so a multi-cell Basestation applies them on
   every cell.
+
+### 12.3 Terminals (apps)
+
+A Terminal-mode login (one subscriber, e.g. the TETRA app) can get the
+table for its own ISSI, so it can show which of its groups it may not join
+or only listen to. It enforces nothing; the server refuses as in 12.2.
+
+- brew-server offers `group-access` on the 101 of every Terminal upgrade
+  (`X-Brew-Extensions: group-access`, plus `mni` while Multi
+  Network is on). A terminal that sees no `group-access` sends nothing
+  (TetraPack, older servers).
+- The terminal takes up the offer by sending an empty
+  `SERVICE_GROUP_ACCESS` (`{}`) after its `SUB_REGISTER`.
+- The server answers with `SERVICE_GROUP_ACCESS` and sends it again on every
+  change. Instead of the lists it carries the result of 12.1 for the ISSI(s)
+  registered through that connection, so the terminal learns nothing about
+  other radios:
+
+  ```json
+  {"groups":[{"gssi":2321,"access":"refused"},{"gssi":9,"access":"listen"}]}
+  ```
+
+  `refused`: the terminal may not attach to the group; `listen`: it may
+  listen but not talk. Groups open to it are left out. With managed
+  talkgroups the server adds `"managed":true` and `"listed"` as in 12.2; a
+  group not in `listed` is refused too (groups of a visitor's home network
+  excepted, 12.1).
+- From a Basestation or a peer the empty message is ignored, and a terminal
+  that never sent it gets none.
 
 ## 12a. ISSI check (`issi-check`)
 
