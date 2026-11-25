@@ -3009,6 +3009,29 @@ mod group_access_tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The app logged in as a Basestation asks the same way and gets the
+    /// verdicts for the ISSI it registered, not the whole table.
+    #[tokio::test]
+    async fn a_basestation_login_that_asks_gets_the_verdicts_for_its_issi() {
+        let path = std::env::temp_dir().join(format!("brew-access4-{}.toml", uuid::Uuid::new_v4().simple()));
+        let mut config = crate::config::Config::default();
+        config.storage.enabled = false;
+        config.sms_center.enabled = false;
+        config.group_access.insert("2321".into(), GroupAccessConfig { mode: GroupAccessMode::Block, issis: vec![4013], ..Default::default() });
+        let state = Arc::new(AppState::new(config, path.clone()).0);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let app = uuid::Uuid::new_v4();
+        state.inner.write().await.clients.insert(app, Client { tx, mode: ClientMode::Basestation, version: ConnVersion::V1, version_announced: true, remote_addr: None, connected_at_ms: 0, username: None });
+        sub(&state, app, SUB_REGISTER, 4013, &[]).await;
+        handle_packet(state.clone(), app, protocol::build_service(protocol::SERVICE_GROUP_ACCESS, "{}")).await;
+        let got: Vec<serde_json::Value> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|p| p.len() > 2 && p[0] == protocol::CLASS_SERVICE && p[1] == protocol::SERVICE_GROUP_ACCESS)
+            .map(|p| serde_json::from_slice(&p[2..p.len() - 1]).unwrap())
+            .collect();
+        assert_eq!(got, vec![serde_json::json!({"groups":[{"gssi":2321,"access":"refused"}]})]);
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// A Terminal (app) asks with an empty `SERVICE_GROUP_ACCESS` and gets the
     /// verdict for its own ISSI, now and on every change.
     /// A Terminal that does not ask gets nothing.
