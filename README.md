@@ -64,6 +64,18 @@ too. To keep the classic dashboard at `/`:
 legacy_ui = true
 ```
 
+The **Map** shows the stations and radios with their own markers (TMO
+station, tower, terminal; connected, Standby, Fleet Control alarm, offline),
+radios docked next to their station until they send a position, a track per
+radio kept across a restart, DMO positions (`dmo-position`) and each radio's
+RSSI; *Clear map* resets tracks and last positions. The **Radios** page lists
+the registered radios with their cell and RSSI (the uplink level at the
+station's SDR in dBFS, from `SERVICE_RSSI` or the station's telemetry link).
+**Parrot** is a number radios call to hear themselves back
+([docs/Parrot.md](docs/Parrot.md)). Apps such as TetraLink log in as
+Terminal or Basestation and get the group access verdicts, Multi Network and
+DGNA through their Brew login.
+
 ## Fleet Control
 
 The **Fleet Control** page manages the Basestations (FlowStation) over the
@@ -83,7 +95,12 @@ capability, so older stations and servers keep working.
 - **Station config**: read and change cells, neighbours, reselection values,
   Brew, telemetry, update source and single values of the config file (never
   passwords or keys), with a confirmation window, templates, bulk changes and
-  neighbour suggestions.
+  neighbour suggestions, and networks without a cell. A change the station
+  can take without a restart is applied live (FlowStation v0.6.9,
+  `config-live-v1`) and logged as such.
+- **RF kill switch**: *RF off* switches a station's transmitter off with its
+  own Suspend (dashboard and Fleet Control stay reachable, shown as Standby),
+  *RF on* starts it again (`rf-standby-v1`).
 - **Graphs and alarms**: CPU load, temperatures, ping, radios and calls as 24 h
   graphs; alarms (unreachable, SDR error, temperature, CPU load, missed pings)
   with acknowledge and a 90-day history.
@@ -146,5 +163,5 @@ favicon) are in [assets/logo/](assets/logo/).
 ## Credits
 
 - Joaquin EA5GVK
-- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- the brew-server logo, late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions, dashboard redesign, Routing page and talkgroup pools, login and accounts pages, ISSI and GSSI directory, group access and RX only (`group-access`), Multi Network (bridges to other networks, visitors, `issi-check`, `mni`), Fleet Control (managing the Basestations from the server)
+- Sebastian OE4SXM ([sebastianmadl](https://github.com/sebastianmadl)) -- the brew-server logo, late entry, carrier registry, handover and individual calls between Basestations, the Brew extensions, dashboard redesign, Routing page and talkgroup pools, login and accounts pages, ISSI and GSSI directory, group access and RX only (`group-access`), Multi Network (bridges to other networks, visitors, `issi-check`, `mni`), Fleet Control (managing the Basestations from the server), the map rework (markers, docking, tracks, DMO positions), Parrot, RSSI per radio, the apps as Terminal and Basestation logins, the Fleet Control RF kill switch
 - David Harcus MM7FDM
