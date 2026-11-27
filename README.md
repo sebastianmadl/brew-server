@@ -70,7 +70,9 @@ radios docked next to their station until they send a position, a track per
 radio kept across a restart, DMO positions (`dmo-position`) and each radio's
 RSSI; *Clear map* resets tracks and last positions. The **Radios** page lists
 the registered radios with their cell and RSSI (the uplink level at the
-station's SDR in dBFS, from `SERVICE_RSSI` or the station's telemetry link).
+station's SDR in dBFS, from `SERVICE_RSSI` or the station's telemetry link). The
+**Calls** page keeps the calling radio's mean RSSI of every call in *Recent
+calls*.
 **Parrot** is a number radios call to hear themselves back
 ([docs/Parrot.md](docs/Parrot.md)). Apps such as TetraLink log in as
 Terminal or Basestation and get the group access verdicts, Multi Network and
