@@ -9,7 +9,7 @@ Version 1.22.15 (RSSI in the call log) adds:
   readings the station sent while the call ran (`SERVICE_RSSI` on the Brew
   link, FlowStation `[brew] feature_rssi_export`, or the station's
   telemetry link). The Calls page shows it in a new RSSI column of
-  "Recent calls" (only when a listed call has a level), and
+  "Recent calls", and
   `GET /api/status` carries it as `rssi_dbfs` in `recent_calls` and, as
   the mean so far, in `active_calls`. A call from a terminal or bridge, or
   from a station that reports no level, has none. The value is saved in
